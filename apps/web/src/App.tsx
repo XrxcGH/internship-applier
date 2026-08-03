@@ -113,11 +113,11 @@ export function App() {
         {state.kind === 'ready' && (
           <div className="mt-6 flex flex-wrap gap-3">
             <Button variant="primary" onClick={() => setView('setup')}>
-              {confirmed ? 'Revisit profile' : 'Establish profile — G1'}
+              {confirmed ? 'Revisit profile' : 'Establish profile (G1)'}
             </Button>
             {confirmed && (
               <Button variant="primary" onClick={() => setView('queue')}>
-                Open the queue — G2
+                Open the queue (G2)
               </Button>
             )}
           </div>
@@ -138,8 +138,7 @@ export function App() {
         </ol>
         <p className="text-faint mt-6 max-w-[58ch] text-[0.9375rem] italic">
           None of these can be switched off. There is no endpoint that submits an application for
-          you — that&rsquo;s asserted by a test, a lint rule, and a CI check, not by good
-          intentions.
+          you. That&rsquo;s asserted by a test, a lint rule, and a CI check, not by good intentions.
         </p>
       </Section>
 

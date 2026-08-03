@@ -154,8 +154,74 @@ the revision. Style edits must never silently alter facts.
 
 ### ⑥ Tell-scrub
 
-A lint pass over known machine-register patterns. It **flags**, it doesn't silently rewrite
-— the user decides:
+Implemented in `core/writing/tellScrub.ts`. A lint pass over known machine-register
+patterns. It **flags**, it doesn't silently rewrite — the user decides.
+
+#### What this is and isn't for
+
+The goal is that a draft reads like the person who is going to sign it, because it is
+their facts in their voice and they will edit and submit it themselves. Text that reads as
+machine-written is worse writing, and on an application it also misrepresents who did the
+thinking.
+
+It is **not** tuned against AI-detection classifiers, and that is a deliberate line. Two
+reasons, one principled and one practical:
+
+- The AI-disclosure question on a form is redlined (docs/07) — the tool leaves it blank for
+  the user to answer. Building a detector-evasion layer while doing that would be
+  incoherent.
+- Detector evasion doesn't work anyway. The measures those tools lean on — perplexity and
+  burstiness — are [documented as unreliable](https://www.pangram.com/blog/why-perplexity-and-burstiness-fail-to-detect-ai),
+  with high false-positive rates on non-native and neurodivergent writers. Optimising
+  against a noisy classifier produces worse prose, not safer prose.
+
+What actually makes this honest is unchanged and structural: FactGuard grounds every claim
+in the confirmed profile, and gate G3 means the user has read and edited every sentence.
+
+#### Checks
+
+Grounded in the stylometry literature and current editorial reporting (sources below).
+Fifteen categories, in two families.
+
+**Lexical** — `cliche_opener`, `overused_word`, `hollow_intensifier`, `corporate_register`,
+`assistant_voice`, plus three from the research:
+
+| Check | What it catches |
+| --- | --- |
+| `contrast_reframe` | "It's not just X, it's Y" / "not only… but also". Reported as the most reliable current giveaway: it performs insight without adding any. |
+| `false_payoff` | "Here's the kicker", "it's worth noting", "when it comes to" — promises a payoff, delivers a generality. |
+| `summary_closer` | "In short", "Firstly/Secondly" — essay scaffolding in a 100-word answer. |
+
+**Statistical** — the literature's most consistent findings are lower perplexity, flatter
+sentence variation, and higher lexical repetitiveness:
+
+| Check | Measure |
+| --- | --- |
+| `uniform_rhythm` | Sentence-length standard deviation. The loudest single tell. |
+| `low_lexical_diversity` | Type-token ratio over content words in a fixed window. Function words excluded (everyone repeats those); fixed window because raw TTR falls with length regardless of author. |
+| `repeated_openers` | ≥3 sentences and ≥50% opening with the same word. "I did X. I did Y. I did Z." is the most common shape of a generated answer. |
+| `em_dash_density` | Judged against the user's own measured rate, not an absolute — some people genuinely write with lots of em-dashes. |
+| `triadic_overuse`, `transition_stack`, `symmetric_paragraphs` | Structural rhythms nobody produces by accident. |
+
+Structural checks are skipped below 25 words. That floor was originally 60, which silently
+skipped them on exactly the length most application answers are.
+
+#### The app audits its own copy
+
+`npm run audit:copy` runs the same detector over this application's interface text, and it
+is part of `npm run check`. A tool that flags machine-sounding prose in your application
+while writing it on its own buttons has no standing. The first run of this dropped the
+interface's em-dash rate from 1.13 to 0.32 per 100 words.
+
+#### Sources
+
+- [Feature-Based Detection of AI-Generated Text: Stylometric and Perplexity Markers](https://www.researchgate.net/publication/398588043_Feature-Based_Detection_of_AI-Generated_Text_An_Analysis_of_Stylometric_and_Perplexity_Markers_in_Contemporary_Large_Language_Models)
+- [A Comparative Analysis of AI-Generated and Human-Written Text](https://papers.ssrn.com/sol3/Delivery.cfm/5833302.pdf?abstractid=5833302&mirid=1)
+- [Counter Turing Test CT²: AI-Generated Text Detection is Not as Easy as You May Think](https://arxiv.org/pdf/2310.05030)
+- [Why Perplexity and Burstiness Fail to Detect AI — Pangram Labs](https://www.pangram.com/blog/why-perplexity-and-burstiness-fail-to-detect-ai)
+- [15 New Giveaway Signs Of AI Writing — Forbes, May 2026](https://www.forbes.com/sites/jodiecook/2026/05/21/15-new-giveaway-signs-of-ai-writing-may-2026-update/)
+
+#### Flagged patterns
 
 - Opener clichés: "I am excited to apply", "I am writing to express my interest".
 - Overused abstractions: "delve", "tapestry", "landscape", "leverage" (as a verb),

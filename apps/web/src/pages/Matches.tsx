@@ -215,8 +215,8 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
 
       {rows.length === 0 && !error && (
         <Notice tone="caution">
-          Nothing in the queue. Run discovery, then Recompute — or widen the band above to see what
-          was filtered out and why.
+          Nothing in the queue yet. Run discovery, then Recompute. Or widen the band above to see
+          what was filtered out, and why.
         </Notice>
       )}
 
@@ -312,11 +312,11 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
                   <>
                     <div className="flex flex-wrap gap-3">
                       <Button variant="primary" onClick={() => void act('approved')}>
-                        Approve &amp; draft — A
+                        Approve &amp; draft (A)
                       </Button>
-                      <Button onClick={() => void act('saved')}>Save — L</Button>
-                      <Button onClick={() => void act('skipped')}>Skip — S</Button>
-                      <Button onClick={() => setRejecting(true)}>Reject — X</Button>
+                      <Button onClick={() => void act('saved')}>Save (L)</Button>
+                      <Button onClick={() => void act('skipped')}>Skip (S)</Button>
+                      <Button onClick={() => setRejecting(true)}>Reject (X)</Button>
                       <a
                         href={detail.posting.applyUrl}
                         target="_blank"

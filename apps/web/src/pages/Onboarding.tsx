@@ -135,7 +135,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <TextField
                 label="Date of birth"
                 type="date"
-                hint="Many postings require 18+. Used only for local filtering — never auto-filled into a form."
+                hint="Many postings require 18+. Used only for local filtering, never auto-filled into a form."
                 value={profile.dateOfBirth ?? ''}
                 flagged={flagged('dateOfBirth')}
                 onChange={(e) =>
@@ -238,7 +238,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             {remaining > 0 ? (
               <Notice tone="caution">
                 {remaining} field{remaining === 1 ? '' : 's'} still flagged. Confirmation is blocked
-                until each one has been looked at — that is the whole point of this gate.
+                until each one has been looked at. That is the whole point of this gate.
                 <ul className="u-data mt-3 space-y-0.5">
                   {profile.needsReview.slice(0, 12).map((f) => (
                     <li key={f}>{f}</li>
@@ -291,7 +291,7 @@ function UploadStep({
     try {
       setBusy('Storing the document…');
       const { documentId } = await api.uploadResume(file);
-      setBusy('Reading it — this takes a few seconds…');
+      setBusy('Reading it. This takes a few seconds…');
       const { profile } = await api.extractResume(documentId);
       onExtracted(profile);
     } catch (e) {
@@ -329,7 +329,7 @@ function UploadStep({
         }}
       />
       <p className="text-faint mt-5 max-w-[60ch] text-[0.8125rem]">
-        PDFs are read directly by the model rather than through a text-extraction library — it
+        PDFs are read directly by the model rather than through a text-extraction library. It
         handles scans and multi-column layouts better. The file stays on this machine.
       </p>
     </Section>
