@@ -1,0 +1,16 @@
+{
+  "name": "@ia/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zod schemas and types shared by the server and the web UI",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Refuses commits that would leak PII or secrets.
+# See docs/10-security-privacy.md. Install with: npm run hooks:install
+
+fail() { printf '\033[31mpre-commit blocked:\033[0m %s\n' "$1" >&2; exit 1; }
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+# 1. Nothing under data/ may ever be committed — it holds the resume, profile,
+#    browser session, and logs.
+echo "$staged" | grep -E '^data/' | grep -v '^data/\.gitkeep$' >/dev/null 2>&1 &&
+  fail "files under data/ are never committable (resume/profile/session data)."
+
+# 2. No databases, env files, or resume-shaped documents anywhere.
+echo "$staged" | grep -Ei '\.(db|sqlite|db-wal|db-shm)$' >/dev/null 2>&1 &&
+  fail "database files must not be committed."
+echo "$staged" | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$' >/dev/null 2>&1 &&
+  fail ".env files must not be committed."
+echo "$staged" | grep -Ei '(resume|cv|transcript)[^/]*\.(pdf|docx?|rtf)$' >/dev/null 2>&1 &&
+  fail "resume/CV/transcript documents must not be committed."
+
+# 3. No API keys in content.
+for f in $staged; do
+  [ -f "$f" ] || continue
+  if git show ":$f" | grep -Eq 'sk-ant-[A-Za-z0-9_-]{10,}'; then
+    fail "possible Anthropic API key in $f"
+  fi
+done
+
+exit 0

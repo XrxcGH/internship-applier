@@ -1,0 +1,14 @@
+{
+  "name": "@ia/fixtures",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local mock application site used to test form filling without touching a real employer form",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  }
+}

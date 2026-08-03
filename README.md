@@ -1,0 +1,69 @@
+# internship-applier
+
+A local-first desktop tool that reads your resume, finds summer internships you're
+actually eligible for, and — once **you** approve each one — drafts application answers
+in your own writing voice and pre-fills the application form for your review.
+
+**Status: design phase. No code written yet.** This repo currently contains the system
+design only. See [`docs/`](docs/) for the full plan.
+
+---
+
+## What it does
+
+```
+resume.pdf ──▶ profile ──▶ search ──▶ eligibility filter ──▶ YOU approve ──▶ draft answers
+                  ▲                                                              │
+                  └──────────── you edit + confirm ◀──────────────────────────────┘
+                                        │
+                                        ▼
+                            form pre-filled in a visible browser
+                                        │
+                                        ▼
+                              YOU click Submit · tracked
+```
+
+## What it deliberately does *not* do
+
+These are hard constraints in the design, not settings:
+
+- **Never submits an application you haven't seen and approved.** The tool fills the
+  form; a human presses Submit.
+- **Never invents facts.** Every generated sentence must trace back to something in your
+  confirmed profile. Unsupported claims are flagged in red and block submission.
+- **Never types credentials, SSNs, government IDs, or payment details.** Those fields are
+  skipped and handed to you.
+- **Never creates accounts or solves CAPTCHAs.** You log in; the tool reuses the session.
+- **Never answers "did you use AI to write this?"** That question is surfaced to you,
+  unanswered.
+- **Never scrapes sites whose terms forbid it.** Discovery runs on official ATS/job-board
+  APIs and public job feeds. See [`docs/04-job-discovery.md`](docs/04-job-discovery.md).
+
+## Documentation
+
+| Doc | Contents |
+| --- | --- |
+| [01 — Overview](docs/01-overview.md) | Goals, non-goals, principles, legal/ethical posture |
+| [02 — Architecture](docs/02-architecture.md) | Stack, processes, module layout, data flow |
+| [03 — Data model](docs/03-data-model.md) | SQLite schema, core TypeScript types |
+| [04 — Job discovery](docs/04-job-discovery.md) | Sources, fetch pipeline, dedupe, freshness |
+| [05 — Matching](docs/05-matching.md) | Hard eligibility rules, fit scoring, age handling |
+| [06 — Writing engine](docs/06-writing-engine.md) | Voice profile, drafting, fact-checking, review gate |
+| [07 — Form automation](docs/07-form-automation.md) | Playwright, ATS adapters, field mapping, submit gate |
+| [08 — Frontend](docs/08-frontend.md) | Screens, components, state, keyboard-first review UX |
+| [09 — API](docs/09-api.md) | REST + SSE surface between frontend and backend |
+| [10 — Security & privacy](docs/10-security-privacy.md) | PII, encryption, minors, credentials, deletion |
+| [11 — Roadmap](docs/11-roadmap.md) | Milestones, testing strategy, risks, open questions |
+
+## Environment (verified on this machine)
+
+- Node v24.16.0, npm 11.13.0, git — present
+- Python 3.14.6, pip 26.1.2 — present, but **not used**; see
+  [ADR-001](docs/02-architecture.md#adr-001--typescript-over-python) for why the stack is
+  TypeScript despite Python being a reasonable fit for this domain
+- Platform: Windows 11
+
+## Next step
+
+Read [`docs/11-roadmap.md`](docs/11-roadmap.md) § Open questions, then say go and M0
+(repo skeleton) starts.

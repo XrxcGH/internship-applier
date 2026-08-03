@@ -1,0 +1,44 @@
+# Runtime data — contains the user's resume, profile, browser session, and logs.
+# NOTHING under data/ may ever be committed.
+# Note: this must ignore the *contents* (`data/*`), not the directory (`data/`) —
+# git cannot re-include a file whose parent directory is excluded, so `data/` would
+# make the `!data/.gitkeep` negation below a no-op and the dir would vanish on clone.
+data/*
+!data/.gitkeep
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Build output
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Playwright
+playwright-report/
+test-results/
+browser-profile/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

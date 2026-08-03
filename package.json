@@ -1,0 +1,41 @@
+{
+  "name": "internship-applier",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first summer internship discovery and application assistant",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @ia/server",
+    "dev:web": "npm run dev -w @ia/web",
+    "build": "npm run build -w @ia/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "prettier --check . && eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "npm run db:generate -w @ia/server",
+    "db:migrate": "npm run db:migrate -w @ia/server",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "check": "npm run typecheck && npm run lint && npm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "concurrently": "^10.0.4",
+    "eslint": "^10.8.0",
+    "globals": "^17.9.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.66.0",
+    "vitest": "^4.1.10"
+  }
+}

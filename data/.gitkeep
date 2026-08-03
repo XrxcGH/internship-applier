@@ -1,0 +1,3 @@
+# This directory holds the user's resume, profile database, browser session, and logs.
+# Everything in it is gitignored. Only this file is tracked, so the directory exists
+# on a fresh clone. See docs/10-security-privacy.md.

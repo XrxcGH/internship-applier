@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build web
+        run: npm run build
+
+      # Release gate — see docs/07-form-automation.md.
+      # The tool fills forms; the user submits them. Nothing may click a submit control.
+      - name: G4 guard — no auto-submit path
+        run: |
+          if grep -rniE 'submit[A-Za-z]*\.click|click\(\).*submit' apps/server/src 2>/dev/null; then
+            echo "::error::Found a submit click in server source. The user submits their own application (G4)."
+            exit 1
+          fi
+          echo "ok — no submit-click found"
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+        continue-on-error: true
