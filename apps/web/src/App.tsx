@@ -21,7 +21,7 @@ const MILESTONES = [
   { id: 'M0', label: 'Skeleton', done: true },
   { id: 'M1', label: 'Resume → profile', done: true },
   { id: 'M2', label: 'Discovery', done: true },
-  { id: 'M3', label: 'Matching', done: false },
+  { id: 'M3', label: 'Matching', done: true },
   { id: 'M4', label: 'Review queue', done: false },
   { id: 'M5', label: 'Writing engine', done: false },
   { id: 'M6', label: 'Form automation', done: false },

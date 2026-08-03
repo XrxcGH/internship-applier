@@ -140,9 +140,18 @@ export const JobRequirement = z.object({
 export const RuleResult = z.object({
   rule: z.string(),
   status: z.enum(['pass', 'fail', 'unknown', 'not_applicable']),
+  /** Human-readable, shown verbatim in the UI next to the pass/fail mark. */
   because: z.string(),
+  /** Set when the decision came from an extracted job requirement. */
   requirementId: z.string().optional(),
+  /** Which profile field decided it, e.g. "derived.age". */
   profileRef: z.string().optional(),
+  /**
+   * Verbatim supporting text — the JD quote, or the posting field for rules that derive
+   * from the posting itself (deadline, closed). A `fail` must always carry either a
+   * requirementId or this; an unexplained exclusion is a bug, and a test enforces it.
+   */
+  evidence: z.string().optional(),
 });
 
 export const ScoreBreakdown = z.object({

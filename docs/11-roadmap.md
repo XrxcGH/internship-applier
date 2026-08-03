@@ -7,8 +7,9 @@
 | M0 Skeleton | **done** | 19-table schema, CI, G4 guards, pre-commit hook |
 | M1 Resume → profile | **done** | Claude-native PDF ingestion, field encryption, G1 enforced in the repository |
 | M2 Discovery | **done** | Greenhouse/Lever/Ashby adapters, polite fetcher, 3-stage dedupe, run reporting. Verified live: 424 postings from two real boards, with a failing board correctly reported as degraded rather than dropped. |
-| M3 Matching | next | |
-| M4–M8 | not started | |
+| M3 Matching | **done** | Deterministic + LLM requirement extraction with quote verification, 12 pure eligibility rules, scoring, rationale. Verified live: 816 postings → 420 eligible / 244 unknown / 152 ineligible, 203 requirements, 0 dropped, 0 errors. |
+| M4 Review queue | next | |
+| M5–M8 | not started | |
 
 Deferred from M2, worth doing before M3 ships: Adzuna and USAJOBS adapters (both need a
 free key), the SimplifyJobs community list, the Tier-B web-search path, the manual
