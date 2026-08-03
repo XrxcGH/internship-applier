@@ -1,8 +1,11 @@
 import Fastify, { type FastifyBaseLogger, type FastifyError, type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import { config } from './config';
 import { logger } from './infra/logger';
 import { healthRoutes } from './routes/health';
+import { profileRoutes } from './routes/profile';
+import { resumeRoutes } from './routes/resumes';
 
 export interface BuildOptions {
   /** Disable the X-App-Token check. Test-only. */
@@ -22,6 +25,8 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     origin: [config.web.origin],
     credentials: true,
   });
+
+  await app.register(multipart, { limits: { fileSize: 12 * 1024 * 1024, files: 1 } });
 
   // Loopback-only guard. Belt-and-braces alongside binding to 127.0.0.1.
   app.addHook('onRequest', async (req, reply) => {
@@ -52,6 +57,8 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   });
 
   await app.register(healthRoutes);
+  await app.register(profileRoutes);
+  await app.register(resumeRoutes);
 
   return app;
 }
