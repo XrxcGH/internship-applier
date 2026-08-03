@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { HealthResponse } from '@ia/shared';
 import { fetchHealth } from './lib/api';
+import { Field, RunningHead, Section } from './components/Chrome';
 
 type State =
   | { kind: 'loading' }
@@ -8,10 +9,20 @@ type State =
   | { kind: 'error'; message: string };
 
 const GATES = [
-  { id: 'G1', label: 'Confirm profile', note: 'You correct what was read from your resume' },
-  { id: 'G2', label: 'Approve posting', note: 'One explicit approval per application' },
-  { id: 'G3', label: 'Review answers', note: 'You read and edit every generated answer' },
-  { id: 'G4', label: 'Submit', note: 'You click Submit yourself, in the browser' },
+  { id: 'G1', label: 'Confirm profile', note: 'You correct what was read from your resume.' },
+  { id: 'G2', label: 'Approve posting', note: 'One explicit approval, per application.' },
+  { id: 'G3', label: 'Review answers', note: 'You read and edit every generated sentence.' },
+  { id: 'G4', label: 'Submit', note: 'You click Submit yourself, on the real page.' },
+];
+
+const MILESTONES = [
+  { id: 'M0', label: 'Skeleton', done: true },
+  { id: 'M1', label: 'Resume → profile', done: false },
+  { id: 'M2', label: 'Discovery', done: false },
+  { id: 'M3', label: 'Matching', done: false },
+  { id: 'M4', label: 'Review queue', done: false },
+  { id: 'M5', label: 'Writing engine', done: false },
+  { id: 'M6', label: 'Form automation', done: false },
 ];
 
 export function App() {
@@ -20,9 +31,7 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     fetchHealth()
-      .then((health) => {
-        if (!cancelled) setState({ kind: 'ready', health });
-      })
+      .then((health) => !cancelled && setState({ kind: 'ready', health }))
       .catch((err: unknown) => {
         if (!cancelled) {
           setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
@@ -33,78 +42,102 @@ export function App() {
     };
   }, []);
 
-  return (
-    <main className="mx-auto flex min-h-full max-w-3xl flex-col gap-8 px-6 py-12">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">internship-applier</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Milestone 0 — skeleton. Nothing is wired to the internet yet.
-        </p>
-      </header>
+  const confirmed = state.kind === 'ready' && state.health.profileConfirmed;
 
-      <section className="rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-neutral-500">
-          Server
-        </h2>
-        {state.kind === 'loading' && <p className="text-sm">Checking…</p>}
+  return (
+    <div className="mx-auto max-w-2xl px-6 py-16 sm:px-10 sm:py-24">
+      <RunningHead section="A working dossier" gate={confirmed ? undefined : 'G1'} />
+
+      <p className="a-rise a-step-2 text-dim mb-14 max-w-[62ch] text-[1.0625rem] leading-relaxed">
+        Every filter decision here quotes the job description that caused it. Every drafted sentence
+        points at the fact behind it. Nothing is sent anywhere until you sign for it.
+      </p>
+
+      <Section n="01" title="Server" step={3}>
+        {state.kind === 'loading' && <p className="text-dim text-sm">Checking…</p>}
+
         {state.kind === 'error' && (
           <div className="text-sm">
-            <p className="font-medium text-red-600">Cannot reach the API.</p>
-            <p className="mt-1 text-neutral-500">{state.message}</p>
-            <p className="mt-2 text-neutral-500">
-              Start it with <code className="font-mono">npm run dev</code>.
+            <p className="text-redline">Cannot reach the API.</p>
+            <p className="u-quote mt-3">{state.message}</p>
+            <p className="text-dim mt-4">
+              Start it with <span className="u-data">npm run dev</span>.
             </p>
           </div>
         )}
-        {state.kind === 'ready' && (
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-            <Row label="Status" value={state.health.status} />
-            <Row label="Node" value={state.health.node} />
-            <Row label="Uptime" value={`${state.health.uptimeSeconds}s`} />
-            <Row
-              label="Database"
-              value={
-                state.health.db.connected
-                  ? `connected · ${state.health.db.tables} tables`
-                  : 'disconnected'
-              }
-            />
-            <Row
-              label="Profile"
-              value={state.health.profileConfirmed ? 'confirmed' : 'not set up yet'}
-            />
-          </dl>
-        )}
-      </section>
 
-      <section className="rounded-lg border border-neutral-200 p-5 dark:border-neutral-800">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-neutral-500">
-          Human gates
-        </h2>
-        <ul className="space-y-2 text-sm">
-          {GATES.map((g) => (
-            <li key={g.id} className="flex gap-3">
-              <span className="font-mono text-xs text-neutral-400">{g.id}</span>
+        {state.kind === 'ready' && (
+          <div className="divide-rule/60 divide-y">
+            <Field label="Status" value={state.health.status} tone="var(--verified)" />
+            <Field label="Runtime" value={state.health.node} />
+            <Field label="Uptime" value={`${state.health.uptimeSeconds}s`} />
+            <Field
+              label="Ledger"
+              value={
+                state.health.db.connected ? `${state.health.db.tables} tables` : 'disconnected'
+              }
+              tone={state.health.db.connected ? undefined : 'var(--redline)'}
+            />
+            <Field
+              label="Profile"
+              value={state.health.profileConfirmed ? 'confirmed' : 'not yet established'}
+              tone={state.health.profileConfirmed ? 'var(--verified)' : 'var(--caution)'}
+            />
+          </div>
+        )}
+      </Section>
+
+      <Section n="02" title="The four gates" step={4}>
+        <ol className="space-y-4">
+          {GATES.map((g, i) => (
+            <li key={g.id} className={`a-rise flex gap-4 a-step-${Math.min(i + 5, 8)}`}>
+              <span className="u-data text-brass w-6 shrink-0 pt-0.5">{g.id}</span>
               <span>
-                <span className="font-medium">{g.label}</span>
-                <span className="text-neutral-500"> — {g.note}</span>
+                <span className="block text-[1.0625rem]">{g.label}</span>
+                <span className="text-dim text-[0.9375rem]">{g.note}</span>
               </span>
             </li>
           ))}
-        </ul>
-        <p className="mt-4 text-xs text-neutral-500">
-          None of these can be disabled. The tool never submits an application for you.
+        </ol>
+        <p className="text-faint mt-6 max-w-[58ch] text-[0.9375rem] italic">
+          None of these can be switched off. There is no endpoint that submits an application for
+          you — that&rsquo;s asserted by a test, a lint rule, and a CI check, not by good
+          intentions.
         </p>
-      </section>
-    </main>
-  );
-}
+      </Section>
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <>
-      <dt className="text-neutral-500">{label}</dt>
-      <dd className="font-mono text-xs">{value}</dd>
-    </>
+      <Section n="03" title="Build" step={6}>
+        <ul className="space-y-1.5">
+          {MILESTONES.map((m) => (
+            <li key={m.id} className="flex items-baseline gap-4">
+              <span
+                className="u-data w-6 shrink-0"
+                style={{ color: m.done ? 'var(--verified)' : 'var(--ink-faint)' }}
+              >
+                {m.id}
+              </span>
+              <span
+                className="flex-1 text-[0.9375rem]"
+                style={{ color: m.done ? 'var(--ink)' : 'var(--ink-faint)' }}
+              >
+                {m.label}
+              </span>
+              {m.done && (
+                <span className="a-stamp u-data text-verified text-[0.6875rem] tracking-widest uppercase">
+                  done
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      <footer className="a-rise a-step-8 mt-16">
+        <hr className="u-rule a-draw a-step-8 mb-4" />
+        <p className="u-eyebrow">
+          local&nbsp;only&nbsp;· no&nbsp;telemetry&nbsp;· your&nbsp;machine
+        </p>
+      </footer>
+    </div>
   );
 }

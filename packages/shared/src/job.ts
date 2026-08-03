@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PositionType, ProgramFlag, Season, WorkArrangement } from './filters';
 
 export const SourceKind = z.enum([
   'greenhouse',
@@ -35,10 +36,14 @@ export const JobLocation = z.object({
 });
 
 export const JobTerm = z.object({
-  season: z.enum(['summer', 'fall', 'winter', 'spring', 'year_round', 'unknown']),
+  /** `null` means the parser couldn't tell. Badged in the UI, never silently filtered. */
+  season: Season.nullable(),
   year: z.number().int().nullable(),
   start: z.string().optional(),
   end: z.string().optional(),
+  durationWeeks: z.number().int().positive().nullable().default(null),
+  /** Co-ops and rotational programs spanning more than one academic term. */
+  multiTerm: z.boolean().default(false),
 });
 
 export const ApplyEffort = z.object({
@@ -59,7 +64,13 @@ export const JobPosting = z.object({
   title: z.string(),
   descriptionText: z.string(),
   locations: z.array(JobLocation).default([]),
-  employmentType: z.enum(['internship', 'co_op', 'fellowship', 'part_time', 'other']),
+  /** `null` when the posting doesn't say — treated as unknown, never as a mismatch. */
+  positionType: PositionType.nullable(),
+  workArrangement: WorkArrangement.nullable(),
+  hybridDaysOnsite: z.number().int().nonnegative().nullable().default(null),
+  /** States/countries a remote posting restricts you to, if any. */
+  remoteEligibleIn: z.array(z.string()).default([]),
+  programFlags: z.array(ProgramFlag).default([]),
   term: JobTerm,
   compensation: z
     .object({
@@ -67,10 +78,25 @@ export const JobPosting = z.object({
       max: z.number().optional(),
       currency: z.string().optional(),
       period: z.enum(['hour', 'week', 'month', 'year', 'total']).optional(),
+      unpaid: z.boolean().optional(),
+      academicCreditOnly: z.boolean().optional(),
+      housingProvided: z.boolean().optional(),
+      relocationAssistance: z.boolean().optional(),
       raw: z.string().optional(),
     })
     .nullable()
     .default(null),
+  /** What the application itself demands, for the effort estimate and filters. */
+  requires: z
+    .object({
+      coverLetter: z.boolean().optional(),
+      transcript: z.boolean().optional(),
+      portfolio: z.boolean().optional(),
+      references: z.boolean().optional(),
+      videoInterview: z.boolean().optional(),
+      account: z.boolean().optional(),
+    })
+    .default({}),
   postedAt: z.string().datetime().nullable(),
   closesAt: z.string().datetime().nullable(),
   isOpen: z.boolean(),

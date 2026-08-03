@@ -9,6 +9,47 @@ A model never decides whether the user qualifies for something. Outcome is a tri
 **Fit is advisory.** A 0–100 score with a visible per-dimension breakdown, used only for
 ordering the review queue. It never filters anything out on its own.
 
+## Filters
+
+Defined in `packages/shared/src/filters.ts`. Filters shape *what you're shown*; they are
+not the eligibility rules, which stay deterministic and run regardless.
+
+Three rules govern the whole filter model:
+
+1. **Every default is permissive.** An unset filter widens the search, never narrows it.
+2. **Unstated is not disqualifying.** A posting that doesn't mention pay is unknown, not
+   unpaid. Every `include*Undisclosed` / `includeUnknown*` flag defaults to true.
+3. **Filters that mirror a hard rule are preferences about display**, not the rule itself.
+
+### Groups
+
+| Group | Covers |
+| --- | --- |
+| **Term** | Seasons (summer/fall/winter/spring/year-round/flexible), years, duration in weeks, start & end windows, multi-term (co-op) allowance, minimum overlap with your availability, whether to include undated postings |
+| **Position type** | Internship, co-op, fellowship, apprenticeship, research/REU, new-grad, part-time, seasonal, contract, externship, trainee program, volunteer |
+| **Program flags** | Diversity programs, first-year/sophomore-specific, high-school programs, returnships, veteran programs, rotational, leadership development, PhD/research, return-offer track |
+| **Arrangement** | On-site, hybrid, remote, geo-restricted remote, field/travel; hybrid days-on-site range; which states/countries a remote role permits |
+| **Location** | Cities, regions, countries, radius from your base, relocation targets, exclusions |
+| **Compensation** | Paid-only, academic credit acceptable, minimum by hour/week/month/year/total, currency, housing stipend, relocation assistance, include-undisclosed |
+| **Eligibility** | Education levels, graduation window, enrollment requirement, hide-above-my-age, sponsorship availability, citizenship/clearance requirements, GPA ceiling, include-unknown |
+| **Company** | Size, sector (private/public/nonprofit/government/academic/startup), industries, only-these-companies, exclusions |
+| **Role** | Role families, title include/exclude, description include/exclude, required skills, overqualified-requirement exclusion with a years tolerance |
+| **Application** | Max steps, max essays, max estimated minutes, account required, ATS vendor allow/deny, deadline window, posted-within, and whether to exclude postings demanding a cover letter, transcript, portfolio, references, or a video interview |
+| **View** | Eligibility band shown (`eligible` / `eligible_and_unknown` / `all`), minimum score, sort key and direction, hide-already-decided |
+
+### Defaults
+
+`DEFAULT_FILTERS` is Summer 2027, internships and co-ops, United States, any work
+arrangement, any compensation, undisclosed and unknown included, sorted by fit. The season
+and year are ordinary values — nothing in the system hardcodes summer or 2027.
+
+### Presets
+
+`filter_preset` rows are named, saved filter sets. Eight ship as starters and are all
+editable or deletable: *Summer 2027*, *Remote only*, *Co-ops (6+ months)*, *Paid only*,
+*Quick applications*, *Closing soon*, *Government & research*, and *Cast a wide net* (every
+position type, every season, every year, ineligible postings shown — maximum recall).
+
 ## Stage 0 — Requirement extraction
 
 Turns unstructured JD text into `job_requirement` rows. This *is* an LLM call

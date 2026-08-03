@@ -103,9 +103,15 @@ export const jobPosting = sqliteTable(
     descriptionHtml: text('description_html'),
     descriptionText: text('description_text').notNull(),
     locations: text('locations', { mode: 'json' }),
-    employmentType: text('employment_type').notNull().default('internship'),
+    /** Null = the posting didn't say. Never treated as a mismatch. */
+    positionType: text('position_type'),
+    workArrangement: text('work_arrangement'),
+    hybridDaysOnsite: integer('hybrid_days_onsite'),
+    remoteEligibleIn: text('remote_eligible_in', { mode: 'json' }),
+    programFlags: text('program_flags', { mode: 'json' }),
     term: text('term', { mode: 'json' }),
     compensation: text('compensation', { mode: 'json' }),
+    requires: text('requires', { mode: 'json' }),
     postedAt: text('posted_at'),
     closesAt: text('closes_at'),
     isOpen: integer('is_open', { mode: 'boolean' }).notNull().default(true),
@@ -120,6 +126,7 @@ export const jobPosting = sqliteTable(
     uniqueIndex('job_posting_canonical_url_idx').on(t.canonicalUrl),
     index('job_posting_fingerprint_idx').on(t.fingerprint),
     index('job_posting_open_idx').on(t.isOpen, t.closesAt),
+    index('job_posting_filter_idx').on(t.positionType, t.workArrangement, t.isOpen),
   ],
 );
 
@@ -297,6 +304,17 @@ export const credentialRef = sqliteTable('credential_ref', {
   label: text('label'),
   storageStatePath: text('storage_state_path').notNull(),
   lastUsedAt: text('last_used_at'),
+});
+
+/** Saved search filters — see docs/05-matching.md § Filters. */
+export const filterPreset = sqliteTable('filter_preset', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description'),
+  filters: text('filters', { mode: 'json' }).notNull(),
+  isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now),
 });
 
 export const setting = sqliteTable('setting', {

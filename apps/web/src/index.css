@@ -1,17 +1,285 @@
+/* Self-hosted type — see docs/12-design-language.md. The app promises nothing leaves
+   your machine, so fonts are bundled rather than fetched from a CDN. */
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
+@import '@fontsource-variable/newsreader';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
 @import 'tailwindcss';
 
-@theme {
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+/* ─────────────────────────────────────────────── palette
+   Dominant warm ink, one brass accent, three signal colors that each mean exactly
+   one thing. Green/amber/oxblood are reserved for verification states — never decor. */
+
+:root,
+:root[data-theme='dark'] {
+  --paper: #14110e;
+  --paper-raised: #1d1915;
+  --paper-sunk: #0e0c0a;
+  --ink: #e9e2d4;
+  --ink-dim: #a79d8f;
+  --ink-faint: #8a8275;
+  --rule: #2e2823;
+  --brass: #c8963e;
+  --brass-dim: #8a6628;
+  --verified: #7a9471;
+  --caution: #c08a4a;
+  --redline: #c86a5e;
+  --lamp: 340px 30% at 22% -8%;
+  --lamp-alpha: 0.1;
+  --grain-alpha: 0.022;
+  --rule-alpha: 0.5;
 }
 
-:root {
-  color-scheme: light dark;
+:root[data-theme='light'] {
+  --paper: #ede6d8;
+  --paper-raised: #f5f0e5;
+  --paper-sunk: #e2d9c7;
+  --ink: #221e18;
+  --ink-dim: #4f4a40;
+  --ink-faint: #6e675a;
+  --rule: #cfc4ae;
+  --brass: #7e5810;
+  --brass-dim: #b8933f;
+  --verified: #4e6b47;
+  --caution: #8a5a18;
+  --redline: #8c3328;
+  --lamp-alpha: 0.05;
+  --grain-alpha: 0.03;
+  --rule-alpha: 0.6;
 }
 
-html,
-body,
-#root {
-  height: 100%;
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --paper: #ede6d8;
+    --paper-raised: #f5f0e5;
+    --paper-sunk: #e2d9c7;
+    --ink: #221e18;
+    --ink-dim: #4f4a40;
+    --ink-faint: #6e675a;
+    --rule: #cfc4ae;
+    --brass: #7e5810;
+    --brass-dim: #b8933f;
+    --verified: #4e6b47;
+    --caution: #8a5a18;
+    --redline: #8c3328;
+    --lamp-alpha: 0.05;
+    --grain-alpha: 0.03;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-raised: var(--paper-raised);
+  --color-sunk: var(--paper-sunk);
+  --color-ink: var(--ink);
+  --color-dim: var(--ink-dim);
+  --color-faint: var(--ink-faint);
+  --color-rule: var(--rule);
+  --color-brass: var(--brass);
+  --color-verified: var(--verified);
+  --color-caution: var(--caution);
+  --color-redline: var(--redline);
+
+  --font-display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --font-body: 'Newsreader Variable', 'Newsreader', Georgia, serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+/* ─────────────────────────────────────────────── base */
+
+html {
+  color-scheme: dark light;
+}
+
+body {
+  margin: 0;
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.6;
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+
+  /* Three layers: lamp vignette, paper grain, ledger rules. No images. */
+  background-image:
+    radial-gradient(
+      var(--lamp, 340px 30% at 22% -8%),
+      rgb(200 150 62 / var(--lamp-alpha)),
+      transparent 70%
+    ),
+    radial-gradient(
+      circle at 50% 50%,
+      rgb(233 226 212 / var(--grain-alpha)) 0.5px,
+      transparent 0.5px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 31px,
+      color-mix(in srgb, var(--rule) calc(var(--rule-alpha) * 55%), transparent) 31px,
+      color-mix(in srgb, var(--rule) calc(var(--rule-alpha) * 55%), transparent) 32px
+    );
+  background-size:
+    100% 100%,
+    3px 3px,
+    100% 32px;
+  background-attachment: fixed, fixed, scroll;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--brass) 30%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+
+/* ─────────────────────────────────────────────── semantic type
+   Mono is semantic, not decorative: if it's set in mono it came from somewhere else
+   and can be traced to a source. */
+
+.u-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  font-weight: 400;
+}
+
+.u-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.u-data {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/** Verbatim text quoted from a source — a job description, a form label, the user. */
+.u-quote {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--ink-dim);
+  border-left: 1px solid var(--brass-dim);
+  padding-left: 0.875rem;
+}
+
+.u-rule {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  transform-origin: left;
+}
+
+/* ─────────────────────────────────────────────── motion
+   One orchestrated arrival, then stamps for the moments that represent a human
+   decision. Everything collapses to a fade under prefers-reduced-motion. */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes stamp {
+  0% {
+    opacity: 0;
+    transform: scale(1.45) rotate(-7deg);
+  }
+  55% {
+    opacity: 1;
+    transform: scale(0.96) rotate(1.5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+.a-rise {
+  animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
+}
+
+.a-draw {
+  animation: draw 0.6s cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
+}
+
+.a-stamp {
+  animation: stamp 0.42s cubic-bezier(0.3, 1.4, 0.5, 1) backwards;
+}
+
+/* Staggered reveal — masthead, then each section, then rows. */
+.a-step-1 {
+  animation-delay: 0.04s;
+}
+.a-step-2 {
+  animation-delay: 0.1s;
+}
+.a-step-3 {
+  animation-delay: 0.16s;
+}
+.a-step-4 {
+  animation-delay: 0.22s;
+}
+.a-step-5 {
+  animation-delay: 0.28s;
+}
+.a-step-6 {
+  animation-delay: 0.34s;
+}
+.a-step-7 {
+  animation-delay: 0.4s;
+}
+.a-step-8 {
+  animation-delay: 0.46s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .a-rise,
+  .a-draw,
+  .a-stamp {
+    animation: rise 0.01ms backwards;
+  }
+}
+
+/* ─────────────────────────────────────────────── states
+   A redlined field reads as struck out, not as an error box. */
+
+.u-redlined {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 5px,
+    color-mix(in srgb, var(--redline) 22%, transparent) 5px,
+    color-mix(in srgb, var(--redline) 22%, transparent) 6px
+  );
 }

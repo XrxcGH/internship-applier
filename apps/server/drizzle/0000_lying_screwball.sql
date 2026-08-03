@@ -74,6 +74,17 @@ CREATE TABLE `decision` (
 	FOREIGN KEY (`match_id`) REFERENCES `match`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
+CREATE TABLE `filter_preset` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`description` text,
+	`filters` text NOT NULL,
+	`is_default` integer DEFAULT false NOT NULL,
+	`created_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,
+	`updated_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `filter_preset_name_unique` ON `filter_preset` (`name`);--> statement-breakpoint
 CREATE TABLE `job_posting` (
 	`id` text PRIMARY KEY NOT NULL,
 	`external_id` text,
@@ -85,9 +96,14 @@ CREATE TABLE `job_posting` (
 	`description_html` text,
 	`description_text` text NOT NULL,
 	`locations` text,
-	`employment_type` text DEFAULT 'internship' NOT NULL,
+	`position_type` text,
+	`work_arrangement` text,
+	`hybrid_days_onsite` integer,
+	`remote_eligible_in` text,
+	`program_flags` text,
 	`term` text,
 	`compensation` text,
+	`requires` text,
 	`posted_at` text,
 	`closes_at` text,
 	`is_open` integer DEFAULT true NOT NULL,
@@ -102,6 +118,7 @@ CREATE TABLE `job_posting` (
 CREATE UNIQUE INDEX `job_posting_canonical_url_idx` ON `job_posting` (`canonical_url`);--> statement-breakpoint
 CREATE INDEX `job_posting_fingerprint_idx` ON `job_posting` (`fingerprint`);--> statement-breakpoint
 CREATE INDEX `job_posting_open_idx` ON `job_posting` (`is_open`,`closes_at`);--> statement-breakpoint
+CREATE INDEX `job_posting_filter_idx` ON `job_posting` (`position_type`,`work_arrangement`,`is_open`);--> statement-breakpoint
 CREATE TABLE `job_posting_source` (
 	`posting_id` text NOT NULL,
 	`source_id` text NOT NULL,
