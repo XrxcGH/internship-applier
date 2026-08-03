@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { HealthResponse } from '@ia/shared';
 import { fetchHealth } from './lib/api';
 import { Field, RunningHead, Section } from './components/Chrome';
+import { Button } from './components/Controls';
+import { Onboarding } from './pages/Onboarding';
 
 type State =
   | { kind: 'loading' }
@@ -17,7 +19,7 @@ const GATES = [
 
 const MILESTONES = [
   { id: 'M0', label: 'Skeleton', done: true },
-  { id: 'M1', label: 'Resume → profile', done: false },
+  { id: 'M1', label: 'Resume → profile', done: true },
   { id: 'M2', label: 'Discovery', done: false },
   { id: 'M3', label: 'Matching', done: false },
   { id: 'M4', label: 'Review queue', done: false },
@@ -27,22 +29,30 @@ const MILESTONES = [
 
 export function App() {
   const [state, setState] = useState<State>({ kind: 'loading' });
+  const [setupOpen, setSetupOpen] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const refresh = useCallback(() => {
     fetchHealth()
-      .then((health) => !cancelled && setState({ kind: 'ready', health }))
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((health) => setState({ kind: 'ready', health }))
+      .catch((err: unknown) =>
+        setState({ kind: 'error', message: err instanceof Error ? err.message : String(err) }),
+      );
   }, []);
 
+  useEffect(refresh, [refresh]);
+
   const confirmed = state.kind === 'ready' && state.health.profileConfirmed;
+
+  if (setupOpen) {
+    return (
+      <Onboarding
+        onDone={() => {
+          refresh();
+          setSetupOpen(false);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-16 sm:px-10 sm:py-24">
@@ -83,6 +93,14 @@ export function App() {
               value={state.health.profileConfirmed ? 'confirmed' : 'not yet established'}
               tone={state.health.profileConfirmed ? 'var(--verified)' : 'var(--caution)'}
             />
+          </div>
+        )}
+
+        {state.kind === 'ready' && (
+          <div className="mt-6">
+            <Button variant="primary" onClick={() => setSetupOpen(true)}>
+              {confirmed ? 'Revisit profile' : 'Establish profile — G1'}
+            </Button>
           </div>
         )}
       </Section>
