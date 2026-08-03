@@ -1,5 +1,20 @@
 # 11 — Roadmap, testing, risks
 
+## Status
+
+| Milestone | State | Notes |
+| --- | --- | --- |
+| M0 Skeleton | **done** | 19-table schema, CI, G4 guards, pre-commit hook |
+| M1 Resume → profile | **done** | Claude-native PDF ingestion, field encryption, G1 enforced in the repository |
+| M2 Discovery | **done** | Greenhouse/Lever/Ashby adapters, polite fetcher, 3-stage dedupe, run reporting. Verified live: 424 postings from two real boards, with a failing board correctly reported as degraded rather than dropped. |
+| M3 Matching | next | |
+| M4–M8 | not started | |
+
+Deferred from M2, worth doing before M3 ships: Adzuna and USAJOBS adapters (both need a
+free key), the SimplifyJobs community list, the Tier-B web-search path, the manual
+paste-a-URL route, the freshness/refresh job, and SSE progress. The keyless ATS adapters
+carry most of the coverage, so these are additive rather than blocking.
+
 ## Milestones
 
 Each milestone is independently demoable. Nothing after M0 depends on a big-bang
