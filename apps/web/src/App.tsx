@@ -4,11 +4,14 @@ import { fetchHealth } from './lib/api';
 import { Field, RunningHead, Section } from './components/Chrome';
 import { Button } from './components/Controls';
 import { Onboarding } from './pages/Onboarding';
+import { Matches } from './pages/Matches';
 
 type State =
   | { kind: 'loading' }
   | { kind: 'ready'; health: HealthResponse }
   | { kind: 'error'; message: string };
+
+type View = 'home' | 'setup' | 'queue';
 
 const GATES = [
   { id: 'G1', label: 'Confirm profile', note: 'You correct what was read from your resume.' },
@@ -22,14 +25,14 @@ const MILESTONES = [
   { id: 'M1', label: 'Resume → profile', done: true },
   { id: 'M2', label: 'Discovery', done: true },
   { id: 'M3', label: 'Matching', done: true },
-  { id: 'M4', label: 'Review queue', done: false },
+  { id: 'M4', label: 'Review queue', done: true },
   { id: 'M5', label: 'Writing engine', done: false },
   { id: 'M6', label: 'Form automation', done: false },
 ];
 
 export function App() {
   const [state, setState] = useState<State>({ kind: 'loading' });
-  const [setupOpen, setSetupOpen] = useState(false);
+  const [view, setView] = useState<View>('home');
 
   const refresh = useCallback(() => {
     fetchHealth()
@@ -43,14 +46,25 @@ export function App() {
 
   const confirmed = state.kind === 'ready' && state.health.profileConfirmed;
 
-  if (setupOpen) {
+  if (view === 'setup') {
     return (
       <Onboarding
         onDone={() => {
           refresh();
-          setSetupOpen(false);
+          setView('home');
         }}
       />
+    );
+  }
+
+  if (view === 'queue') {
+    return (
+      <>
+        <div className="mx-auto max-w-6xl px-6 pt-8 sm:px-10">
+          <Button onClick={() => setView('home')}>← Back</Button>
+        </div>
+        <Matches />
+      </>
     );
   }
 
@@ -97,10 +111,15 @@ export function App() {
         )}
 
         {state.kind === 'ready' && (
-          <div className="mt-6">
-            <Button variant="primary" onClick={() => setSetupOpen(true)}>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Button variant="primary" onClick={() => setView('setup')}>
               {confirmed ? 'Revisit profile' : 'Establish profile — G1'}
             </Button>
+            {confirmed && (
+              <Button variant="primary" onClick={() => setView('queue')}>
+                Open the queue — G2
+              </Button>
+            )}
           </div>
         )}
       </Section>

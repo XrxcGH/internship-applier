@@ -8,13 +8,11 @@
 | M1 Resume → profile | **done** | Claude-native PDF ingestion, field encryption, G1 enforced in the repository |
 | M2 Discovery | **done** | Greenhouse/Lever/Ashby adapters, polite fetcher, 3-stage dedupe, run reporting. Verified live: 424 postings from two real boards, with a failing board correctly reported as degraded rather than dropped. |
 | M3 Matching | **done** | Deterministic + LLM requirement extraction with quote verification, 12 pure eligibility rules, scoring, rationale. Verified live: 816 postings → 420 eligible / 244 unknown / 152 ineligible, 203 requirements, 0 dropped, 0 errors. |
-| M4 Review queue | next | |
-| M5–M8 | not started | |
+| M4 Review queue | **done** | Keyboard-first triage, requirement checklist with verbatim quotes, score breakdown, reject reasons, G2 approval creating an application. Verified live against 123 real matches. |
+| M5 Writing engine | next | StyleProfile already built during the backfill |
+| M6–M8 | not started | |
 
-Deferred from M2, worth doing before M3 ships: Adzuna and USAJOBS adapters (both need a
-free key), the SimplifyJobs community list, the Tier-B web-search path, the manual
-paste-a-URL route, the freshness/refresh job, and SSE progress. The keyless ATS adapters
-carry most of the coverage, so these are additive rather than blocking.
+All M1 and M2 deferrals are now complete: query planner, Adzuna/USAJOBS adapters, the SimplifyJobs community list, manual paste-a-URL, freshness/refresh, SSE progress, source management, writing-sample capture with StyleProfile, and resume set-primary/delete.
 
 ## Milestones
 

@@ -1,4 +1,5 @@
 import { CandidateProfile, HealthResponse } from '@ia/shared';
+import { appToken, clearToken } from './session';
 
 export class ApiError extends Error {
   constructor(
@@ -15,8 +16,13 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { accept: 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      accept: 'application/json',
+      'x-app-token': await appToken(),
+      ...(init?.headers ?? {}),
+    },
   });
+  if (res.status === 401) clearToken();
 
   const body: unknown = res.status === 204 ? null : await res.json().catch(() => null);
 
@@ -48,7 +54,11 @@ export const listResumes = () => request<ResumeDoc[]>('/api/resumes');
 export async function uploadResume(file: File): Promise<{ documentId: string }> {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch('/api/resumes', { method: 'POST', body: form });
+  const res = await fetch('/api/resumes', {
+    method: 'POST',
+    body: form,
+    headers: { 'x-app-token': await appToken() },
+  });
   const body: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     const e = body as { error?: { message?: string } } | null;

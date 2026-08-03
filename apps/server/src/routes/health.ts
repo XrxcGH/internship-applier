@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { HealthResponse } from '@ia/shared';
+import { config } from '../config';
 import { countTables, db, isConnected, schema } from '../infra/db/client';
 
 const startedAt = Date.now();
@@ -26,4 +27,11 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
       time: new Date().toISOString(),
     });
   });
+  /**
+   * Hands the local UI the per-run token it needs for every other route. Safe to expose
+   * here because the response is readable only from the app's own origin (CORS) and only
+   * over loopback — the token exists to stop other local processes, not to authenticate
+   * a user.
+   */
+  app.get('/api/session', async () => ({ token: config.appToken }));
 }
