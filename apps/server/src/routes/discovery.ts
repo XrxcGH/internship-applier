@@ -1,17 +1,33 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { desc, sql } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
+import { DEFAULT_FILTERS, SearchFilters, type ConfirmedProfile } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
-import { isProfileConfirmed } from '../core/profile/repository';
-import { postingStats, runDiscovery, type DiscoveryTarget } from '../core/discovery/run';
+import { getProfile, isProfileConfirmed } from '../core/profile/repository';
+import {
+  ALL_SOURCES,
+  getRun,
+  listRuns,
+  postingStats,
+  runDiscovery,
+  saveManualPosting,
+  type DiscoveryTarget,
+} from '../core/discovery/run';
 import { resolveCompany } from '../core/discovery/resolveCompany';
+import { fetchManualPosting } from '../core/discovery/manualPosting';
+import { refreshPostings } from '../core/discovery/refresh';
+import { planQueries } from '../core/discovery/queryPlanner';
+
+const SOURCE_NAMES = Object.keys(ALL_SOURCES) as [string, ...string[]];
 
 const RunBody = z.object({
   targets: z
     .array(
       z.object({
-        source: z.enum(['greenhouse', 'lever', 'ashby']),
-        board: z.string().min(1),
+        source: z.enum(SOURCE_NAMES),
+        board: z.string().default(''),
+        keywords: z.array(z.string()).optional(),
+        location: z.string().optional(),
       }),
     )
     .min(1)
@@ -19,6 +35,7 @@ const RunBody = z.object({
 });
 
 const ResolveBody = z.object({ name: z.string().min(1) });
+const ManualBody = z.object({ url: z.string().url() });
 
 export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -63,6 +80,119 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/discovery/stats', async () => postingStats());
+
+  /** The editable plan — shown as chips before a run so the search isn't a black box. */
+  app.post('/api/discovery/plan', async (req, reply) => {
+    const profile = getProfile();
+    if (!profile?.confirmedAt) {
+      return reply
+        .code(409)
+        .send({ error: { code: 'PROFILE_NOT_CONFIRMED', message: 'Confirm your profile first.' } });
+    }
+
+    const body = z.object({ filters: SearchFilters.optional() }).parse(req.body ?? {});
+    const filters = body.filters ?? DEFAULT_FILTERS;
+
+    const knownBoards = db
+      .select({ label: schema.source.label, kind: schema.source.kind })
+      .from(schema.source)
+      .where(eq(schema.source.enabled, true))
+      .all()
+      .filter((s) => s.label.includes(':'))
+      .map((s) => ({
+        source: s.kind as 'greenhouse',
+        board: s.label.split(':')[1] ?? '',
+        reason: 'already resolved from a previous run',
+      }));
+
+    return planQueries(profile as ConfirmedProfile, filters, knownBoards);
+  });
+
+  app.get<{ Params: { id: string } }>('/api/discovery/runs/:id', async (req, reply) => {
+    const run = getRun(req.params.id);
+    if (!run) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such run.' } });
+    }
+    return run;
+  });
+
+  app.get('/api/discovery/runs', async () => listRuns());
+
+  /**
+   * The manual path (docs/04 § Tier C). The user brings a posting from anywhere —
+   * including sites this tool deliberately will not crawl.
+   */
+  app.post('/api/discovery/manual', async (req, reply) => {
+    const parsed = ManualBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: { code: 'VALIDATION_FAILED', message: 'Expected { url }.' } });
+    }
+    try {
+      const { posting, usedJsonLd, notes } = await fetchManualPosting(parsed.data.url);
+      const id = saveManualPosting(posting);
+      return { postingId: id, posting, usedJsonLd, notes };
+    } catch (err) {
+      return reply.code(502).send({
+        error: {
+          code: 'SOURCE_UNAVAILABLE',
+          message: `Could not read that URL: ${(err as Error).message}`,
+        },
+      });
+    }
+  });
+
+  app.post('/api/discovery/refresh', async (req) => {
+    const body = z
+      .object({
+        checkUrls: z.boolean().default(false),
+        limit: z.number().int().max(200).default(50),
+      })
+      .parse(req.body ?? {});
+    return refreshPostings(body);
+  });
+
+  app.post<{ Params: { id: string } }>('/api/postings/:id/refresh', async (req, reply) => {
+    const row = db
+      .select()
+      .from(schema.jobPosting)
+      .where(eq(schema.jobPosting.id, req.params.id))
+      .all()[0];
+    if (!row) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such posting.' } });
+    }
+    const summary = await refreshPostings({ checkUrls: true, limit: 1 });
+    const after = db
+      .select({ isOpen: schema.jobPosting.isOpen })
+      .from(schema.jobPosting)
+      .where(eq(schema.jobPosting.id, req.params.id))
+      .all()[0];
+    return { isOpen: after?.isOpen ?? row.isOpen, summary };
+  });
+
+  /** Which sources exist, whether they need a key, and whether that key is present. */
+  app.get('/api/sources/available', async () =>
+    Object.entries(ALL_SOURCES).map(([name, s]) => ({
+      name,
+      requiresKey: s.requiresKey,
+      configured: s.isConfigured(),
+    })),
+  );
+
+  app.put<{ Params: { id: string } }>('/api/sources/:id', async (req, reply) => {
+    const body = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!body.success) {
+      return reply
+        .code(400)
+        .send({ error: { code: 'VALIDATION_FAILED', message: 'Expected { enabled }.' } });
+    }
+    db.update(schema.source)
+      .set({ enabled: body.data.enabled })
+      .where(eq(schema.source.id, req.params.id))
+      .run();
+    return { id: req.params.id, enabled: body.data.enabled };
+  });
 
   app.get('/api/postings', async (req) => {
     const q = z

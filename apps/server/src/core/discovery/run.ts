@@ -6,18 +6,31 @@
  * everywhere" when we didn't, which is the failure mode that makes an automated search
  * tool untrustworthy — so degradation is always reported.
  */
-import { eq, sql } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { db, schema } from '../../infra/db/client';
 import { logger } from '../../infra/logger';
-import { ATS_SOURCES, type AtsSourceName } from './sources/ats';
+import { publish } from '../../infra/events';
+import { ATS_SOURCES } from './sources/ats';
+import { AGGREGATOR_SOURCES } from './sources/aggregators';
 import { dedupe } from './dedupe';
 import { fingerprint } from './dedupe';
-import type { NormalizedPosting } from './sources/types';
+import type { JobSource, NormalizedPosting } from './sources/types';
+
+/** Every source the runner knows about, keyless and keyed alike. */
+export const ALL_SOURCES: Record<string, JobSource> = {
+  ...ATS_SOURCES,
+  ...AGGREGATOR_SOURCES,
+};
+
+export type SourceName = keyof typeof ALL_SOURCES;
 
 export interface DiscoveryTarget {
-  source: AtsSourceName;
+  source: string;
+  /** Board slug for ATS sources; a repo for github_list; unused for aggregators. */
   board: string;
+  keywords?: string[];
+  location?: string;
 }
 
 export interface SourceReport {
@@ -61,7 +74,7 @@ export async function runDiscovery(
       const target = queue.shift();
       if (!target) return;
 
-      const adapter = ATS_SOURCES[target.source];
+      const adapter = ALL_SOURCES[target.source];
       const report: SourceReport = {
         source: target.source,
         board: target.board,
@@ -77,22 +90,55 @@ export async function runDiscovery(
         report.degraded = true;
         skipped.push(`${target.source}/${target.board}: unknown source`);
         reports.push(report);
+        publish({
+          type: 'discovery.source_failed',
+          runId,
+          source: target.source,
+          error: 'unknown source',
+        });
+        continue;
+      }
+
+      // A keyed source with no key is a real coverage gap and is reported as one.
+      if (adapter.requiresKey && !adapter.isConfigured()) {
+        const result = await adapter.fetch({ board: target.board });
+        report.notes = result.notes;
+        report.degraded = true;
+        skipped.push(...result.notes);
+        reports.push(report);
         continue;
       }
 
       try {
-        const result = await adapter.fetch({ board: target.board });
+        const result = await adapter.fetch({
+          board: target.board,
+          keywords: target.keywords,
+          location: target.location,
+        });
         report.found = result.postings.length;
         report.notes = result.notes;
         for (const p of result.postings) {
           collected.push({ posting: p, source: `${target.source}:${target.board}` });
         }
+        publish({
+          type: 'discovery.progress',
+          runId,
+          source: `${target.source}:${target.board}`,
+          found: result.postings.length,
+          new: 0,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         report.errors.push(message);
         report.degraded = true;
         skipped.push(`${target.source}/${target.board}: ${message}`);
         logger.warn({ err, target }, 'discovery source failed');
+        publish({
+          type: 'discovery.source_failed',
+          runId,
+          source: `${target.source}:${target.board}`,
+          error: message,
+        });
       }
 
       reports.push(report);
@@ -124,7 +170,64 @@ export async function runDiscovery(
     { runId, found: summary.found, new: summary.new, duplicates, skipped: skipped.length },
     'discovery run complete',
   );
+
+  publish({
+    type: 'discovery.done',
+    runId,
+    summary: {
+      sources: targets.length,
+      found: summary.found,
+      new: summary.new,
+      duplicates,
+      errors: reports.filter((r) => r.errors.length > 0).length,
+      skipped,
+    },
+  });
+
+  persistRun(summary);
   return summary;
+}
+
+/** Run summaries are kept so `GET /api/discovery/runs/:id` can answer after the fact. */
+function persistRun(summary: RunSummary): void {
+  db.insert(schema.task)
+    .values({
+      id: summary.runId,
+      kind: 'discovery_run',
+      payload: summary,
+      status: 'done',
+      finishedAt: summary.finishedAt,
+    })
+    .run();
+}
+
+export function getRun(runId: string): RunSummary | null {
+  const row = db.select().from(schema.task).where(eq(schema.task.id, runId)).all()[0];
+  return row && row.kind === 'discovery_run' ? (row.payload as RunSummary) : null;
+}
+
+export function listRuns(limit = 20): RunSummary[] {
+  return db
+    .select()
+    .from(schema.task)
+    .where(eq(schema.task.kind, 'discovery_run'))
+    .orderBy(desc(schema.task.createdAt))
+    .limit(limit)
+    .all()
+    .map((r) => r.payload as RunSummary);
+}
+
+/** Adds a manually-pasted posting (docs/04 § Tier C). Returns its id. */
+export function saveManualPosting(posting: NormalizedPosting): string {
+  const { unique } = dedupe([{ posting, source: 'manual:pasted' }]);
+  persist(unique);
+  return (
+    db
+      .select({ id: schema.jobPosting.id })
+      .from(schema.jobPosting)
+      .where(eq(schema.jobPosting.canonicalUrl, posting.canonicalUrl))
+      .all()[0]?.id ?? ''
+  );
 }
 
 interface PersistResult {

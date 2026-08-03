@@ -8,6 +8,8 @@ import { profileRoutes } from './routes/profile';
 import { resumeRoutes } from './routes/resumes';
 import { discoveryRoutes } from './routes/discovery';
 import { matchRoutes } from './routes/matches';
+import { eventRoutes } from './routes/events';
+import { writingRoutes } from './routes/writing';
 
 export interface BuildOptions {
   /** Disable the X-App-Token check. Test-only. */
@@ -63,6 +65,8 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(resumeRoutes);
   await app.register(discoveryRoutes);
   await app.register(matchRoutes);
+  await app.register(eventRoutes);
+  await app.register(writingRoutes);
 
   return app;
 }

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
@@ -119,5 +119,42 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
         error: { code: 'INTERNAL', message: (err as Error).message },
       });
     }
+  });
+  /** Which resume gets attached to applications by default. */
+  app.post<{ Params: { id: string } }>('/api/resumes/:id/primary', async (req, reply) => {
+    const row = db
+      .select({ id: schema.resumeDocument.id })
+      .from(schema.resumeDocument)
+      .where(eq(schema.resumeDocument.id, req.params.id))
+      .all()[0];
+    if (!row) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such document.' } });
+    }
+    db.update(schema.resumeDocument).set({ isPrimary: false }).run();
+    db.update(schema.resumeDocument)
+      .set({ isPrimary: true })
+      .where(eq(schema.resumeDocument.id, req.params.id))
+      .run();
+    return { id: req.params.id, isPrimary: true };
+  });
+
+  /** Deletes the row AND the file on disk — see docs/10 § User control. */
+  app.delete<{ Params: { id: string } }>('/api/resumes/:id', async (req, reply) => {
+    const row = db
+      .select()
+      .from(schema.resumeDocument)
+      .where(eq(schema.resumeDocument.id, req.params.id))
+      .all()[0];
+    if (!row) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such document.' } });
+    }
+    try {
+      const { decryptField } = await import('../infra/crypto/fieldCrypto');
+      await rm(decryptField(row.path, row.id), { force: true });
+    } catch (err) {
+      logger.warn({ err, id: row.id }, 'could not remove resume file; removing the row anyway');
+    }
+    db.delete(schema.resumeDocument).where(eq(schema.resumeDocument.id, req.params.id)).run();
+    return reply.code(204).send();
   });
 }
