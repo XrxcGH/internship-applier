@@ -41,7 +41,10 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
       });
     }
     if (opts.skipAuth || config.isTest) return;
-    if (req.url === '/api/health') return; // liveness probe, exposes no secrets
+    // Exempt: the liveness probe and the bootstrap that hands the UI its token.
+    // Both are still loopback-only and CORS-locked to the app's own origin, so a stray
+    // page in another tab cannot read either response.
+    if (req.url === '/api/health' || req.url === '/api/session') return;
     if (req.headers['x-app-token'] !== config.appToken) {
       return reply.code(401).send({
         error: { code: 'INTERNAL', message: 'Missing or invalid X-App-Token.' },
