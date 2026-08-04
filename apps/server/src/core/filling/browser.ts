@@ -38,12 +38,18 @@ export interface BrowserSession {
 /**
  * Typing cadence, in milliseconds between keystrokes.
  *
- * Not an evasion measure. `fill()` sets a value in one shot, and React-controlled inputs,
- * autocomplete comboboxes, and rich-text editors routinely ignore that because no key
- * events fire. `pressSequentially` with a small delay is simply the input method those
- * widgets are built to accept. The fixture site's `/nasty` page reproduces the failure.
+ * Not an evasion measure, and the number is smaller than docs/07 originally specified
+ * for a reason worth recording. What makes hostile widgets work is that real key events
+ * fire at all — `fill()` assigns a value without them, and React-controlled inputs,
+ * autocomplete comboboxes, and rich-text editors ignore that entirely. The PACING is only
+ * there so a debouncing widget has time to keep up.
+ *
+ * The original 40-120ms was a guess, and measuring it showed the cost: the fill suite
+ * spent 76 seconds almost entirely on sleeps between keystrokes. This range keeps enough
+ * slack for a debounce while being four times cheaper, and the fixture's commit-on-key
+ * widget still passes, which is the property that actually matters.
  */
-export const TYPING_DELAY = { min: 40, max: 120 } as const;
+export const TYPING_DELAY = { min: 10, max: 30 } as const;
 
 export function keyDelay(): number {
   return TYPING_DELAY.min + Math.random() * (TYPING_DELAY.max - TYPING_DELAY.min);

@@ -44,8 +44,20 @@ interface Finding {
 
 const findings: Finding[] = [];
 
+/**
+ * Removes regex literals before scanning.
+ *
+ * `redlines.ts` and `classify.ts` are tables of patterns that DETECT machine-sounding and
+ * bureaucratic vocabulary on someone else's form. Auditing their sources finds the words
+ * they are built to look for, which is backwards. Exempting the whole file would be worse:
+ * both also carry `note:` strings that are shown to the user and do need auditing.
+ */
+function stripRegexLiterals(src: string): string {
+  return src.replace(/\/(?![/*])(?:[^/\\\n[]|\\.|\[(?:[^\]\\]|\\.)*\])+\/[gimsuy]*/g, ' ');
+}
+
 for (const f of files) {
-  const src = readFileSync(f, 'utf8');
+  const src = stripRegexLiterals(readFileSync(f, 'utf8'));
   // User-facing text: JSX text nodes plus quoted strings long enough to be prose.
   const strings = [
     ...(src.match(/>[^<>{}]{25,400}</g) ?? []).map((s) => s.slice(1, -1)),

@@ -371,8 +371,7 @@ export async function selfTest(): Promise<{ ok: boolean; detail: string }> {
   try {
     const res = await claudeCliBackend.generate({
       purpose: 'answer_draft',
-      system:
-        'You are a test harness. Reply with exactly the word the user gives you and nothing else.',
+      system: 'You are being tested. Reply with exactly the word the user gives you, nothing else.',
       user: 'The word is: haddock. Reply with that word only.',
     });
     const ok = /haddock/i.test(res.text);

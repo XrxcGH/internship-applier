@@ -59,10 +59,63 @@ describe('G4 — no auto-submit path exists', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it('contains no submit-click in server source', () => {
-    const offenders = walk(serverSrc)
+  /**
+   * This started as "no `.click(` anywhere in core/filling", which was right until the
+   * filler needed to click a text input to focus it and click an option in a div-based
+   * combobox. A guard that forbids every click would either be deleted or worked around,
+   * and neither leaves any protection behind.
+   *
+   * So it is narrower AND wider now. Narrower: only submit-shaped targets are banned.
+   * Wider: it also bans the routes to submission that are not clicks at all — calling
+   * `form.submit()`, `requestSubmit()`, or pressing Enter, which submits a single-input
+   * form in every browser.
+   *
+   * The behavioural check is stronger than any of this and lives in fill.test.ts: the
+   * fixture counts POSTs, so the suite asserts no form was submitted however it happened.
+   */
+  const fillingSources = (): Array<{ file: string; src: string }> =>
+    walk(serverSrc)
       .filter((f) => /[/\\]core[/\\]filling[/\\]/.test(f))
-      .filter((f) => /\.click\s*\(/.test(readFileSync(f, 'utf8')));
+      .map((f) => ({ file: path.relative(serverSrc, f), src: readFileSync(f, 'utf8') }));
+
+  const BANNED: Array<[RegExp, string]> = [
+    [/\.click\s*\([^)]*submit/i, 'clicks something named submit'],
+    [/submit[A-Za-z]*\s*\.\s*click\s*\(/i, 'clicks a submit locator'],
+    [/\.\s*requestSubmit\s*\(/, 'calls requestSubmit()'],
+    [/\bform[A-Za-z]*\s*\.\s*submit\s*\(/i, 'calls form.submit()'],
+    [/\.press\s*\(\s*['"`]Enter/i, 'presses Enter, which submits a single-input form'],
+    // Only a selector that SELECTS a submit control. The lookbehind is load-bearing:
+    // `input:not([type=submit])` is the scanner deliberately excluding them, and a guard
+    // that flagged it would be arguing for its own removal.
+    [/(?<!:not\()\[type\s*=\s*['"]?submit/i, 'targets a submit control by type'],
+  ];
+
+  it('contains no path to submitting a form', () => {
+    const offenders: string[] = [];
+    for (const { file, src } of fillingSources()) {
+      for (const [pattern, why] of BANNED) {
+        if (pattern.test(src)) offenders.push(`${file} ${why}`);
+      }
+
+      // Catches the chained form the whole-file patterns miss:
+      //   page.locator('#submit-application').click()
+      // where "submit" sits in the selector rather than in the click call. Checked per
+      // line so an exclusion selector elsewhere in the file cannot trigger it.
+      src.split('\n').forEach((line, i) => {
+        const hasClick = /\.click\s*\(/.test(line);
+        const namesSubmit = /submit/i.test(line) && !/:not\(\[type\s*=\s*['"]?submit/i.test(line);
+        if (hasClick && namesSubmit) {
+          offenders.push(`${file}:${String(i + 1)} clicks something named submit`);
+        }
+      });
+    }
     expect(offenders).toEqual([]);
+  });
+
+  it('still guards something — the filling module exists and does click things', () => {
+    // Without this, deleting core/filling entirely would make the check above pass.
+    const sources = fillingSources();
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.some(({ src }) => /\.click\s*\(/.test(src))).toBe(true);
   });
 });
