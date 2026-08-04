@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { CandidateProfile } from '@ia/shared';
 import * as api from '../lib/api';
-import { RunningHead, Section } from '../components/Chrome';
+import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Notice, SelectField, TextField } from '../components/Controls';
 
 type Step = 'upload' | 'confirm' | 'facts' | 'done';
@@ -56,16 +56,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const remaining = profile?.needsReview.length ?? 0;
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-16 sm:px-10 sm:py-24">
-      <RunningHead section="Establish the file" gate="G1" />
-
-      <p className="a-rise a-step-2 text-dim mb-12 max-w-[62ch]">
-        Your resume is read once and turned into a structured profile. Everything the reader was
-        unsure about is flagged, and nothing downstream runs until you have corrected it yourself.
-      </p>
+    <Page>
+      <RunningHead
+        section="Establish the file"
+        gate="G1"
+        lede="Your resume is read once and turned into a structured profile. Everything the reader
+              was unsure about is flagged, and nothing downstream runs until you have corrected it
+              yourself."
+      />
 
       {error && <Notice tone="redline">{error}</Notice>}
-      {busy && <p className="u-data text-brass mb-6">{busy}</p>}
+      {busy && <p className="u-data text-accent mb-6">{busy}</p>}
 
       {step === 'upload' && (
         <UploadStep
@@ -263,13 +264,15 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
       {step === 'done' && (
         <Section n="05" title="Confirmed" step={3}>
-          <p className="a-stamp u-data text-verified mb-4 text-lg tracking-widest uppercase">
-            profile established
-          </p>
-          <p className="text-dim">Discovery and matching are now unlocked.</p>
+          <div className="u-tint-verified rounded px-5 py-6">
+            <p className="a-stamp u-data text-verified mb-3 text-lg tracking-widest uppercase">
+              profile established
+            </p>
+            <p className="text-dim">Discovery and matching are now unlocked.</p>
+          </div>
         </Section>
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -311,7 +314,7 @@ function UploadStep({
           const f = e.dataTransfer.files[0];
           if (f) void handle(f);
         }}
-        className="border-rule hover:border-brass w-full border border-dashed px-6 py-14 text-center transition-colors"
+        className="border-rule hover:border-accent w-full border border-dashed px-6 py-14 text-center transition-colors"
       >
         <span className="u-data text-dim block">
           {filename ?? 'drop a file, or click to choose'}

@@ -115,7 +115,7 @@ export function ScoreBreakdownBars({
             <div className="bg-rule/50 mt-1 h-px w-full">
               <div
                 className="h-px"
-                style={{ width: `${v * 100}%`, backgroundColor: 'var(--brass)' }}
+                style={{ width: `${v * 100}%`, backgroundColor: 'var(--accent)' }}
               />
             </div>
             {notes[k] && <p className="text-faint mt-1 text-[0.75rem]">{notes[k]}</p>}
