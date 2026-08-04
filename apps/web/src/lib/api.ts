@@ -94,3 +94,140 @@ export const clearReviewFlag = (path: string) =>
   request<unknown>(`/api/profile/reviewed/${encodeURIComponent(path)}`, { method: 'POST' }).then(
     CandidateProfile.parse,
   );
+
+// ─────────────────────────────────────────────────────── writing samples & voice
+
+export interface SampleSummary {
+  id: string;
+  kind: string;
+  wordCount: number;
+  preview: string;
+}
+
+export interface SamplesResponse {
+  samples: SampleSummary[];
+  totalWords: number;
+  adequacy: { level: 'none' | 'thin' | 'enough' | 'plenty'; message: string };
+}
+
+export const listSamples = () => request<SamplesResponse>('/api/writing-samples');
+
+export const addSample = (content: string, kind = 'other') =>
+  request<{ id: string }>('/api/writing-samples', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ content, kind }),
+  });
+
+export const deleteSample = (id: string) =>
+  request<null>(`/api/writing-samples/${id}`, { method: 'DELETE' });
+
+export interface StyleResponse {
+  metrics: Record<string, unknown>;
+  description: string[];
+  computedAt?: string;
+}
+
+export const computeStyle = () =>
+  request<StyleResponse>('/api/style-profile/compute', { method: 'POST' });
+
+export const getStyle = () =>
+  request<StyleResponse>('/api/style-profile').catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  });
+
+// ───────────────────────────────────────────────────── applications & answers
+
+export interface ApplicationSummary {
+  id: string;
+  status: string;
+  company: string;
+  title: string;
+  applyUrl: string;
+  deadlineAt: string | null;
+  submittedAt: string | null;
+  createdAt: string;
+  answerCount: number;
+  approvedCount: number;
+  blockedCount: number;
+}
+
+export interface AnswerFlag {
+  type: 'unsupported' | 'overstated' | 'style_drift' | 'ai_tell';
+  span: { start: number; end: number };
+  note: string;
+}
+
+export interface AnswerEvidence {
+  claim: string;
+  verdict: 'supported' | 'inferred' | 'unsupported' | 'overstated';
+  profileRef: string | null;
+  quote: string | null;
+}
+
+export interface Answer {
+  id: string;
+  applicationId: string;
+  questionText: string;
+  fieldKey: string;
+  answerType: string;
+  draftText: string;
+  finalText: string;
+  text: string;
+  editDistance: number;
+  editSummary: string;
+  evidence: AnswerEvidence[];
+  flags: AnswerFlag[];
+  approvedAt: string | null;
+  archetype: string;
+  styleNote?: string | null;
+  reusedFrom?: { useCount: number; company: string | null } | null;
+  revised?: boolean;
+  unresolved?: boolean;
+}
+
+export interface ApplicationDetail {
+  id: string;
+  company: string;
+  title: string;
+  description: string;
+  answers: Answer[];
+  canDraft: boolean;
+}
+
+export const listApplications = () =>
+  request<{ applications: ApplicationSummary[] }>('/api/applications').then((r) => r.applications);
+
+export const getApplication = (id: string) => request<ApplicationDetail>(`/api/applications/${id}`);
+
+export const addQuestion = (applicationId: string, questionText: string) =>
+  request<Answer>(`/api/applications/${applicationId}/questions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ questionText }),
+  });
+
+export const deleteAnswer = (id: string) =>
+  request<null>(`/api/answers/${id}`, { method: 'DELETE' });
+
+export const draftAnswer = (id: string, maxWords?: number) =>
+  request<Answer>(`/api/answers/${id}/draft`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ maxWords }),
+  });
+
+export const saveAnswer = (id: string, text: string) =>
+  request<Answer>(`/api/answers/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+
+/** Gate G3. Rejects with 409 UNVERIFIED_CLAIMS while any claim is unsupported. */
+export const approveAnswer = (id: string) =>
+  request<Answer>(`/api/answers/${id}/approve`, { method: 'POST' });
+
+export const unapproveAnswer = (id: string) =>
+  request<Answer>(`/api/answers/${id}/unapprove`, { method: 'POST' });

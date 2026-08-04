@@ -12,8 +12,8 @@ import {
   type MatchDetail,
   type MatchRow,
 } from '../lib/matches';
-import { RunningHead, Section } from '../components/Chrome';
-import { Button, Notice } from '../components/Controls';
+import { Page, RunningHead, Section } from '../components/Chrome';
+import { Button, Empty, Notice } from '../components/Controls';
 import { RequirementChecklist, ScoreBreakdownBars } from '../components/RequirementChecklist';
 
 type Band = 'eligible' | 'eligible_and_unknown' | 'all';
@@ -30,7 +30,7 @@ const BADGE: Record<string, { label: string; color: string }> = {
  * Keyboard-first: triaging forty postings should feel like triaging email. There is
  * deliberately no bulk-approve and no multi-select — one posting, one decision.
  */
-export function Matches({ onApproved }: { onApproved?: (applicationId: string) => void }) {
+export function Matches({ onOpenApplications }: { onOpenApplications?: () => void }) {
   const [rows, setRows] = useState<MatchRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [band, setBand] = useState<Band>('eligible_and_unknown');
@@ -39,6 +39,8 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
   const [rejecting, setRejecting] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Approvals made this session, so triage never has to stop to go look at them. */
+  const [approved, setApproved] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
 
   const load = useCallback(async () => {
@@ -88,7 +90,7 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
       setBusy(action);
       try {
         const r = await decide(selected, action, reason, tags);
-        if (action === 'approved' && r.applicationId) onApproved?.(r.applicationId);
+        if (action === 'approved' && r.applicationId) setApproved((n) => n + 1);
         setRows((prev) => {
           const i = prev.findIndex((x) => x.id === selected);
           const next = prev.filter((x) => x.id !== selected);
@@ -102,7 +104,7 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
         setRejecting(false);
       }
     },
-    [selected, onApproved],
+    [selected],
   );
 
   const reject = useCallback(
@@ -172,10 +174,10 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
   const current = rows.find((r) => r.id === selected);
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-12 sm:px-10">
+    <Page wide>
       <RunningHead section="The queue" gate="G2" />
 
-      <div className="a-rise a-step-2 mb-8 flex flex-wrap items-center gap-3">
+      <div className="a-rise a-step-2 mb-6 flex flex-wrap items-center gap-2.5">
         {(
           [
             ['eligible', 'Eligible'],
@@ -186,8 +188,10 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
           <button
             key={value}
             onClick={() => setBand(value)}
-            className={`u-data border px-3 py-1.5 text-[0.75rem] tracking-wide uppercase transition-colors ${
-              band === value ? 'border-brass text-brass' : 'border-rule text-faint hover:text-dim'
+            className={`u-data rounded-full border px-3.5 py-1.5 text-[0.75rem] tracking-wide uppercase transition-colors ${
+              band === value
+                ? 'border-accent text-accent bg-accent/10'
+                : 'border-rule text-faint hover:text-dim hover:border-rule-strong'
             }`}
           >
             {label}
@@ -198,6 +202,7 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
           {counts['ineligible'] ?? 0} filtered
         </span>
         <Button
+          size="sm"
           onClick={() => {
             setBusy('recompute');
             void recompute()
@@ -211,18 +216,36 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
       </div>
 
       {error && <Notice tone="redline">{error}</Notice>}
-      {busy && <p className="u-data text-brass mb-4">{busy}…</p>}
+      {busy && <p className="u-data text-accent a-pulse mb-4">{busy}…</p>}
 
-      {rows.length === 0 && !error && (
-        <Notice tone="caution">
-          Nothing in the queue yet. Run discovery, then Recompute. Or widen the band above to see
-          what was filtered out, and why.
-        </Notice>
+      {/* Approvals accumulate without interrupting triage — the link is there when wanted. */}
+      {approved > 0 && (
+        <div className="u-tint-verified mb-6 flex flex-wrap items-center justify-between gap-3 rounded px-4 py-3">
+          <span className="text-dim text-[0.9375rem]">
+            {approved === 1 ? '1 application created' : `${approved} applications created`}. Answers
+            are waiting for your review.
+          </span>
+          {onOpenApplications && (
+            <Button size="sm" variant="primary" onClick={onOpenApplications}>
+              Review answers (G3) →
+            </Button>
+          )}
+        </div>
       )}
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+      {rows.length === 0 && !error && (
+        <Empty title="Nothing in the queue.">
+          Run discovery, then Recompute — or widen the band above to see what was filtered out, and
+          why.
+        </Empty>
+      )}
+
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
         {/* list */}
-        <ul ref={listRef} className="divide-rule/50 max-h-[70vh] divide-y overflow-y-auto pr-1">
+        <ul
+          ref={listRef}
+          className="u-card divide-rule/50 max-h-[calc(100dvh-13rem)] divide-y overflow-y-auto lg:sticky lg:top-20"
+        >
           {rows.map((m) => {
             const days = daysUntil(m.closesAt);
             const badge = BADGE[m.eligibility]!;
@@ -230,16 +253,22 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
               <li key={m.id} data-id={m.id}>
                 <button
                   onClick={() => setSelected(m.id)}
-                  className={`w-full px-2 py-3 text-left transition-colors ${
-                    selected === m.id ? 'bg-raised' : 'hover:bg-raised/50'
+                  className={`relative w-full px-4 py-3.5 text-left transition-colors ${
+                    selected === m.id ? 'bg-accent/10' : 'hover:bg-ink/[0.04]'
                   }`}
                 >
+                  {selected === m.id && (
+                    <span
+                      className="absolute inset-y-0 left-0 w-[2px]"
+                      style={{ background: 'var(--accent)' }}
+                    />
+                  )}
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="truncate text-[0.9375rem]">{m.title}</span>
                     <span className="u-data text-faint shrink-0 text-[0.75rem]">{m.score}</span>
                   </div>
                   <div className="text-dim mt-0.5 truncate text-[0.8125rem]">{m.company}</div>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1">
                     <span
                       className="u-data text-[0.625rem] tracking-widest uppercase"
                       style={{ color: badge.color }}
@@ -267,18 +296,20 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
           {current && detail && (
             <>
               <Section n="01" title="The posting" step={3}>
-                <h3 className="u-display mb-1 text-3xl">{detail.posting.title}</h3>
-                <p className="text-dim">{detail.posting.company}</p>
-                <dl className="u-data text-faint mt-4 flex flex-wrap gap-x-5 gap-y-1 text-[0.75rem]">
-                  <span>{locationLabel(current)}</span>
-                  <span>{termLabel(detail.posting.term)}</span>
-                  <span>{payLabel(detail.posting.compensation)}</span>
-                  <span>{detail.posting.positionType ?? 'type not stated'}</span>
-                  <span>{detail.posting.atsVendor}</span>
-                </dl>
-                <p className="mt-5 max-w-[62ch] text-[0.9375rem] leading-relaxed">
-                  {detail.match.rationale}
-                </p>
+                <div className="u-card px-5 py-5">
+                  <h3 className="u-display mb-1 text-3xl">{detail.posting.title}</h3>
+                  <p className="text-dim">{detail.posting.company}</p>
+                  <dl className="u-data text-faint border-rule mt-4 flex flex-wrap gap-x-5 gap-y-1.5 border-t pt-3 text-[0.75rem]">
+                    <span>{locationLabel(current)}</span>
+                    <span>{termLabel(detail.posting.term)}</span>
+                    <span>{payLabel(detail.posting.compensation)}</span>
+                    <span>{detail.posting.positionType ?? 'type not stated'}</span>
+                    <span>{detail.posting.atsVendor}</span>
+                  </dl>
+                  <p className="mt-5 max-w-[62ch] text-[0.9375rem] leading-relaxed">
+                    {detail.match.rationale}
+                  </p>
+                </div>
               </Section>
 
               <Section n="02" title="Requirements, with the text that decided each" step={4}>
@@ -311,32 +342,36 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
                 ) : (
                   <>
                     <div className="flex flex-wrap gap-3">
-                      <Button variant="primary" onClick={() => void act('approved')}>
-                        Approve &amp; draft (A)
+                      <Button variant="solid" onClick={() => void act('approved')}>
+                        Approve (A)
                       </Button>
                       <Button onClick={() => void act('saved')}>Save (L)</Button>
                       <Button onClick={() => void act('skipped')}>Skip (S)</Button>
-                      <Button onClick={() => setRejecting(true)}>Reject (X)</Button>
+                      <Button variant="danger" onClick={() => setRejecting(true)}>
+                        Reject (X)
+                      </Button>
                       <a
                         href={detail.posting.applyUrl}
                         target="_blank"
                         rel="noreferrer noopener"
-                        className="u-data border-rule text-dim hover:text-ink hover:border-dim border px-4 py-2 tracking-wide uppercase"
+                        className="u-data border-rule text-dim hover:text-ink hover:border-rule-strong hover:bg-ink/[0.04] inline-flex items-center rounded border px-4 py-2 tracking-wide uppercase transition-colors"
                       >
                         Open posting ↗
                       </a>
                     </div>
                     <p className="text-faint mt-4 max-w-[60ch] text-[0.8125rem]">
-                      Approving creates an application record and drafts answers for your review. It
-                      does not submit anything — you do that yourself, on the real page.
+                      Approving creates an application you review at gate G3. It does not submit
+                      anything — you do that yourself, on the real page.
                     </p>
                   </>
                 )}
               </Section>
 
-              <details className="mt-8">
-                <summary className="u-eyebrow cursor-pointer">Full job description</summary>
-                <div className="text-dim mt-3 max-w-[68ch] text-[0.875rem] whitespace-pre-wrap">
+              <details className="u-card-flat mt-8 px-5 py-4">
+                <summary className="u-eyebrow hover:text-ink cursor-pointer transition-colors">
+                  Full job description
+                </summary>
+                <div className="text-dim mt-4 max-w-[68ch] text-[0.875rem] leading-relaxed whitespace-pre-wrap">
                   {detail.posting.descriptionText.slice(0, 8000)}
                 </div>
               </details>
@@ -349,6 +384,6 @@ export function Matches({ onApproved }: { onApproved?: (applicationId: string) =
         <hr className="u-rule mb-3" />
         <p className="u-eyebrow">j/k move · a approve · l save · s skip · x reject</p>
       </footer>
-    </div>
+    </Page>
   );
 }

@@ -7,64 +7,76 @@
 @import '@fontsource/ibm-plex-mono/500.css';
 @import 'tailwindcss';
 
-/* ─────────────────────────────────────────────── palette
-   Dominant warm ink, one brass accent, three signal colors that each mean exactly
-   one thing. Green/amber/oxblood are reserved for verification states — never decor. */
+/* ─────────────────────────────────────────────── palette — "drafting table"
+
+   Cool graphite base, one azure accent that reads like a technical pen, and three
+   signal colours that each mean exactly one thing. Green/amber/coral are reserved for
+   verification states and are never used as decoration — if something is green here,
+   it passed a check.
+
+   Every colour below was measured, not eyeballed. All seven text colours clear WCAG AA
+   (4.5:1) against all three surfaces in both themes; the lowest is 4.75. `--rule` is a
+   deliberate hairline and `--rule-strong` is the structural divider at ~3:1. */
 
 :root,
 :root[data-theme='dark'] {
-  --paper: #14110e;
-  --paper-raised: #1d1915;
-  --paper-sunk: #0e0c0a;
-  --ink: #e9e2d4;
-  --ink-dim: #a79d8f;
-  --ink-faint: #8a8275;
-  --rule: #2e2823;
-  --brass: #c8963e;
-  --brass-dim: #8a6628;
-  --verified: #7a9471;
-  --caution: #c08a4a;
-  --redline: #c86a5e;
-  --lamp: 340px 30% at 22% -8%;
-  --lamp-alpha: 0.1;
-  --grain-alpha: 0.022;
-  --rule-alpha: 0.5;
+  --paper: #0f1418;
+  --paper-raised: #161d23;
+  --paper-sunk: #0a0e11;
+  --ink: #e7ecf1;
+  --ink-dim: #a8b3bf;
+  --ink-faint: #8b97a4;
+  --rule: #2f3a45;
+  --rule-strong: #556575;
+  --accent: #6ba7f5;
+  --accent-dim: #4b80bd;
+  --verified: #5cba8a;
+  --caution: #dda44a;
+  --redline: #ec7d72;
+
+  --glow-alpha: 0.09;
+  --grid-alpha: 0.05;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -12px rgb(0 0 0 / 0.6);
 }
 
 :root[data-theme='light'] {
-  --paper: #ede6d8;
-  --paper-raised: #f5f0e5;
-  --paper-sunk: #e2d9c7;
-  --ink: #221e18;
-  --ink-dim: #4f4a40;
-  --ink-faint: #6e675a;
-  --rule: #cfc4ae;
-  --brass: #7e5810;
-  --brass-dim: #b8933f;
-  --verified: #4e6b47;
-  --caution: #8a5a18;
-  --redline: #8c3328;
-  --lamp-alpha: 0.05;
-  --grain-alpha: 0.03;
-  --rule-alpha: 0.6;
+  --paper: #eaeef3;
+  --paper-raised: #f6f8fb;
+  --paper-sunk: #dde3ea;
+  --ink: #121820;
+  --ink-dim: #48545f;
+  --ink-faint: #525e6b;
+  --rule: #b7c2cf;
+  --rule-strong: #748498;
+  --accent: #15529e;
+  --accent-dim: #517aad;
+  --verified: #226644;
+  --caution: #8a5610;
+  --redline: #ad3628;
+
+  --glow-alpha: 0.07;
+  --grid-alpha: 0.05;
+  --shadow: 0 1px 2px rgb(18 24 32 / 0.06), 0 8px 24px -14px rgb(18 24 32 / 0.28);
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --paper: #ede6d8;
-    --paper-raised: #f5f0e5;
-    --paper-sunk: #e2d9c7;
-    --ink: #221e18;
-    --ink-dim: #4f4a40;
-    --ink-faint: #6e675a;
-    --rule: #cfc4ae;
-    --brass: #7e5810;
-    --brass-dim: #b8933f;
-    --verified: #4e6b47;
-    --caution: #8a5a18;
-    --redline: #8c3328;
-    --lamp-alpha: 0.05;
-    --grain-alpha: 0.03;
+    --paper: #eaeef3;
+    --paper-raised: #f6f8fb;
+    --paper-sunk: #dde3ea;
+    --ink: #121820;
+    --ink-dim: #48545f;
+    --ink-faint: #525e6b;
+    --rule: #b7c2cf;
+    --rule-strong: #748498;
+    --accent: #15529e;
+    --accent-dim: #517aad;
+    --verified: #226644;
+    --caution: #8a5610;
+    --redline: #ad3628;
+
+    --glow-alpha: 0.07;
+    --shadow: 0 1px 2px rgb(18 24 32 / 0.06), 0 8px 24px -14px rgb(18 24 32 / 0.28);
   }
 }
 
@@ -76,7 +88,9 @@
   --color-dim: var(--ink-dim);
   --color-faint: var(--ink-faint);
   --color-rule: var(--rule);
-  --color-brass: var(--brass);
+  --color-rule-strong: var(--rule-strong);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
   --color-verified: var(--verified);
   --color-caution: var(--caution);
   --color-redline: var(--redline);
@@ -90,6 +104,7 @@
 
 html {
   color-scheme: dark light;
+  scroll-behavior: smooth;
 }
 
 body {
@@ -98,45 +113,45 @@ body {
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 17px;
-  line-height: 1.6;
+  line-height: 1.65;
   font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   min-height: 100dvh;
 
-  /* Three layers: lamp vignette, paper grain, ledger rules. No images. */
+  /* Two layers: a cool glow off the top-left, and fine drafting-paper grid. No images. */
   background-image:
-    radial-gradient(
-      var(--lamp, 340px 30% at 22% -8%),
-      rgb(200 150 62 / var(--lamp-alpha)),
-      transparent 70%
+    radial-gradient(760px 420px at 12% -12%, rgb(107 167 245 / var(--glow-alpha)), transparent 68%),
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--rule) calc(var(--grid-alpha) * 100%), transparent) 1px,
+      transparent 1px
     ),
-    radial-gradient(
-      circle at 50% 50%,
-      rgb(233 226 212 / var(--grain-alpha)) 0.5px,
-      transparent 0.5px
-    ),
-    repeating-linear-gradient(
+    linear-gradient(
       to bottom,
-      transparent 0,
-      transparent 31px,
-      color-mix(in srgb, var(--rule) calc(var(--rule-alpha) * 55%), transparent) 31px,
-      color-mix(in srgb, var(--rule) calc(var(--rule-alpha) * 55%), transparent) 32px
+      color-mix(in srgb, var(--rule) calc(var(--grid-alpha) * 100%), transparent) 1px,
+      transparent 1px
     );
   background-size:
     100% 100%,
-    3px 3px,
-    100% 32px;
-  background-attachment: fixed, fixed, scroll;
+    28px 28px,
+    28px 28px;
+  background-attachment: fixed, scroll, scroll;
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--brass) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 :focus-visible {
-  outline: 2px solid var(--brass);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 1px;
+  border-radius: 3px;
+}
+
+/* Scrollbars picked up the browser default, which fought the palette everywhere. */
+* {
+  scrollbar-color: var(--rule-strong) transparent;
+  scrollbar-width: thin;
 }
 
 /* ─────────────────────────────────────────────── semantic type
@@ -168,8 +183,9 @@ body {
 .u-quote {
   font-family: var(--font-mono);
   font-size: 0.8125rem;
+  line-height: 1.7;
   color: var(--ink-dim);
-  border-left: 1px solid var(--brass-dim);
+  border-left: 2px solid var(--accent-dim);
   padding-left: 0.875rem;
 }
 
@@ -177,6 +193,127 @@ body {
   border: 0;
   border-top: 1px solid var(--rule);
   transform-origin: left;
+}
+
+/* ─────────────────────────────────────────────── surfaces
+   One card treatment, used everywhere, so nesting reads as depth rather than noise. */
+
+.u-card {
+  background: color-mix(in srgb, var(--paper-raised) 82%, transparent);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+}
+
+.u-card-flat {
+  background: color-mix(in srgb, var(--paper-sunk) 55%, transparent);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+.u-inset {
+  background: color-mix(in srgb, var(--paper-sunk) 70%, transparent);
+  border-radius: 4px;
+}
+
+/* Tinted panels for the three verification states. Colour carries meaning here, so the
+   tint is always paired with a border in the same hue rather than standing alone. */
+.u-tint-verified {
+  background: color-mix(in srgb, var(--verified) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--verified) 34%, transparent);
+}
+.u-tint-caution {
+  background: color-mix(in srgb, var(--caution) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--caution) 34%, transparent);
+}
+.u-tint-redline {
+  background: color-mix(in srgb, var(--redline) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--redline) 36%, transparent);
+}
+.u-tint-accent {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+/* ─────────────────────────────────────────────── navigation */
+
+.u-nav {
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(12px) saturate(1.2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.u-nav-link {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 0.5rem 0.125rem;
+  transition:
+    color 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.u-nav-link:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.u-nav-link[aria-current='page'] {
+  color: var(--ink);
+}
+
+/* The active marker is drawn, not filled — it reads as a pen underline. */
+.u-nav-link[aria-current='page']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  animation: draw 0.32s cubic-bezier(0.2, 0.7, 0.3, 1);
+  transform-origin: left;
+}
+
+.u-nav-link:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* ─────────────────────────────────────────────── claim highlighting (G3)
+   An underline, not a fill: the sentence stays readable while its verdict is visible.
+   Colour alone never carries the verdict — every highlight has a marker in the margin
+   and a reason in the panel. */
+
+.u-claim {
+  border-radius: 2px;
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: background-color 0.16s ease;
+}
+
+.u-claim-supported {
+  text-decoration-color: color-mix(in srgb, var(--verified) 70%, transparent);
+}
+.u-claim-inferred {
+  text-decoration-color: color-mix(in srgb, var(--caution) 75%, transparent);
+  text-decoration-style: dashed;
+}
+.u-claim-unsupported,
+.u-claim-overstated {
+  text-decoration-color: var(--redline);
+  text-decoration-style: wavy;
+  background: color-mix(in srgb, var(--redline) 11%, transparent);
+}
+
+.u-claim:hover,
+.u-claim[data-active='true'] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 /* ─────────────────────────────────────────────── motion
@@ -218,6 +355,16 @@ body {
   }
 }
 
+@keyframes pulse-dim {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .a-rise {
   animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
 }
@@ -228,6 +375,10 @@ body {
 
 .a-stamp {
   animation: stamp 0.42s cubic-bezier(0.3, 1.4, 0.5, 1) backwards;
+}
+
+.a-pulse {
+  animation: pulse-dim 1.4s ease-in-out infinite;
 }
 
 /* Staggered reveal — masthead, then each section, then rows. */
@@ -268,6 +419,9 @@ body {
   .a-draw,
   .a-stamp {
     animation: rise 0.01ms backwards;
+  }
+  html {
+    scroll-behavior: auto;
   }
 }
 

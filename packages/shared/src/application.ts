@@ -150,6 +150,7 @@ export type ApplicationStatus = z.infer<typeof ApplicationStatus>;
 export type FieldSemantic = z.infer<typeof FieldSemantic>;
 export type RedlineCategory = z.infer<typeof RedlineCategory>;
 export type FormField = z.infer<typeof FormField>;
+export type ClaimVerdict = z.infer<typeof ClaimVerdict>;
 export type AnswerFlag = z.infer<typeof AnswerFlag>;
 export type AnswerEvidence = z.infer<typeof AnswerEvidence>;
 export type ApplicationAnswer = z.infer<typeof ApplicationAnswer>;

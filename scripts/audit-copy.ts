@@ -19,11 +19,21 @@ function walk(dir: string, exts: string[]): string[] {
   });
 }
 
+/**
+ * Files that NAME the tells rather than committing them.
+ *
+ * `tellScrub.ts` is the word list itself. `draft.ts` carries the drafting prompt, which
+ * spells out the banned constructions verbatim so the model knows what to avoid — a
+ * prompt is instructions to a model, not copy shown to a person, and auditing it just
+ * rediscovers the list. Nothing else gets an exemption: if a string in this codebase is
+ * shown to the user, it is audited.
+ */
+const EXEMPT = ['tellScrub.ts', 'core/writing/draft.ts'];
+
 const files = [
   ...walk(path.join(root, 'apps/web/src'), ['.tsx', '.ts']),
   ...walk(path.join(root, 'apps/server/src'), ['.ts']),
-  // The detector's own source is a word list; auditing it just finds the list.
-].filter((f) => !f.endsWith('tellScrub.ts'));
+].filter((f) => !EXEMPT.some((e) => f.replace(/\\/g, '/').endsWith(e)));
 
 interface Finding {
   file: string;
