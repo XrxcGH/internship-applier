@@ -10,6 +10,7 @@ import { discoveryRoutes } from './routes/discovery';
 import { matchRoutes } from './routes/matches';
 import { eventRoutes } from './routes/events';
 import { writingRoutes } from './routes/writing';
+import { answerRoutes } from './routes/answers';
 
 export interface BuildOptions {
   /** Disable the X-App-Token check. Test-only. */
@@ -70,6 +71,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(matchRoutes);
   await app.register(eventRoutes);
   await app.register(writingRoutes);
+  await app.register(answerRoutes);
 
   return app;
 }
