@@ -44,6 +44,8 @@ jobs:
           fi
           echo "ok — no submit-click found"
 
+      # Gates on high/critical. The one standing moderate finding (esbuild via
+      # drizzle-kit) is assessed as unreachable in docs/13-dependency-audit.md;
+      # any moderate NOT documented there should be treated as unreviewed.
       - name: Audit dependencies
         run: npm audit --audit-level=high
-        continue-on-error: true
