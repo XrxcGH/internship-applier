@@ -2,6 +2,7 @@ import { buildApp } from './app';
 import { config } from './config';
 import { runMigrations } from './infra/db/migrate';
 import { logger } from './infra/logger';
+import { closeAllRuns } from './core/filling/run';
 
 async function main(): Promise<void> {
   runMigrations();
@@ -16,7 +17,12 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string) => {
     logger.info({ signal }, 'shutting down');
-    void app.close().then(() => process.exit(0));
+    // Fill runs hold a real Chromium window. Without this, stopping the server leaves
+    // browsers scattered across the user's desktop with no way back to them.
+    void closeAllRuns()
+      .catch(() => undefined)
+      .then(() => app.close())
+      .then(() => process.exit(0));
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
