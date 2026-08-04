@@ -9,8 +9,9 @@
 | M2 Discovery | **done** | Greenhouse/Lever/Ashby adapters, polite fetcher, 3-stage dedupe, run reporting. Verified live: 424 postings from two real boards, with a failing board correctly reported as degraded rather than dropped. |
 | M3 Matching | **done** | Deterministic + LLM requirement extraction with quote verification, 12 pure eligibility rules, scoring, rationale. Verified live: 816 postings → 420 eligible / 244 unknown / 152 ineligible, 203 requirements, 0 dropped, 0 errors. |
 | M4 Review queue | **done** | Keyboard-first triage, requirement checklist with verbatim quotes, score breakdown, reject reasons, G2 approval creating an application. Verified live against 123 real matches. |
-| M5 Writing engine | next | StyleProfile already built during the backfill |
-| M6–M8 | not started | |
+| M5 Writing engine | **done** | Bounded evidence retrieval, drafting with the measured voice, two-layer FactGuard, StyleCritic, answer library, G3 workspace. The adversarial suite passes: every planted fabrication caught, and the false-positive half passes too. G3 enforced server-side with no override. |
+| M6 Form automation | next | The long pole. Nothing here may click Submit. |
+| M7–M8 | not started | |
 
 All M1 and M2 deferrals are now complete: query planner, Adzuna/USAJOBS adapters, the SimplifyJobs community list, manual paste-a-URL, freshness/refresh, SSE progress, source management, writing-sample capture with StyleProfile, and resume set-primary/delete.
 
@@ -70,6 +71,25 @@ edit-distance meter.
 
 **Done when:** a drafted answer reads like the user, every claim shows its evidence, and a
 deliberately planted false claim is caught and blocks approval.
+
+**Built.** FactGuard is two layers and the deterministic one runs with no API key, so the
+adversarial suite runs on every commit rather than only when a key is configured. The model
+layer may downgrade a verdict but never clear one.
+
+Half the suite guards the opposite direction, which turned out to matter as much. A checker
+that flags honest sentences teaches you to click through warnings, and then it protects
+nothing. Four false-positive classes were found and closed: evaluative sentences
+("It was not glamorous work") no longer turn red on weak lexical overlap alone; durations
+need first person and a working verb before they are measured against employment; sentence
+adverbs are not employers; and a name at the end of a sentence no longer arrives with the
+full stop attached, which had made "TypeScript." look exactly like a fabrication.
+
+Gate G3 is enforced in `routes/answers.ts`, which re-verifies at approval time and returns
+409 while any claim is unsupported. There is no override parameter and no bulk-approve
+endpoint; `answers.test.ts` asserts both.
+
+**Not done:** drafting itself has never run against a live model — no `ANTHROPIC_API_KEY`
+is configured here. Everything downstream of generation is verified; generation is not.
 
 ### M6 — Form automation (5 days — the long pole)
 
