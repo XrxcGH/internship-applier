@@ -76,6 +76,43 @@ describe('must never be filled', () => {
     ['Have you ever been convicted of a felony?', 'eeo_demographic'],
     ['Emergency contact phone number', 'eeo_demographic'],
 
+    // Non-US national identifiers. A US-only table is not a defensible place to stop.
+    ['Aadhaar Number', 'government_id'],
+    ['NRIC / FIN', 'government_id'],
+    ['Codice Fiscale', 'government_id'],
+    ['Emirates ID', 'government_id'],
+    ['Personnummer', 'government_id'],
+    ['CPF', 'government_id'],
+    ['Tax File Number (TFN)', 'government_id'],
+    ['Government-issued ID', 'government_id'],
+    ['Work Permit Number', 'government_id'],
+    ['Passport expiry date', 'government_id'],
+
+    // International banking, and the autocomplete tokens a form can declare with no label.
+    ['BSB', 'financial'],
+    ['IFSC Code', 'financial'],
+    ['Transit Number', 'financial'],
+    ['Voided cheque upload', 'financial'],
+    ['cc-number', 'financial'],
+    ['Card Security Code', 'financial'],
+    ['PayPal email', 'financial'],
+
+    // Security-question answers: phrased as harmless trivia, but they unlock recovery.
+    ["Mother's maiden name", 'credential'],
+    ['Name of your first pet', 'credential'],
+    ['Street you grew up on', 'credential'],
+    ['Authenticator app code', 'credential'],
+    ['Create a username', 'credential'],
+    ['Passphrase', 'credential'],
+
+    // Attestation, in the third person and in other jurisdictions' vocabulary.
+    ['The applicant certifies', 'attestation'],
+    ['Statement of Truth', 'attestation'],
+    ['Affidavit', 'attestation'],
+    ['This declaration must be notarised', 'attestation'],
+    ['DocuSign', 'attestation'],
+    ['Please sign below', 'attestation'],
+
     // AI disclosure
     ['Did you use AI to write any part of this application?', 'ai_disclosure'],
     ['Was artificial intelligence used to generate this response?', 'ai_disclosure'],
@@ -146,6 +183,15 @@ describe('must still be filled', () => {
     'Desired location',
     'Are you willing to relocate?',
     'Major: Marketing',
+    // A username qualified by a public platform is a profile link, not a credential.
+    'GitHub username',
+    'LinkedIn username',
+    'Portfolio username',
+    // A professional certification is a resume item, not a sworn statement.
+    'Certification name',
+    'Professional certifications',
+    // And an academic declaration is not a legal one.
+    'Declaration of major',
     'Marketing',
   ];
 

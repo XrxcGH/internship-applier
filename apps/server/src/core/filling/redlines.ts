@@ -56,6 +56,10 @@ const ALLOWLIST: RegExp[] = [
   // allowlist entry is what keeps the history pattern below free to be broad.
   /\b(salary|compensation|pay|wage)\s*(expectation|requirement|range|desired|expected)\b/i,
   /\b(desired|expected|target|requested)\s+(salary|compensation|pay|rate)\b/i,
+  // A username qualified by a public platform is a profile link, not a credential. The
+  // credential pattern has to catch a bare "Username" on a sign-up form, so the
+  // distinction has to be made here.
+  /\b(github|gitlab|linkedin|twitter|x|behance|dribbble|portfolio|stack ?overflow|kaggle|leetcode)\b.{0,12}\b(username|handle|profile|url|id)\b/i,
 ];
 
 /** True when a label is explicitly fine to fill despite resembling a redline. */
@@ -80,12 +84,44 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     test: /\bdate of birth\b|\bbirth ?date\b|\b\bdob\b/i,
     note: 'Date of birth. Held locally for eligibility filtering only, and never entered into a form.',
   },
+  {
+    // Abbreviations and punctuation-stripped forms. `normalizeField` flattens separators,
+    // so "ss#" arrives as "ss" and "Soc Sec No." as "soc sec no".
+    category: 'government_id',
+    test: /\bss#|\bss num\b|\bsoc sec\b|\bssn?\b|\bni number\b|\bni no\b|\bdl (number|num|no)\b|\blicen[cs]e (number|num|no)\b/i,
+    note: 'A government identification number. Type this yourself if the form requires it.',
+  },
+  {
+    // Non-US national identifiers. Without these the tool is only safe for US applicants,
+    // which is not a defensible place to stop.
+    category: 'government_id',
+    test: /\baadhaar\b|\bpan card\b|\bnric\b|\bfin number\b|\bmykad\b|\bcnic\b|\bpersonnummer\b|\bcurp\b|\bhkid\b|\bcodice fiscale\b|\bemirates id\b|\bdni\b|\bnie\b|\bbsn\b|\brut\b|\bc[eé]dula\b|\bcpf\b|\bcnpj\b|\bnif\b|\bsteuernummer\b|\btax file number\b|\btfn\b|\butr\b|\bein\b|\bnumero de\b|\bnum[eé]ro de\b/i,
+    note: 'A national identification number. Type this yourself if the form requires it.',
+  },
+  {
+    category: 'government_id',
+    test: /\bgovernment.?issued\b|\bgovt id\b|\bstate.?issued\b|\bidentification document\b|\bproof of identity\b|\bid (number|card|document)\b|\b(work|residence) permit\b|\bbrp\b/i,
+    note: 'An identity document. Type this yourself if the form requires it.',
+  },
+  {
+    // A passport's expiry and country of issue are as sensitive as its number.
+    category: 'government_id',
+    test: /\bpassport\b/i,
+    note: 'Passport details. Type these yourself if the form requires them.',
+  },
 
   // ── Financial ──────────────────────────────────────────────────────────────
   {
     category: 'financial',
-    test: /\b(bank|checking|savings) account|\brouting (number|no\.?)|\biban\b|\bswift\b|\bsort code\b|\bcredit card|\bcard number\b|\bcvv\b|\bcvc\b|\bbilling (address|zip)\b/i,
-    note: 'Bank or card details. This tool never handles payment information.',
+    test: /\b(bank|checking|chequing|savings|deposit) (account|details|form)\b|\bacct\b|\baccount (number|holder|no)\b|\brouting (number|no\.?)\b|\biban\b|\bswift\b|\bsort code\b|\bbsb\b|\bifsc\b|\btransit number\b|\binstitution number\b|\bbranch code\b|\bmicr\b|\bbic\b|\bwire transfer\b|\bvoided che(que|ck)\b|\bdirect deposit\b/i,
+    note: 'Bank details. This tool never handles payment information.',
+  },
+  {
+    // `cc-number`, `cc-csc`, `cc-exp` are HTML autocomplete tokens, and a form can declare
+    // them without any label at all.
+    category: 'financial',
+    test: /\b(credit|debit) card\b|\bcard (number|holder|security|verification|expir)\b|\bcvv\b|\bcvc\b|\bcsc\b|\bcc (number|name|type|csc|exp)\b|\bbilling (address|zip|postal)\b|\bpaypal\b|\bvenmo\b|\bzelle\b/i,
+    note: 'Payment details. This tool never handles payment information.',
   },
   {
     category: 'financial',
@@ -99,19 +135,32 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── Credentials ────────────────────────────────────────────────────────────
   {
     category: 'credential',
-    test: /\bpassword\b|\bpasscode\b|\bsecurity question\b|\bsecurity answer\b|\bpin\b(?! ?code for)|\bverification code\b|\bone[- ]time (code|password)\b|\botp\b|\b2fa\b/i,
+    // Security-question ANSWERS are the part worth naming explicitly. They are phrased as
+    // harmless trivia — a first pet, a mother's maiden name, the street you grew up on —
+    // and nothing about the wording says "credential", but they unlock account recovery.
+    test: /\bpass(word|phrase|code)\b|\bpwd\b|\b(security|secret|recovery) (question|answer|word|code)\b|\bmemorable word\b|\bpin\b(?! ?code for)|\bpersonal identification number\b|\b(verification|confirmation|authentication|authenticator|sms|digit)\b\s*(\w+\s+)?code\b|\bone[- ]time (code|password)\b|\botp\b|\b2fa\b|\busername\b|\buser id\b|\blogin id\b|\bscreen name\b|\baccount name\b|\bmaiden name\b|\bfirst pet\b|\bchildhood\b|\bgrew up on\b|\bfirst teacher\b|\bfavou?rite teacher\b/i,
     note: 'A credential. This tool never types into password or security fields.',
   },
 
   // ── Attestations: the user's own legal statement ───────────────────────────
   {
     category: 'attestation',
-    test: /\bi (certify|attest|affirm|declare|acknowledge|confirm|swear)\b|\bunder penalty of perjury\b|\btrue and (complete|correct|accurate)\b|\bto the best of my knowledge\b/i,
+    // Forms phrase these in the first AND third person ("The applicant certifies"), and
+    // several jurisdictions use their own noun for it.
+    test: /\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear)/i,
     note: 'A statement you are making personally. Only you can make it.',
   },
   {
     category: 'attestation',
-    test: /\b(electronic |e-)?signature\b|\bsign here\b|\btype your (full )?name to sign\b|\binitials?\b|\bdate signed\b/i,
+    // `certification` and `declaration` on their own are far too broad: a professional
+    // certification is a resume item and "declaration of major" is an academic term. Both
+    // need a second word that makes the legal sense unambiguous.
+    test: /\bunder (penalty of perjury|oath)\b|\btrue and (complete|correct|accurate)\b|\bto the best of my knowledge\b|\battestation\b|\b(applicant|candidate|employee) (certification|declaration)\b|\b(certification|declaration) (statement|and authorization|of truth)\b|\baffidavit\b|\bstatement of truth\b|\bsworn\b|\bnotari[sz]/i,
+    note: 'A sworn or certified statement. Only you can make it.',
+  },
+  {
+    category: 'attestation',
+    test: /\b(e ?)?signature\b|\bsignatory\b|\bdocusign\b|\bsign (here|below|and date|this)\b|\bplease sign\b|\bsigned (by|date)\b|\bdate of signing\b|\btype your (full )?name to sign\b|\binitials?\b|\bdate signed\b/i,
     note: 'A signature. This tool does not sign anything on your behalf.',
   },
 
