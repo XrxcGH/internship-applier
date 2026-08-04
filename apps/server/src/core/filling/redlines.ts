@@ -128,7 +128,10 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   },
   {
     category: 'consent',
-    test: /\b(marketing|promotional) (email|communication)|\bsubscribe\b|\bopt[- ]in\b|\bnewsletter\b|\bshare (my )?(data|information) with\b/i,
+    // `\bmarketing\b` on its own is deliberately absent: "Major: Marketing" is a real
+    // field on a student application and refusing to fill it would be absurd. The opt-in
+    // sense has to be established by a second word, or by opt-in vocabulary directly.
+    test: /\b(marketing|promotional)\s+(email|communication|material|message|opt)|\bsubscribe\b|\bopt[-\s]?in\b|\boptin\b|\bnewsletter\b|\bsend me\b|\bshare (my )?(data|information) with\b/i,
     note: 'A communications or data-sharing opt-in. Left for you to choose.',
   },
 

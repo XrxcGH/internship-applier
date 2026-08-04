@@ -60,6 +60,8 @@ describe('must never be filled', () => {
     ['Credit check authorization', 'consent'],
     ['Drug screen consent', 'consent'],
     ['Send me marketing emails', 'consent'],
+    ['Send me news and updates', 'consent'],
+    ['Opt in to communications', 'consent'],
     ['May we contact your current employer?', 'consent'],
 
     // EEO and personal
@@ -143,6 +145,8 @@ describe('must still be filled', () => {
     'Cover letter',
     'Desired location',
     'Are you willing to relocate?',
+    'Major: Marketing',
+    'Marketing',
   ];
 
   for (const label of ORDINARY) {
