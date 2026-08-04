@@ -55,8 +55,12 @@ export function Applications({ onBack }: { onBack: () => void }) {
       <RunningHead
         section="Applications"
         gate="G3"
-        lede="Everything you approved at the queue. Each one needs its questions answered and every
-              answer read before anything gets filled in."
+        lede={
+          <>
+            Everything you approved in the queue. Each one needs its questions answered and every
+            answer <em>read</em> before anything gets filled in.
+          </>
+        }
       />
 
       {error && <Notice tone="redline">{error}</Notice>}
@@ -85,7 +89,7 @@ export function Applications({ onBack }: { onBack: () => void }) {
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <p className="u-eyebrow truncate">{a.company}</p>
-                      <p className="mt-1.5 text-[1.0625rem] leading-snug">{a.title}</p>
+                      <p className="mt-1.5 text-[1.125rem] leading-snug">{a.title}</p>
                     </div>
                     {a.blockedCount > 0 ? (
                       <Badge tone="redline">{a.blockedCount} flagged</Badge>
@@ -231,7 +235,7 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
           >
             Add question
           </Button>
-          <span className="text-faint text-[0.8125rem]">
+          <span className="text-faint text-[0.9375rem]">
             If you have answered it before, the previous answer is pulled in automatically.
           </span>
         </div>
@@ -243,7 +247,7 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
               <button
                 key={q}
                 onClick={() => setNewQuestion(q)}
-                className="u-card-flat hover:border-rule-strong text-dim hover:text-ink rounded-full px-3 py-1.5 text-[0.8125rem] transition-colors"
+                className="u-card-flat hover:border-rule-strong text-dim hover:text-ink rounded-full px-3 py-1.5 text-[0.9375rem] transition-colors"
               >
                 {q}
               </button>
@@ -254,13 +258,14 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
 
       <Section n="03" title="What happens next" step={5}>
         <div className="u-card-flat px-5 py-5">
-          <p className="text-dim text-[0.9375rem]">
+          <p className="text-dim text-[1rem]">
             Once every answer is approved, this tool can fill the form for you. It stops at the
-            submit button, every time. You read the filled page and click Submit yourself.
+            submit button, <em>every time</em>. You read the filled page and click Submit{' '}
+            <em>yourself</em>.
           </p>
-          <p className="text-faint mt-3 text-[0.9375rem]">
-            Sensitive fields are never auto-filled: government IDs, bank details, passwords,
-            demographic questions, and anything you have to attest to.
+          <p className="text-faint mt-3 text-[1rem]">
+            Sensitive fields are <em>never</em> auto-filled: government IDs, bank details,
+            passwords, demographic questions, and anything you have to attest to.
           </p>
           <div className="mt-4">
             <Button

@@ -369,7 +369,7 @@ export function findTells(text: string, opts: ScrubOptions = {}): Tell[] {
       span: { start: idx, end: idx + 1 },
       note: `${emDashes} em-dashes in ${totalWords} words (${per100.toFixed(1)} per 100${
         opts.baselineEmDashPer100 !== undefined ? `, versus your usual ${baseline}` : ''
-      }). Swap some for a full stop or a comma.`,
+      }). Swap some for a period or a comma.`,
     });
   }
 

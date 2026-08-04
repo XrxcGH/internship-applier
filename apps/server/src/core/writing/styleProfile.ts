@@ -256,9 +256,18 @@ export function describeStyle(p: StyleProfile): string[] {
   else if (p.contractionRate < 0.3)
     out.push('You rarely use contractions, which reads more formal.');
 
+  // These keys go straight into a sentence the user reads, so they need English names.
+  // Without the map it says "You reach for emDash and parenthetical more than most people."
+  const PUNCTUATION_NAME: Record<keyof StyleProfile['punctuation'], string> = {
+    emDash: 'em dashes',
+    semicolon: 'semicolons',
+    parenthetical: 'parentheses',
+    exclamation: 'exclamation marks',
+  };
+
   const punct = Object.entries(p.punctuation)
     .filter(([, v]) => v > 0.4)
-    .map(([k]) => k);
+    .map(([k]) => PUNCTUATION_NAME[k as keyof StyleProfile['punctuation']]);
   if (punct.length) out.push(`You reach for ${punct.join(' and ')} more than most people.`);
 
   if (p.favoredTransitions.length) {

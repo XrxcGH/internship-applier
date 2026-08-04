@@ -73,7 +73,7 @@ function EditMeter({ answer }: { answer: Answer }) {
           style={{ width: `${String(Math.max(pct, 2))}%`, background: 'var(--accent)' }}
         />
       </div>
-      <span className="text-faint text-[0.8125rem]">{answer.editSummary}</span>
+      <span className="text-faint text-[0.9375rem]">{answer.editSummary}</span>
     </div>
   );
 }
@@ -119,7 +119,7 @@ export function AnswerReview({
       {/* ── question */}
       <header className="border-rule flex flex-wrap items-start justify-between gap-4 border-b px-6 py-5">
         <div className="min-w-0 flex-1">
-          <p className="text-[1.0625rem] leading-snug">{answer.questionText}</p>
+          <p className="text-[1.125rem] leading-snug">{answer.questionText}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge>{answer.archetype.replace(/_/g, ' ')}</Badge>
             {words > 0 && <Badge>{words} words</Badge>}
@@ -129,11 +129,11 @@ export function AnswerReview({
           </div>
         </div>
         {answer.approvedAt ? (
-          <span className="a-stamp u-data text-verified shrink-0 text-[0.6875rem] tracking-widest uppercase">
+          <span className="a-stamp u-data text-verified shrink-0 text-[0.75rem] tracking-widest uppercase">
             approved
           </span>
         ) : (
-          <span className="u-data text-faint shrink-0 text-[0.6875rem] tracking-widest uppercase">
+          <span className="u-data text-faint shrink-0 text-[0.75rem] tracking-widest uppercase">
             not approved
           </span>
         )}
@@ -143,7 +143,7 @@ export function AnswerReview({
         <div className="px-6 py-8">
           <Empty title="No answer yet.">
             {canDraft
-              ? 'Draft one from your profile, or write it yourself. Either way it gets fact-checked.'
+              ? 'Draft one from your profile, or write it yourself. Either way, it gets fact-checked.'
               : 'Write it yourself below. It still gets fact-checked against your profile.'}
           </Empty>
           <div className="mt-4 flex flex-wrap gap-3">
@@ -180,7 +180,7 @@ export function AnswerReview({
                 className="border-rule focus:border-accent w-full resize-y rounded border bg-transparent p-4 leading-relaxed outline-none transition-colors"
               />
             ) : (
-              <p className="text-[1.0625rem] leading-[1.8] whitespace-pre-wrap">
+              <p className="text-[1.125rem] leading-[1.8] whitespace-pre-wrap">
                 {segments.map((s, i) =>
                   s.index === null ? (
                     <span key={i}>{s.text}</span>
@@ -248,14 +248,14 @@ export function AnswerReview({
             {/* ── flags */}
             {blocking.length > 0 && (
               <div className="u-tint-redline mt-5 rounded px-4 py-3">
-                <p className="u-data text-redline mb-2 text-[0.6875rem] tracking-widest uppercase">
+                <p className="u-data text-redline mb-2 text-[0.75rem] tracking-widest uppercase">
                   {blocking.length === 1
                     ? '1 claim blocks approval'
                     : `${blocking.length} claims block approval`}
                 </p>
                 <ul className="space-y-2">
                   {blocking.map((b, i) => (
-                    <li key={i} className="text-dim text-[0.9375rem]">
+                    <li key={i} className="text-dim text-[1rem]">
                       <span className="text-ink">“{b.claim}”</span>
                       <br />
                       {answer.flags.find((f) => f.type === 'unsupported' || f.type === 'overstated')
@@ -268,10 +268,10 @@ export function AnswerReview({
 
             {tells.length > 0 && (
               <div className="u-tint-caution mt-4 rounded px-4 py-3">
-                <p className="u-data text-caution mb-2 text-[0.6875rem] tracking-widest uppercase">
+                <p className="u-data text-caution mb-2 text-[0.75rem] tracking-widest uppercase">
                   reads as machine-written
                 </p>
-                <ul className="text-dim space-y-1 text-[0.9375rem]">
+                <ul className="text-dim space-y-1 text-[1rem]">
                   {tells.slice(0, 6).map((t, i) => (
                     <li key={i}>{t.note}</li>
                   ))}
@@ -280,7 +280,7 @@ export function AnswerReview({
             )}
 
             {drift.length > 0 && (
-              <div className="text-faint mt-4 text-[0.9375rem]">
+              <div className="text-faint mt-4 text-[1rem]">
                 {drift.map((d, i) => (
                   <p key={i}>{d.note}</p>
                 ))}
@@ -288,15 +288,16 @@ export function AnswerReview({
             )}
 
             {answer.styleNote && (
-              <p className="text-faint mt-4 text-[0.8125rem] italic">{answer.styleNote}</p>
+              <p className="text-faint mt-4 text-[0.9375rem] italic">{answer.styleNote}</p>
             )}
 
             {/* ── the gate */}
             <div className="border-rule mt-6 border-t pt-5">
               {answer.approvedAt ? (
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-dim text-[0.9375rem]">
-                    You approved this. It will be filled in for you; you still submit it yourself.
+                  <span className="text-dim text-[1rem]">
+                    You approved this. It will be filled in for you; you still submit it{' '}
+                    <em>yourself</em>.
                   </span>
                   <Button size="sm" onClick={onUnapprove}>
                     Reopen
@@ -304,18 +305,18 @@ export function AnswerReview({
                 </div>
               ) : blocking.length > 0 ? (
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-dim text-[0.9375rem]">
+                  <span className="text-dim text-[1rem]">
                     Fix the flagged {blocking.length === 1 ? 'claim' : 'claims'} above, or add the
                     missing facts to your profile.
                   </span>
-                  <Button variant="solid" disabled title="Unverified claims block approval.">
+                  <Button variant="solid" disabled title="Flagged claims block approval.">
                     Approve (G3)
                   </Button>
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-dim text-[0.9375rem]">
-                    Read it once more. Approving means you stand behind every sentence.
+                  <span className="text-dim text-[1rem]">
+                    Read it once more. Approving means you stand behind <em>every sentence</em>.
                   </span>
                   <Button
                     variant="solid"
@@ -333,7 +334,7 @@ export function AnswerReview({
           <aside className="bg-sunk/40 px-5 py-5">
             <p className="u-eyebrow mb-3">Evidence</p>
             {answer.evidence.length === 0 ? (
-              <p className="text-faint text-[0.875rem]">
+              <p className="text-faint text-[0.9375rem]">
                 Nothing to check yet. Claims appear here as soon as there is text.
               </p>
             ) : (
@@ -349,7 +350,7 @@ export function AnswerReview({
                     <div className="mb-1.5">
                       <Badge tone={VERDICT_TONE[e.verdict]}>{VERDICT_LABEL[e.verdict]}</Badge>
                     </div>
-                    <p className="text-dim text-[0.8125rem] leading-snug">
+                    <p className="text-dim text-[0.9375rem] leading-snug">
                       {e.claim.length > 90 ? `${e.claim.slice(0, 90)}…` : e.claim}
                     </p>
                     {e.quote && (
@@ -358,7 +359,7 @@ export function AnswerReview({
                       </p>
                     )}
                     {e.profileRef && (
-                      <p className="u-data text-faint mt-1.5 text-[0.6875rem]">{e.profileRef}</p>
+                      <p className="u-data text-faint mt-1.5 text-[0.75rem]">{e.profileRef}</p>
                     )}
                   </li>
                 ))}
@@ -368,7 +369,7 @@ export function AnswerReview({
             {answer.unresolved && (
               <Notice tone="caution">
                 The draft still had unsupported claims after one revision. That is the model
-                failing, not you — edit it directly.
+                failing, <em>not you</em>. Edit it directly.
               </Notice>
             )}
           </aside>

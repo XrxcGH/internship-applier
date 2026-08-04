@@ -72,7 +72,7 @@ export function Voice() {
         {samples && samples.samples.length > 0 && (
           <div className="mb-5 flex flex-wrap items-center gap-3">
             <Badge tone={ADEQUACY_TONE[samples.adequacy.level]}>{samples.adequacy.level}</Badge>
-            <span className="text-dim text-[0.9375rem]">{samples.adequacy.message}</span>
+            <span className="text-dim text-[1rem]">{samples.adequacy.message}</span>
           </div>
         )}
 
@@ -89,7 +89,7 @@ export function Voice() {
                     <Badge>{s.kind.replace(/_/g, ' ')}</Badge>
                     <span className="u-data text-faint">{s.wordCount} words</span>
                   </div>
-                  <p className="text-dim truncate text-[0.875rem]">{s.preview}</p>
+                  <p className="text-dim truncate text-[0.9375rem]">{s.preview}</p>
                 </div>
                 <Button
                   variant="danger"
@@ -125,7 +125,9 @@ export function Voice() {
           >
             Add sample
           </Button>
-          <span className="u-data text-faint">{words} words</span>
+          <span className="u-data text-faint">
+            {words} {words === 1 ? 'word' : 'words'}
+          </span>
         </div>
       </Section>
 
@@ -152,23 +154,24 @@ export function Voice() {
           <div className="u-card-flat px-5 py-5">
             <ul className="space-y-3">
               {style.description.map((line, i) => (
-                <li key={i} className="flex gap-3 text-[0.9375rem]">
+                <li key={i} className="flex gap-3 text-[1rem]">
                   <span className="text-accent-dim shrink-0">—</span>
                   <span className="text-dim">{line}</span>
                 </li>
               ))}
             </ul>
             {style.computedAt && (
-              <p className="u-data text-faint border-rule mt-4 border-t pt-3 text-[0.6875rem]">
+              <p className="u-data text-faint border-rule mt-4 border-t pt-3 text-[0.75rem]">
                 measured {style.computedAt.slice(0, 16).replace('T', ' ')}
               </p>
             )}
           </div>
         )}
 
-        <p className="text-faint mt-5 max-w-[60ch] text-[0.9375rem] italic">
-          These numbers are not scored against an AI detector, and are not trying to beat one. They
-          answer a narrower question: does the draft read like the person signing it.
+        <p className="text-faint mt-5 u-prose text-[1rem] italic">
+          These numbers are <strong>not scored against an AI detector</strong>, and are not trying
+          to beat one. They answer a narrower question: does the draft read like the person signing
+          it?
         </p>
       </Section>
     </Page>

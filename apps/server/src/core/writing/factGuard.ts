@@ -350,7 +350,7 @@ export function checkClaimDeterministically(
       const k = known[0]!;
       return {
         verdict: 'unsupported',
-        reason: `The draft says GPA ${wrong}; your profile says ${k.value} on a ${k.scale} scale.`,
+        reason: `The draft says GPA ${wrong}; your profile says ${k.value} on a ${k.scale}-point scale.`,
         profileRef: k.ref,
       };
     }
@@ -375,7 +375,7 @@ export function checkClaimDeterministically(
     if (!heldSkills.has(norm) && !containsPhrase(normEvidence, norm)) {
       return {
         verdict: 'unsupported',
-        reason: `The draft claims ${raw}, which is not on your profile.`,
+        reason: `The draft claims experience with "${raw}", which is not on your profile.`,
       };
     }
   }

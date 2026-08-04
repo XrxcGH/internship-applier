@@ -137,7 +137,7 @@ export function critiqueStyle(draft: string, yours: StyleProfile | undefined): S
     severity: emDiff <= 0 ? 0 : severity(emDiff, 0.3, 2),
     yours: `${yours.punctuation.emDash} per 100 words`,
     draft: `${measured.punctuation.emDash} per 100 words`,
-    note: 'There are more em dashes here than you use. It is the most-noticed tell there is; a comma or a full stop does the same work.',
+    note: 'There are more em dashes here than you use. It is the most-noticed tell there is; a comma or a period does the same work.',
   });
 
   // ── Hedging.
@@ -195,5 +195,5 @@ export function describeMatch(report: StyleReport): string {
   if (report.tooShort) return 'Too short to measure against your voice.';
   if (report.drift.length === 0) return 'Reads like your other writing.';
   const worst = report.drift[0]!;
-  return `Closest mismatch: ${worst.dimension.replace(/_/g, ' ')} — yours ${worst.yours}, this ${worst.draft}.`;
+  return `Biggest mismatch: ${worst.dimension.replace(/_/g, ' ')} — yours ${worst.yours}, this ${worst.draft}.`;
 }
