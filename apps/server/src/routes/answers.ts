@@ -15,7 +15,14 @@ import { z } from 'zod';
 import type { AnswerEvidence, AnswerFlag, ConfirmedProfile, StyleProfile } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
 import { decryptField } from '../infra/crypto/fieldCrypto';
-import { hasApiKey } from '../infra/llm/client';
+import {
+  claudeCliSelfTest,
+  describeAccess,
+  NoModelAccessError,
+  resetBackend,
+  resetCliProbe,
+  resolveBackend,
+} from '../infra/llm';
 import { publish } from '../infra/events';
 import { logger } from '../infra/logger';
 import { getProfile } from '../core/profile/repository';
@@ -219,11 +226,13 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(schema.applicationAnswer.applicationId, req.params.id))
       .all();
 
+    const access = await describeAccess();
     return {
       ...ctx,
       id: req.params.id,
       answers: answers.map(answerPayload),
-      canDraft: hasApiKey(),
+      canDraft: access.available,
+      modelAccess: access,
     };
   });
 
@@ -321,13 +330,16 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
           },
         });
       }
-      if (!hasApiKey()) {
+      if (!(await resolveBackend())) {
+        const access = await describeAccess();
         return reply.code(400).send({
           error: {
-            code: 'NO_API_KEY',
+            code: 'NO_MODEL_ACCESS',
             message:
-              'Drafting needs an Anthropic API key. Add one in Settings, or write the answer ' +
-              'yourself — it will still be fact-checked against your profile.',
+              'Drafting needs either the Claude Code CLI (signed in with your Claude account) ' +
+              'or an Anthropic API key. You can also write the answer yourself, and it will ' +
+              'still be fact-checked against your profile.',
+            details: { modelAccess: access },
           },
         });
       }
@@ -355,6 +367,11 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
         });
       } catch (err) {
         logger.error({ err, answerId: row.id }, 'drafting failed');
+        // A usage limit or a missing CLI already carries a message written for the user;
+        // passing it through beats replacing it with a generic failure.
+        if (err instanceof NoModelAccessError) {
+          return reply.code(503).send({ error: { code: 'NO_MODEL_ACCESS', message: err.message } });
+        }
         return reply.code(502).send({
           error: {
             code: 'DRAFT_FAILED',
@@ -543,6 +560,27 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such answer.' } });
     }
     return answerPayload(row);
+  });
+
+  /** What model access this install has, and why drafting may be unavailable. */
+  app.get('/api/model-access', async () => describeAccess());
+
+  /**
+   * Runs one real round trip through the configured backend.
+   *
+   * Worth having as its own endpoint because the CLI path can fail in a way that is not
+   * an error: if the prompt never reaches the model, generation still "succeeds" and
+   * quietly answers the wrong question. This checks the answer came back.
+   */
+  app.post('/api/model-access/test', async (_req, reply) => {
+    resetBackend();
+    resetCliProbe();
+    const access = await describeAccess();
+    if (access.provider !== 'claude_cli') {
+      return { ...access, tested: false, detail: 'Nothing to test for this provider.' };
+    }
+    const result = await claudeCliSelfTest();
+    return reply.code(result.ok ? 200 : 503).send({ ...access, tested: true, ...result });
   });
 
   app.get('/api/answer-library', async () => ({ entries: listLibrary() }));

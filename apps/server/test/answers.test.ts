@@ -226,15 +226,38 @@ describe('G3 — approval is blocked by unverified claims', () => {
   });
 });
 
-describe('drafting requires a key, and says so usefully', () => {
-  it('explains the missing key instead of failing opaquely', async () => {
-    if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) return;
+/**
+ * The suite pins LLM_PROVIDER=none (see vitest.setup.ts), so "no model available" is the
+ * deterministic state here regardless of what is installed on the machine running it.
+ */
+describe('drafting without model access', () => {
+  it('explains the situation instead of failing opaquely', async () => {
     const id = await addQuestion('Why do you want to intern here?');
     const res = await app.inject({ method: 'POST', url: `/api/answers/${id}/draft` });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error.code).toBe('NO_API_KEY');
-    // Says what the user can do instead. A dead end here would be a dead end for the app.
+    expect(res.json().error.code).toBe('NO_MODEL_ACCESS');
+    // Names both routes in, and the fallback. A dead end here is a dead end for the app.
+    expect(res.json().error.message).toContain('Claude Code CLI');
     expect(res.json().error.message).toContain('write the answer yourself');
+  });
+
+  it('reports what is and is not available, without pretending', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/model-access' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(false);
+    expect(body.provider).toBe('none');
+    // The limitations have to say the rest of the app still works, or a user with no
+    // model access will reasonably assume the whole tool is broken.
+    expect(body.limitations.join(' ')).toMatch(/Everything else works/);
+  });
+
+  it('still fact-checks an answer the user wrote by hand', async () => {
+    const id = await addQuestion('Tell us about a project you are proud of.');
+    await write(id, 'I spent last summer at Google building search infrastructure.');
+    const res = await app.inject({ method: 'POST', url: `/api/answers/${id}/approve` });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('UNVERIFIED_CLAIMS');
   });
 });
 

@@ -187,6 +187,13 @@ export interface Answer {
   unresolved?: boolean;
 }
 
+export interface ModelAccess {
+  provider: 'api' | 'claude_cli' | 'none';
+  available: boolean;
+  description: string;
+  limitations: string[];
+}
+
 export interface ApplicationDetail {
   id: string;
   company: string;
@@ -194,7 +201,16 @@ export interface ApplicationDetail {
   description: string;
   answers: Answer[];
   canDraft: boolean;
+  modelAccess: ModelAccess;
 }
+
+export const getModelAccess = () => request<ModelAccess>('/api/model-access');
+
+export const testModelAccess = () =>
+  request<ModelAccess & { tested: boolean; ok?: boolean; detail?: string }>(
+    '/api/model-access/test',
+    { method: 'POST' },
+  );
 
 export const listApplications = () =>
   request<{ applications: ApplicationSummary[] }>('/api/applications').then((r) => r.applications);

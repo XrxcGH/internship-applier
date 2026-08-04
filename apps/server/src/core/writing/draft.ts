@@ -23,7 +23,7 @@
  * whole point of the gate.
  */
 import type { ConfirmedProfile, StyleProfile } from '@ia/shared';
-import { getClient, MODELS, recordCall } from '../../infra/llm/client';
+import * as llm from '../../infra/llm';
 import { logger } from '../../infra/logger';
 import { guardDraft, type GuardResult } from './factGuard';
 import { formatEvidence, retrieveEvidence, type Evidence } from './retrieve';
@@ -170,32 +170,13 @@ function userMessage(req: DraftRequest): string {
 
 // ───────────────────────────────────────────────────────────────── generation
 
+/**
+ * Goes through the provider seam rather than the SDK directly, so the same drafting code
+ * runs against an API key or against the user's own Claude Code CLI.
+ */
 async function generate(system: string, user: string, maxTokens: number): Promise<string> {
-  const client = getClient();
-  const started = Date.now();
-
-  const response = await client.messages.create({
-    model: MODELS.drafting,
-    max_tokens: maxTokens,
-    system,
-    thinking: { type: 'adaptive' },
-    messages: [{ role: 'user', content: user }],
-  });
-
-  recordCall({
-    purpose: 'answer_draft',
-    model: MODELS.drafting,
-    usage: response.usage as never,
-    latencyMs: Date.now() - started,
-    stopReason: response.stop_reason,
-  });
-
-  if (response.stop_reason === 'refusal') return '';
-  return response.content
-    .filter((b) => b.type === 'text')
-    .map((b) => (b.type === 'text' ? b.text : ''))
-    .join('')
-    .trim();
+  const res = await llm.generate({ purpose: 'answer_draft', system, user, maxTokens });
+  return res.text;
 }
 
 /**

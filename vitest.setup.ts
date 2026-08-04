@@ -16,3 +16,13 @@ process.env['DATABASE_PATH'] = path.join(
   mkdtempSync(path.join(tmpdir(), 'internship-applier-test-')),
   'app.db',
 );
+
+/**
+ * No test may reach a model.
+ *
+ * Backend resolution is `auto` by default, so on a machine with the Claude Code CLI
+ * installed and signed in, a test could spawn it and spend the developer's usage —
+ * and the same suite would then behave differently from CI, where nothing is installed.
+ * Pinning this makes "no model available" the deterministic condition everywhere.
+ */
+process.env['LLM_PROVIDER'] = 'none';

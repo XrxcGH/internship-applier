@@ -185,10 +185,24 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
             ? 'no questions yet'
             : `${approved} of ${app.answers.length} approved`}
         </Badge>
-        {!app.canDraft && <Badge tone="caution">no API key — write answers yourself</Badge>}
+        {app.canDraft ? (
+          <Badge tone="verified">{app.modelAccess.description}</Badge>
+        ) : (
+          <Badge tone="caution">no model — write answers yourself</Badge>
+        )}
       </div>
 
       {error && <Notice tone="redline">{error}</Notice>}
+
+      {/* A user who cannot draft needs to know the rest of the tool still works, or they
+          will reasonably conclude it is broken and stop. */}
+      {!app.canDraft && (
+        <Notice tone="caution">
+          <strong>Drafting is unavailable.</strong> {app.modelAccess.description} You can still
+          write each answer yourself: it gets fact-checked against your profile, flagged for
+          machine-sounding phrasing, and measured against your voice exactly the same way.
+        </Notice>
+      )}
 
       <Section n="01" title="Questions from the form" step={3}>
         {app.answers.length === 0 ? (
