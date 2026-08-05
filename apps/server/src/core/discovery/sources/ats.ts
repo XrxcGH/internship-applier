@@ -215,12 +215,12 @@ export function parseLocation(
     .map((s) => s.trim())
     .filter((s) => s && !REMOTE_RE.test(s));
 
-  return {
-    city: parts[0],
-    region: parts[1],
-    country: parts[2] ?? (parts.length > 0 ? 'US' : undefined),
-    remote,
-  };
+  // No country unless the string names one. These boards usually give "City, Region" and
+  // nothing more, so filling the gap with "US" recorded "London, England" and "Toronto,
+  // Ontario" as American — and that is what gets stored on the posting and handed back in
+  // the privacy export. An unknown country stays unknown, the same as every other parser
+  // in the discovery path.
+  return { city: parts[0], region: parts[1], country: parts[2], remote };
 }
 
 export const ATS_SOURCES = { greenhouse, lever, ashby } as const;

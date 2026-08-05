@@ -14,14 +14,15 @@ profile ──1:N──▶ resume_document
    │
    └──1:N──▶ answer_template          (reusable canonical answers)
 
-source ──1:N──▶ job_posting ──1:N──▶ job_requirement
+source ──M:N──▶ job_posting ──1:N──▶ job_requirement
+  (via job_posting_source)
                      │
                      └──1:1──▶ match ──▶ decision
                                   │
                                   └──1:1──▶ application ──1:N──▶ application_answer
                                                   └──1:N──▶ application_event
 
-task · llm_call · setting · credential_ref      (cross-cutting)
+task · llm_call · setting · credential_ref · filter_preset      (cross-cutting)
 ```
 
 ## Core tables
@@ -148,32 +149,44 @@ type StyleProfile = {
 };
 ```
 
-### `source` / `job_posting` / `job_requirement`
+### `source` / `job_posting_source` / `job_posting` / `job_requirement`
 
 `source`: `id`, `kind` (`greenhouse` \| `lever` \| `ashby` \| `usajobs` \| `adzuna` \| `github_list` \| `manual` \| …), `label`, `config` json, `enabled`, `last_run_at`, `last_status`.
+
+`job_posting_source` is the provenance join, and the reason `job_posting` carries no
+`source_id`: the same job turns up on Greenhouse and on Adzuna, dedupe merges the two rather
+than keeping both, and a merged posting has to remember every source that saw it — otherwise
+the UI can't say "found on Greenhouse + Adzuna" and a source going dark silently loses
+postings. Columns: `posting_id` fk, `source_id` fk, `external_id` (that source's own ID for
+this posting), `seen_at`. Unique on `(posting_id, source_id)`.
 
 `job_posting`:
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text pk | |
-| `source_id` | text fk | |
-| `external_id` | text | Source's own ID; `(source_id, external_id)` unique |
+| `external_id` | text | The ID carried by whichever copy of the posting was persisted first. Per-source IDs live in `job_posting_source`; this is a convenience, not the provenance |
 | `canonical_url` | text | Unique index — first dedupe key |
 | `apply_url` | text | Often differs from the listing URL |
 | `company` / `company_domain` | text | |
 | `title` | text | |
 | `description_html` / `description_text` | text | |
 | `locations` | json | `{city, region, country, remote}[]` |
-| `employment_type` | text | `internship` \| `co_op` \| `fellowship` \| `part_time` \| `other` |
-| `term` | json | `{season: 'summer', year: 2027, start?, end?}` |
-| `compensation` | json | `{min?, max?, currency?, period?, raw?}` |
+| `position_type` | text | `internship` \| `co_op` \| `fellowship` \| `apprenticeship` \| `research` \| `new_grad` \| `part_time` \| `seasonal` \| `contract` \| `externship` \| `trainee_program` \| `volunteer`. **Null means the posting didn't say** — never read as a mismatch |
+| `work_arrangement` | text | `onsite` \| `hybrid` \| `remote` \| `remote_geo_restricted` \| `field_or_travel`, nullable on the same terms |
+| `hybrid_days_onsite` | integer | Days per week on site, when a hybrid posting states one |
+| `remote_eligible_in` | json | `string[]` — states/countries a remote posting restricts you to |
+| `program_flags` | json | `ProgramFlag[]` — diversity, first-year, returnship, rotational, … |
+| `requires` | json | What the application itself demands: `{coverLetter?, transcript?, portfolio?, references?, videoInterview?, account?}` |
+| `term` | json | `{season, year, start?, end?, durationWeeks, multiTerm}`; `season`/`year` null when the parser couldn't tell |
+| `compensation` | json | `{min?, max?, currency?, period?, unpaid?, academicCreditOnly?, raw?, …}` |
 | `posted_at` / `closes_at` | text | `closes_at` nullable |
 | `is_open` | integer | Refreshed by `refresh.ts` |
-| `ats_vendor` | text | Detected: greenhouse/lever/ashby/workday/icims/taleo/smartrecruiters/unknown |
+| `ats_vendor` | text | Detected: greenhouse/lever/ashby/workday/icims/taleo/smartrecruiters/workable/unknown |
 | `apply_effort` | json | `{steps, essayCount, requiresAccount, estMinutes}` |
-| `fingerprint` | text | Fuzzy `(company, normTitle, normLocation)` hash — second dedupe key |
-| `embedding` | blob | Optional third dedupe key + similarity search |
+| `fingerprint` | text | `company \| normalized title \| primary city` — second dedupe key, indexed |
+| `embedding` | blob | Reserved for similarity search. **Nothing writes it**: dedupe stage 3 is token-set equality over titles, not embeddings (docs/04 § Dedupe) |
+| `requirements_extracted_at` | text | When requirements were last extracted, whatever the outcome. Null and "extracted, found none" are different states and the cache has to tell them apart |
 | `first_seen_at` / `last_seen_at` | text | |
 
 `job_requirement` — one row per extracted requirement, so eligibility decisions can cite
@@ -192,9 +205,13 @@ their evidence:
 
 ### `match` / `decision`
 
-`match`: `id`, `posting_id`, `profile_id`, `eligibility` (`eligible` \| `ineligible` \| `unknown`), `blockers` json (`RuleResult[]`), `score` (0–100), `breakdown` json, `rationale` text, `computed_at`, `model_version`.
+`match`: `id`, `posting_id`, `profile_id`, `eligibility` (`eligible` \| `ineligible` \| `unknown`), `rules` json (every `RuleResult`, pass and fail alike), `blockers` json (just the failures), `score` (0–100), `breakdown` json, `rationale` text, `computed_at`. Unique on `(posting_id, profile_id)`.
 
-`decision`: `id`, `match_id`, `action` (`approved` \| `skipped` \| `rejected` \| `saved`), `reason` text, `reason_tags` json, `decided_at`. Rejection reasons feed preference learning; they are never used to auto-reject future postings without showing why.
+Both `rules` and `blockers` are stored, not just the failures: the requirement checklist in
+the review queue shows what passed as well as what didn't, and recomputing it from the
+posting on every render would be a different answer from the one the user was shown.
+
+`decision`: `id`, `match_id`, `action` (`approved` \| `skipped` \| `rejected` \| `saved`), `reason` text, `reason_tags` json, `decided_at`. Rejection reasons are captured for preference learning, which is **not built** — nothing reads `reason_tags` yet (docs/05 § Preference learning). The tags are collected against the day it is, and the guardrail then is that a learned weight may reorder the queue but may never auto-reject a posting without showing why.
 
 ### `application` / `application_answer` / `application_event`
 
@@ -210,7 +227,7 @@ their evidence:
 | `resume_document_id` | text fk | Which resume was attached |
 | `submitted_at` | text | Set **only** when the user confirms they clicked Submit |
 | `deadline_at` | text | Copied from posting for reminder scheduling |
-| `screenshot_path` | text | Final pre-submit full-page capture |
+| `screenshot_path` | text | Final pre-submit full-page capture. **Nothing writes it** — no screenshot is captured anywhere in the app (docs/07 § G4). The column is kept because the pre-submit review is the place one would belong. |
 | `skipped_fields` | json | Redlined/unclassifiable fields the user must handle |
 | `notes` 🔒 | text | |
 
@@ -230,7 +247,13 @@ their evidence:
 | `flags` | json | `{type: 'unsupported' \| 'overstated' \| 'style_drift', span, note}[]` |
 | `approved_at` | text | **Null blocks filling.** |
 
-`application_event`: `id`, `application_id`, `type` (`created` \| `answers_drafted` \| `answers_approved` \| `filled` \| `submitted` \| `email_received` \| `status_changed` \| `note`), `payload` json, `at`.
+`application_event`: `id`, `application_id`, `type`, `payload` json, `at`.
+
+The types the code actually writes are `created`, `answer_approved`, `filled`,
+`marked_submitted` and `status_changed`. This list previously named `answers_drafted`,
+`submitted`, `email_received` and `note` — none of which anything emits — and spelled
+`answer_approved` as a plural, so a reader grepping for the documented name found nothing.
+Email ingestion is not built; see docs/11.
 
 ### `answer_template`
 
@@ -244,7 +267,8 @@ generation risk and keeps a consistent story across applications.
 - **`task`** — `id`, `kind`, `payload` json, `status` (`queued`\|`running`\|`done`\|`failed`\|`cancelled`), `attempts`, `max_attempts`, `run_after`, `started_at`, `finished_at`, `error`, `progress` json. The queue is just this table plus a worker loop.
 - **`llm_call`** — `id`, `purpose`, `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd`, `latency_ms`, `stop_reason`, `at`. Powers the cost panel and lets a bad prompt be traced to a bad output.
 - **`credential_ref`** — `id`, `domain`, `label`, `storage_state_path`, `last_used_at`. **Never stores passwords.** Points at a Playwright storage-state file the user created by logging in themselves.
-- **`setting`** — key/value JSON for app config the user can change in the UI.
+- **`filter_preset`** — `id`, `name` (unique), `description`, `filters` json, `is_default`, `created_at`, `updated_at`. The named, saved filter sets in docs/05 § Presets. The table and the starter set exist; **no feature reads or writes either yet** — the one thing that touches the table is the privacy export, which includes it so that "everything stored" means everything.
+- **`setting`** — key/value JSON for app config the user can change in the UI. **Nothing writes it yet**: there is no settings API, and configuration comes from environment variables (docs/09 § Cost & privacy).
 
 ## Invariants
 
@@ -253,9 +277,17 @@ Enforced in code, and where possible as DB constraints or triggers:
 1. Nothing downstream of ingestion reads a `profile` with `confirmed_at IS NULL`.
 2. `application.status` may not advance to `filled` while any `application_answer` for it
    has `approved_at IS NULL`.
-3. `application.submitted_at` is settable only by the explicit user-confirmation endpoint —
-   no code path in filling or drafting can write it.
-4. `job_posting.canonical_url` is unique; `(source_id, external_id)` is unique.
+3. `application.submitted_at` is written only where the user themselves says the application
+   was submitted. Two endpoints do that: `POST /api/applications/:id/mark-submitted`, and
+   `POST /api/applications/:id/status` when the target status is `submitted`. Both are
+   reached only by a person clicking something, both record the actor as `user` in
+   `application_event`, and both keep the first timestamp rather than overwriting it. No code
+   path in filling or drafting can write it — which is the whole of gate G4, and the count of
+   endpoints is not what makes it hold.
+4. `job_posting.canonical_url` is unique, and `job_posting_source` is unique on
+   `(posting_id, source_id)` so re-running discovery re-links rather than duplicating
+   provenance. There is deliberately no unique index on an external ID: two sources number
+   the same job differently, and a posting is identified by its URL or its fingerprint.
 5. Every `match` with `eligibility = 'ineligible'` has at least one `blockers` entry, and
    every blocker cites a `job_requirement.source_quote`. No unexplained rejections.
 6. Redlined field types (SSN, government ID, bank, payment, password) never appear in

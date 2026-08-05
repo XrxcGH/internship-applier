@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import type { CandidateProfile } from '@ia/shared';
 import { ulid } from 'ulid';
 import { buildApp } from '../src/app';
+import { eq } from 'drizzle-orm';
 import { db, schema } from '../src/infra/db/client';
 import { runMigrations } from '../src/infra/db/migrate';
 import { confirmProfile, saveProfile } from '../src/core/profile/repository';
@@ -199,9 +200,19 @@ describe('gate G4', () => {
   });
 
   it('records that the USER submitted, without touching a browser', async () => {
+    // The row is seeded as `draft` for the G3 tests above, and draft → submitted is not a
+    // transition the state machine allows. Advancing it here keeps those fixtures intact
+    // while putting this application where a real one would be by the time anybody could
+    // have clicked Submit on the employer's page.
+    db.update(schema.application)
+      .set({ status: 'awaiting_submit' })
+      .where(eq(schema.application.id, applicationId))
+      .run();
+
     const res = await app.inject({
       method: 'POST',
       url: `/api/applications/${applicationId}/mark-submitted`,
+      payload: { confirmed: true },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().status).toBe('submitted');
@@ -214,5 +225,51 @@ describe('gate G4', () => {
     const events = db.select().from(schema.applicationEvent).all();
     const marked = events.find((e) => e.type === 'marked_submitted')!;
     expect((marked.payload as { by: string }).by).toBe('user');
+  });
+
+  /**
+   * The confirmation is the whole point of this endpoint.
+   *
+   * `{ confirmed: true }` used to be declared in the shared schema and never read, so the
+   * one machine-checkable half of gate G4 was decorative: any POST at all stamped an
+   * application submitted. These two tests exist so it cannot quietly become decorative
+   * again.
+   */
+  it('refuses to record a submission nobody confirmed', async () => {
+    db.update(schema.application)
+      .set({ status: 'awaiting_submit', submittedAt: null })
+      .where(eq(schema.application.id, applicationId))
+      .run();
+
+    for (const payload of [undefined, {}, { confirmed: false }, { confirmed: 'yes' }]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/applications/${applicationId}/mark-submitted`,
+        payload,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json().error.code).toBe('CONFIRMATION_REQUIRED');
+    }
+
+    // And nothing was recorded on the way past.
+    const row = db.select().from(schema.application).all()[0]!;
+    expect(row.submittedAt).toBeNull();
+    expect(row.status).toBe('awaiting_submit');
+  });
+
+  it('refuses a transition the state machine does not allow', async () => {
+    db.update(schema.application)
+      .set({ status: 'draft', submittedAt: null })
+      .where(eq(schema.application.id, applicationId))
+      .run();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/applications/${applicationId}/mark-submitted`,
+      payload: { confirmed: true },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('ILLEGAL_TRANSITION');
+    expect(db.select().from(schema.application).all()[0]!.submittedAt).toBeNull();
   });
 });

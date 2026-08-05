@@ -611,11 +611,21 @@ describe('overall verdict', () => {
   });
 
   it('is ineligible as soon as one rule fails, even with unknowns present', () => {
+    // The unfamiliar city is what makes this test earn its name: it puts a real `unknown`
+    // alongside the closed posting's `fail`. Without it the scenario had no unknown in it
+    // at all, so reordering the verdict to check unknowns first would have badged a
+    // plainly disqualifying posting "unknown" and left this test green.
     const o = evaluateEligibility(
       input({
-        posting: posting({ isOpen: false, term: { season: 'summer', year: 2027 } }),
+        posting: posting({
+          isOpen: false,
+          term: { season: 'summer', year: 2027 },
+          locations: [{ city: 'Austin', region: 'TX', country: 'US', remote: false }],
+        }),
       }),
     );
+    expect(statusOf(o, 'location')).toBe('unknown');
+    expect(o.rules.some((r) => r.status === 'unknown')).toBe(true);
     expect(o.eligibility).toBe('ineligible');
   });
 });

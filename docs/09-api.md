@@ -112,17 +112,22 @@ Errors use a consistent envelope:
 | `GET` | `/api/applications/:id/fill` | The current run: filled fields, read-backs, skips, and why. |
 | `POST` | `/api/applications/:id/fill/continue` | Resume after a pause (login wall, needs-input). |
 | `DELETE` | `/api/applications/:id/fill` | Abandon the run and close the browser. |
-| `POST` | `/api/applications/:id/mark-submitted` | **G4.** Records that the user submitted it. Takes no body. |
+| `POST` | `/api/applications/:id/mark-submitted` | **G4.** Records that the user submitted it. Requires `{ confirmed: true }` — rejects with `CONFIRMATION_REQUIRED` without it, and `ILLEGAL_TRANSITION` from a status the model does not allow `submitted` to follow. |
 | `POST` | `/api/applications/:id/status` | Manual status transition with an optional note. |
 
 There is deliberately **no** `POST /api/applications/:id/submit`. The server has no code
 path that clicks a submit control; docs/07 § G4 sets out how that is enforced.
 
-Two corrections to what this section used to say. `mark-submitted` is **not** the only
-writer of `submitted_at` — `/status` also writes it when the user moves an application to
+One correction to what this section used to say. `mark-submitted` is **not** the only writer
+of `submitted_at` — `/status` also writes it when the user moves an application to
 `submitted`. Both are user-initiated, so G4 holds, but "the only endpoint" was false, and the
-same false claim sat in the schema comment. And `mark-submitted` requires no
-`{ confirmed: true }` body; it parses no body at all.
+same false claim sat in the schema comment.
+
+The `{ confirmed: true }` body is real and enforced. It was declared in the shared schema
+and read by nothing for a while, which made the one machine-checkable half of G4 decorative:
+any bare POST — a double-click, a retry after a dropped connection, a client firing on the
+wrong row — stamped an application submitted. The route now parses the body and applies the
+same transition check the status route does.
 
 > **Not built:** a `dryRun` flag on `/fill`, and `GET /api/applications/:id/presubmit`.
 > The pre-submit review is served by `GET /api/applications/:id/fill`.
@@ -154,9 +159,9 @@ type AppEvent =
   | { type: 'discovery.done'; runId: string; summary: RunSummary }
   | { type: 'match.new'; matchId: string; score: number }
   | { type: 'draft.progress'; applicationId: string; questionId: string; stage: string }
-  | { type: 'fill.step'; applicationId: string; field: string; status: 'ok'|'skipped'|'failed'; note?: string }
+  | { type: 'fill.step'; applicationId: string; field: string; status: 'ok'|'mismatch'|'skipped'|'failed'; note?: string }
   | { type: 'fill.needs_input'; applicationId: string; reason: 'login'|'captcha'|'unknown_field'; detail: string }
-  | { type: 'fill.done'; applicationId: string; filled: number; skipped: number }
+  | { type: 'fill.done'; applicationId: string; filled: number; mismatched: number; failed: number; skipped: number }
   | { type: 'task.failed'; taskId: string; kind: string; error: string };
 ```
 

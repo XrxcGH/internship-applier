@@ -5,6 +5,9 @@ import { logger } from './infra/logger';
 import { closeAllRuns } from './core/filling/run';
 import { uiIsBuilt } from './ui';
 
+/** Long enough for a browser to close politely, short enough that Ctrl+C feels like Ctrl+C. */
+const SHUTDOWN_TIMEOUT_MS = 5000;
+
 async function main(): Promise<void> {
   runMigrations();
 
@@ -27,14 +30,30 @@ async function main(): Promise<void> {
     );
   }
 
+  let shuttingDown = false;
   const shutdown = (signal: string) => {
+    // A second Ctrl+C used to re-enter this and close everything twice. Fastify rejects
+    // when an already-closing instance is closed again, and with no handler on the tail
+    // of the chain that rejection killed the process instead of the clean exit below.
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info({ signal }, 'shutting down');
+
+    // Installing signal handlers removed Node's own terminate-on-signal, so a Chromium
+    // that never finishes closing left Ctrl+C doing nothing at all and the server still
+    // holding the port — the stale-server state explainStartupFailure apologises for.
+    setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT_MS).unref();
+
     // Fill runs hold a real Chromium window. Without this, stopping the server leaves
     // browsers scattered across the user's desktop with no way back to them.
     void closeAllRuns()
       .catch(() => undefined)
       .then(() => app.close())
-      .then(() => process.exit(0));
+      .then(() => process.exit(0))
+      .catch((err: unknown) => {
+        logger.error({ err }, 'shutdown did not complete cleanly');
+        process.exit(1);
+      });
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));

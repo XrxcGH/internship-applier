@@ -22,7 +22,7 @@ import {
   parseWorkArrangement,
   parseYear,
 } from './normalize';
-import { stripHtml, type NormalizedPosting } from './sources/types';
+import { decodeEntities, stripHtml, type NormalizedPosting } from './sources/types';
 
 interface JsonLdJobPosting {
   '@type'?: string | string[];
@@ -74,11 +74,23 @@ function flattenLocations(
     out.push({
       city: typeof addr['addressLocality'] === 'string' ? addr['addressLocality'] : undefined,
       region: typeof addr['addressRegion'] === 'string' ? addr['addressRegion'] : undefined,
-      country: typeof addr['addressCountry'] === 'string' ? addr['addressCountry'] : 'US',
+      country: readCountry(addr['addressCountry']),
       remote: false,
     });
   }
   return out;
+}
+
+/**
+ * schema.org allows addressCountry to be a plain string or a Country object, and plenty
+ * of career pages use the object. Reading only the string form and defaulting everything
+ * else to "US" stored a Toronto posting with the right city, the right region, and the
+ * country "US" — which is then what the database keeps and the privacy export shows.
+ * This is the path the user points at any URL on earth, so an absent country stays absent.
+ */
+function readCountry(value: unknown): string | undefined {
+  const raw = typeof value === 'string' ? value : (value as { name?: unknown } | null)?.name;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
 }
 
 export interface ManualResult {
@@ -205,14 +217,6 @@ function safeHost(u: string): string | null {
   } catch {
     return null;
   }
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCharCode(Number(d)));
 }
 
 export function detectVendor(url: string, html = ''): string {

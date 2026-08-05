@@ -6,6 +6,7 @@
  * quietly contributing nothing — an invisible gap in coverage reads as "we searched
  * everywhere" when we didn't.
  */
+import { DEFAULT_FILTERS } from '@ia/shared';
 import { fetchJson, politeFetch } from '../../../infra/http/fetcher';
 import {
   canonicalUrl,
@@ -19,6 +20,7 @@ import {
   parseWorkArrangement,
   parseYear,
 } from '../normalize';
+import { parseLocation } from './ats';
 import type { JobSource, NormalizedPosting, SourceQuery, SourceResult } from './types';
 
 function build(
@@ -72,6 +74,15 @@ interface AdzunaJob {
   salary_max?: number;
 }
 
+/**
+ * Adzuna splits its API by country and this adapter only ever asks the US partition — the
+ * `us` segment in the search URL below. The country stamped on each result is derived from
+ * that same constant so the two cannot drift apart: point this at another partition and
+ * the locations follow, instead of quietly labelling Berlin and Manchester postings as
+ * American the way a separately written `country: 'US'` would.
+ */
+const ADZUNA_COUNTRY = 'us';
+
 export const adzuna: JobSource = {
   kind: 'adzuna',
   requiresKey: true,
@@ -90,7 +101,7 @@ export const adzuna: JobSource = {
     const what = encodeURIComponent(q.keywords?.join(' ') ?? 'internship');
     const where = encodeURIComponent(q.location ?? '');
     const url =
-      `https://api.adzuna.com/v1/api/jobs/us/search/1` +
+      `https://api.adzuna.com/v1/api/jobs/${ADZUNA_COUNTRY}/search/1` +
       `?app_id=${process.env.ADZUNA_APP_ID}&app_key=${process.env.ADZUNA_APP_KEY}` +
       `&results_per_page=${Math.min(q.limit ?? 50, 50)}&what=${what}${where ? `&where=${where}` : ''}` +
       `&content-type=application/json`;
@@ -111,7 +122,7 @@ export const adzuna: JobSource = {
                 {
                   city: j.location.area?.at(-1),
                   region: j.location.area?.at(-2),
-                  country: 'US',
+                  country: ADZUNA_COUNTRY.toUpperCase(),
                   remote: /remote/i.test(j.location.display_name),
                 },
               ]
@@ -195,6 +206,10 @@ export const usajobs: JobSource = {
           title: d.PositionTitle,
           postedAt: d.PublicationStartDate ?? null,
           closesAt: d.ApplicationCloseDate ?? null,
+          // 'US' is asserted here on purpose, unlike the other adapters. This is the US
+          // federal government's own hiring system, and the only geographic field read
+          // back is a country subdivision code — a state. The country is what the source
+          // says, not a default standing in for a value it never gave us.
           locations: (d.PositionLocation ?? []).map((l) => ({
             city: l.CityName,
             region: l.CountrySubDivisionCode,
@@ -213,6 +228,15 @@ export const usajobs: JobSource = {
 // ---------------------------------------------------------------- community list
 
 /**
+ * Which cycle the default list covers, read from the default term filter so that one
+ * place decides what "the upcoming season" is. The repo name used to be written out as
+ * Summer 2026, so a run with no repo override fetched an archived list of a season that
+ * had already closed while every filter in the app was set to Summer 2027.
+ */
+const DEFAULT_LIST_YEAR = DEFAULT_FILTERS.term.years[0] ?? new Date().getUTCFullYear() + 1;
+const DEFAULT_LIST_REPO = `SimplifyJobs/Summer${DEFAULT_LIST_YEAR}-Internships`;
+
+/**
  * SimplifyJobs maintains a well-structured, publicly published list of summer internship
  * postings specifically so tools can consume it. Read-only fetch of a raw JSON file.
  */
@@ -225,7 +249,7 @@ export const githubList: JobSource = {
     // with a default of '', so an omitted board arrives as an empty string and was
     // used verbatim — producing a raw.githubusercontent.com URL with nothing where the
     // repo goes. The sibling adapters all use a truthiness check for this reason.
-    const repo = q.board || 'SimplifyJobs/Summer2026-Internships';
+    const repo = q.board || DEFAULT_LIST_REPO;
     const url = `https://raw.githubusercontent.com/${repo}/dev/.github/scripts/listings.json`;
 
     let data: Array<Record<string, unknown>>;
@@ -239,6 +263,7 @@ export const githubList: JobSource = {
     }
 
     const postings: NormalizedPosting[] = [];
+    let unreadable = 0;
     for (const row of data) {
       const active = row['active'];
       const link = String(row['url'] ?? '');
@@ -261,25 +286,36 @@ export const githubList: JobSource = {
               postedAt: row['date_posted']
                 ? new Date(Number(row['date_posted']) * 1000).toISOString()
                 : null,
-              locations: locations.map((l) => ({
-                city: l.split(',')[0]?.trim(),
-                region: l.split(',')[1]?.trim(),
-                country: 'US',
-                remote: /remote/i.test(l),
-              })),
+              // The same parser the ATS adapters use, rather than a second splitter that
+              // filled the country in as "US" for every row. This list is not US-only —
+              // it carries Toronto, London and Zurich postings among the rest — and being
+              // the highest-volume source it put more wrongly-Americanised locations into
+              // the database than everything else combined, all of them visible to the
+              // user in the privacy export. A location that does not name its country now
+              // leaves the field empty instead of asserting the wrong one.
+              locations: locations.map((l) => parseLocation(l)),
             },
             `${title} at ${company}. ${terms.join(', ')}. ${locations.join('; ')}`,
           ),
         );
       } catch {
-        // A malformed row is skipped rather than failing the whole source.
+        // A malformed row is skipped rather than failing the whole source, but it is
+        // counted. If the list changes date_posted from epoch seconds to an ISO string,
+        // every dated row throws here — and reporting only the survivors made a run that
+        // lost hundreds of listings read as complete coverage of a very short list.
+        unreadable++;
       }
     }
 
-    return {
-      postings,
-      notes: [`github_list: ${postings.length} active listings from ${repo}`],
-    };
+    const notes = [`github_list: ${postings.length} active listings from ${repo}`];
+    if (unreadable > 0) {
+      notes.push(
+        `github_list: skipped ${unreadable} ${unreadable === 1 ? 'row' : 'rows'} in ${repo} ` +
+          'that could not be read. The list format may have changed.',
+      );
+    }
+
+    return { postings, notes };
   },
 };
 

@@ -128,7 +128,11 @@ export function computeStats(apps: TrackedApplication[], now = new Date()): Stat
       .length,
     awaitingSubmit: counted.filter((a) => a.status === 'awaiting_submit').length,
     submitted: counted.filter((a) => a.submittedAt !== null).length,
-    responded: counted.filter((a) => RESPONDED.includes(a.status)).length,
+    // Ever heard back, not currently sitting in a status that means it. An acknowledgement
+    // followed by long silence reads as ghosted, and counting only the present status would
+    // quietly drop it back out of "responded" — the response rate would fall week by week
+    // for applications that did, in fact, respond.
+    responded: counted.filter((a) => a.respondedAt !== null || RESPONDED.includes(a.status)).length,
     interviewing: counted.filter((a) => a.status === 'interview').length,
     offers: counted.filter((a) => a.status === 'offer').length,
     rejected: counted.filter((a) => a.status === 'rejected').length,

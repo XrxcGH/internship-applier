@@ -54,6 +54,19 @@ export interface JobSource {
 }
 
 /**
+ * A numeric entity, decoded as a code point rather than a UTF-16 unit.
+ *
+ * String.fromCharCode takes the number modulo 65536, so `&#128077;` (a thumbs-up, the
+ * kind of thing a job description puts in a perks list) came out as an unrelated CJK
+ * character. Anything outside the Unicode range is left as written rather than throwing —
+ * a stray `&#99999999;` in one posting must not take down the whole source.
+ */
+function decodeNumericEntity(match: string, digits: string): string {
+  const cp = Number(digits);
+  return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
+}
+
+/**
  * Turns HTML entities back into the characters they stand for.
  *
  * Separate from stripHtml because order matters and the two are needed at different
@@ -70,25 +83,29 @@ export function decodeEntities(html: string): string {
       .replace(/&#0?39;|&apos;/gi, "'")
       .replace(/&lt;/gi, '<')
       .replace(/&gt;/gi, '>')
-      .replace(/&#(\d+);/g, (_, d: string) => String.fromCharCode(Number(d)))
+      .replace(/&#(\d+);/g, decodeNumericEntity)
       // Ampersand last, so "&amp;lt;" does not become a tag.
       .replace(/&amp;/gi, '&')
   );
 }
 
 export function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCharCode(Number(d)))
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  return (
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&#(\d+);/g, decodeNumericEntity)
+      // Ampersand last here too. Decoding it first turned a description that talked about
+      // the "&amp;lt;code&amp;gt; tag" into one that talked about the "<code> tag".
+      .replace(/&amp;/gi, '&')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  );
 }

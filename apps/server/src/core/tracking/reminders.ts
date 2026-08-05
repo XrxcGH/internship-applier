@@ -11,7 +11,7 @@
 import type { TrackedApplication } from './status';
 import { derive, GHOST_AFTER_DAYS } from './status';
 
-export type ReminderKind = 'deadline' | 'follow_up' | 'still_open' | 'stale_offer';
+export type ReminderKind = 'deadline' | 'follow_up' | 'still_open';
 
 export interface Reminder {
   applicationId: string;

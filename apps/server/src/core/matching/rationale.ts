@@ -5,15 +5,22 @@
  * tells you why things look good is a ranking tool you stop believing, and the user is
  * about to spend real effort on these.
  *
- * The deterministic version is the default and always available; the model version is an
- * optional polish pass. Both are built from the same computed breakdown and rule results,
- * so neither can invent a reason.
+ * Written entirely in TypeScript from the computed breakdown and the rule results, so it
+ * cannot invent a reason and it reads the same with or without an API key.
+ *
+ * Not built: the model polish pass docs/05 describes. If one is added it has to take the
+ * same breakdown as its only source of facts, for the same reason.
  */
 import type { RuleResult, ScoreBreakdown } from '@ia/shared';
 import type { EligibilityStatus } from './eligibility';
 import type { ScoreOutcome } from './score';
 
 export interface RationaleInput {
+  /**
+   * Which posting this is. The sentences below never name it — the rationale sits under
+   * the company and title on screen, so repeating them would only cost the reader room —
+   * but a model pass would need them, and every caller has them to hand.
+   */
   company: string;
   title: string;
   eligibility: EligibilityStatus;

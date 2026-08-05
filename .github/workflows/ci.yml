@@ -43,10 +43,24 @@ jobs:
 
       # Release gate — see docs/07-form-automation.md.
       # The tool fills forms; the user submits them. Nothing may click a submit control.
+      #
+      # grep answers 1 for "found nothing" and 2 for "could not look" — an unreadable or
+      # missing path. The old form sent stderr to /dev/null and treated both the same, so
+      # renaming apps/server/src would have printed "ok" having scanned no files at all.
       - name: G4 guard — no auto-submit path
         run: |
-          if grep -rniE 'submit[A-Za-z]*\.click|click\(\).*submit' apps/server/src 2>/dev/null; then
+          if [ ! -d apps/server/src ]; then
+            echo "::error::apps/server/src is missing, so the G4 scan checked nothing."
+            exit 1
+          fi
+          status=0
+          grep -rniE 'submit[A-Za-z]*\.click|click\(\).*submit' apps/server/src || status=$?
+          if [ "$status" -eq 0 ]; then
             echo "::error::Found a submit click in server source. The user submits their own application (G4)."
+            exit 1
+          fi
+          if [ "$status" -ne 1 ]; then
+            echo "::error::grep exited $status, so the G4 scan did not complete."
             exit 1
           fi
           echo "ok — no submit-click found"

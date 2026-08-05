@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { decryptField, encryptField, isEncrypted } from '../src/infra/crypto/fieldCrypto';
+import {
+  constantTimeEquals,
+  decryptField,
+  encryptField,
+  isEncrypted,
+} from '../src/infra/crypto/fieldCrypto';
 
 describe('field encryption', () => {
   it('round-trips', () => {
@@ -49,5 +54,33 @@ describe('field encryption', () => {
     for (const s of ['', 'café ☕', '日本語', 'a'.repeat(10_000)]) {
       expect(decryptField(encryptField(s, 'r'), 'r')).toBe(s);
     }
+  });
+});
+
+/**
+ * The app-token check compares a secret, and `!==` on strings returns as soon as it finds a
+ * differing byte. The timing that leaks is small and the attacker has to already be on this
+ * machine, so this is not the wall the app leans on — but a comparison helper that exists
+ * and is not used by the one comparison that wants it is worse than not having one.
+ */
+describe('constant-time comparison', () => {
+  it('is true only for an exact match', () => {
+    expect(constantTimeEquals('abc123', 'abc123')).toBe(true);
+    expect(constantTimeEquals('', '')).toBe(true);
+  });
+
+  it('is false for a value differing only in its last character', () => {
+    expect(constantTimeEquals('abc123', 'abc124')).toBe(false);
+  });
+
+  it('is false for different lengths, without throwing', () => {
+    expect(constantTimeEquals('abc', 'abcdef')).toBe(false);
+    expect(constantTimeEquals('abcdef', 'abc')).toBe(false);
+    expect(constantTimeEquals('', 'a')).toBe(false);
+  });
+
+  it('handles multi-byte characters by comparing bytes, not code units', () => {
+    expect(constantTimeEquals('café', 'café')).toBe(true);
+    expect(constantTimeEquals('café', 'cafe')).toBe(false);
   });
 });

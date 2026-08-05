@@ -2,8 +2,15 @@ import { z } from 'zod';
 
 /** YYYY-MM */
 export const YearMonth = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected YYYY-MM');
-/** YYYY-MM-DD */
-export const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
+/**
+ * YYYY-MM-DD, and a real calendar day.
+ *
+ * A shape-only regex accepted 2008-02-31, which `new Date` does not reject — it rolls the
+ * overflow forward to 2008-03-03. A date of birth typed one digit wrong was stored, then
+ * read back as an age up to three days off, which is invisible except at the 18+ boundary
+ * where it decides whether the user is shown a posting at all.
+ */
+export const IsoDate = z.iso.date({ error: 'expected YYYY-MM-DD' });
 
 export const EducationLevel = z.enum([
   'high_school',

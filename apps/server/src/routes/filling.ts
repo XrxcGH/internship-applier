@@ -12,10 +12,12 @@
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulid';
-import type { ApplicationAnswer, ConfirmedProfile } from '@ia/shared';
+import type { ApplicationAnswer, ApplicationStatus, ConfirmedProfile } from '@ia/shared';
+import { MarkSubmittedRequest } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
 import { logger } from '../infra/logger';
 import { getProfile } from '../core/profile/repository';
+import { canTransition } from '../core/tracking/status';
 import {
   continueRun,
   discardRun,
@@ -234,13 +236,39 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
    * Gate G4, recorded rather than performed.
    *
    * The user submits the application themselves, on the real page, and then tells the
-   * tracker they did. This endpoint writes a timestamp. It does not open a browser, it
-   * does not click anything, and it is the only thing in this codebase that has the word
-   * submitted in its name.
+   * tracker they did. This endpoint writes a timestamp. It does not open a browser and it
+   * does not click anything.
+   *
+   * It is not the only writer of `submitted_at` — a user moving an application to
+   * `submitted` through POST /api/applications/:id/status writes it too. Both are things a
+   * person did, which is what G4 actually requires; "the only endpoint" was a neater claim
+   * than the truth, and docs/03 states the accurate version.
+   *
+   * Two things make that more than a slogan. The body must actually say `confirmed: true`,
+   * and the application must be somewhere the status model allows `submitted` to follow
+   * from. Neither used to be checked. Any bare POST that reached this URL — a double-click,
+   * a retry after a dropped connection, a client firing on the wrong row — stamped
+   * `submitted` on whatever it found, including a draft with no form filled and not one
+   * answer approved, and the user was then looking at a board that said they had applied
+   * somewhere they had not. All of G4 rests on a person saying they did it, and the server
+   * was taking nobody's word for anything, because it never asked. The sibling /status route
+   * has enforced the same state machine all along.
    */
   app.post<{ Params: { id: string } }>(
     '/api/applications/:id/mark-submitted',
     async (req, reply) => {
+      const parsed = MarkSubmittedRequest.safeParse(req.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: {
+            code: 'CONFIRMATION_REQUIRED',
+            message:
+              'Send { "confirmed": true } to record that you submitted this yourself on the ' +
+              'real page. Nothing has been recorded.',
+          },
+        });
+      }
+
       const row = db
         .select()
         .from(schema.application)
@@ -252,9 +280,22 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
           .send({ error: { code: 'NOT_FOUND', message: 'No such application.' } });
       }
 
+      // `user` is the honest caller: this endpoint exists precisely because a person, not
+      // this tool, did the submitting. That is the same actor the /status route passes.
+      const allowed = canTransition(row.status as ApplicationStatus, 'submitted', 'user');
+      if (!allowed.ok) {
+        return reply
+          .code(409)
+          .send({ error: { code: 'ILLEGAL_TRANSITION', message: allowed.reason } });
+      }
+
       const now = new Date().toISOString();
+      // The first submission is the one that happened. Overwriting the timestamp on a
+      // second call restarted the silence clock the tracker measures ghosting from, so an
+      // application nobody had answered in two months went back to looking freshly sent.
+      const submittedAt = row.submittedAt ?? now;
       db.update(schema.application)
-        .set({ status: 'submitted', submittedAt: now, updatedAt: now })
+        .set({ status: 'submitted', submittedAt, updatedAt: now })
         .where(eq(schema.application.id, req.params.id))
         .run();
 
@@ -263,12 +304,12 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
           id: ulid(),
           applicationId: req.params.id,
           type: 'marked_submitted',
-          payload: { by: 'user' },
+          payload: { by: 'user', note: parsed.data.note ?? null },
         })
         .run();
 
       await discardRun(req.params.id);
-      return { id: req.params.id, status: 'submitted', submittedAt: now };
+      return { id: req.params.id, status: 'submitted', submittedAt };
     },
   );
 }

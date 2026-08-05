@@ -135,8 +135,11 @@ answer variant.
 
 ### M8 — Hardening & packaging (3 days)
 
-Privacy export/delete. Cost panel. Guardian mode. Error taxonomy and recovery paths. Docs.
+Privacy export/delete. Cost panel. Error taxonomy and recovery paths. Docs.
 Single-command packaging (`npx internship-applier`) serving the built UI from Fastify.
+
+Guardian mode was scoped into this milestone and is **deferred out of v1** by the locked
+decision below. None of it was built; docs/10 § Guardian mode keeps the spec.
 
 **Rough total: ~24 working days** for one person. M6 is the most likely to overrun; Workday
 alone could eat several days and is the right thing to cut to a later milestone if the
@@ -147,7 +150,7 @@ schedule slips.
 | Layer | Approach |
 | --- | --- |
 | **Eligibility rules** | The highest-stakes code. ~60 hand-labeled JD excerpts as golden fixtures; property tests (no `fail` without a citation; `unknown` never yields `fail`; adding a profile fact never turns `eligible` into `ineligible`); a regression test per bug, permanently. |
-| **Source adapters** | Recorded HTTP fixtures (nock/msw). Normalization is pure and unit-tested per source. A weekly CI job hits the live APIs to detect schema drift and opens an issue on failure — never fails the main build. |
+| **Source adapters** | Normalization is pure and unit-tested: `normalize.test.ts` covers season and year, position type, work arrangement, term dates and duration, compensation, URL and title identity, and reading HTML out of a feed. **Not built:** recorded HTTP fixtures — neither `nock` nor `msw` is installed in any workspace — and the weekly CI job that was to hit the live APIs for schema drift and open an issue without failing the main build. CI triggers on push to `main` and on pull requests; there is no `schedule` block. |
 | **Extraction quality** | An eval harness over a small set of anonymized resumes with hand-labeled expected profiles; reports per-field precision/recall. Run before any extraction-prompt change ships. |
 | **FactGuard** | An adversarial suite: drafts with planted fabrications (invented employer, inflated duration, wrong GPA, nonexistent skill). Every one must be caught. This suite is a release gate. |
 | **StyleProfile** | Metric computation unit-tested against hand-measured samples; a round-trip test that a draft targeting a profile lands within tolerance. |

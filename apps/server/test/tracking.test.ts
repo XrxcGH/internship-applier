@@ -6,8 +6,13 @@
  *   - a rate computed from five data points is refused rather than shown;
  *   - a CSV cell cannot become a spreadsheet formula.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { ulid } from 'ulid';
 import type { ApplicationStatus } from '@ia/shared';
+import { buildApp } from '../src/app';
+import { db, schema } from '../src/infra/db/client';
+import { runMigrations } from '../src/infra/db/migrate';
 import {
   canTransition,
   BOARD_COLUMNS,
@@ -163,6 +168,65 @@ describe('what needs the user, one thing at a time', () => {
     const recent = derive(app({ status: 'submitted', submittedAt: daysAgo(10) }), NOW);
     expect(recent.effectiveStatus).toBe('submitted');
     expect(recent.attention).toBe('none');
+  });
+
+  /**
+   * The silence clock for an acknowledged application used to be anchored on `updatedAt`,
+   * the row's generic last-modified stamp. Every status write rewrites that column, and
+   * re-setting a status to the one it already has is a legal write, so a user tidying the
+   * board and clicking "Acknowledged" on a card that already said Acknowledged reset four
+   * months of silence to zero. The verdict could be postponed indefinitely by touching the
+   * row, which is exactly the opposite of what a ghosting clock is for.
+   */
+  it('does not restart the ghosting clock when the row is merely touched', () => {
+    const acknowledged = app({
+      status: 'acknowledged',
+      submittedAt: daysAgo(120),
+      respondedAt: daysAgo(GHOST_AFTER_DAYS + 10),
+      // Touched a minute ago, as a no-op status re-set leaves it.
+      updatedAt: daysAgo(0),
+    });
+
+    const d = derive(acknowledged, NOW);
+    expect(d.effectiveStatus).toBe('ghosted');
+    expect(d.attention).toBe('silent');
+    expect(d.daysQuiet).toBe(GHOST_AFTER_DAYS + 10);
+    // And the number in the sentence is the number in the payload.
+    expect(d.nudge).toBe(
+      `No word for ${String(GHOST_AFTER_DAYS + 10)} days. Worth following up, or letting go.`,
+    );
+  });
+
+  it('counts silence from the reply, not from the submission', () => {
+    // Answered on day ten of ninety: quiet for eighty days, not ninety.
+    const d = derive(
+      app({ status: 'acknowledged', submittedAt: daysAgo(90), respondedAt: daysAgo(80) }),
+      NOW,
+    );
+    expect(d.daysQuiet).toBe(80);
+    expect(d.daysSinceSubmitted).toBe(90);
+
+    // And an employer who wrote back recently is not silent at all, however long ago the
+    // application went out.
+    const recent = derive(
+      app({ status: 'acknowledged', submittedAt: daysAgo(200), respondedAt: daysAgo(3) }),
+      NOW,
+    );
+    expect(recent.effectiveStatus).toBe('acknowledged');
+  });
+
+  it('falls back to the submission date when no reply was ever recorded', () => {
+    // Rows written before the status history was read carry no respondedAt.
+    const d = derive(
+      app({
+        status: 'acknowledged',
+        submittedAt: daysAgo(GHOST_AFTER_DAYS + 2),
+        respondedAt: null,
+        updatedAt: daysAgo(0),
+      }),
+      NOW,
+    );
+    expect(d.effectiveStatus).toBe('ghosted');
   });
 
   it('maps every status to a board column', () => {
@@ -366,5 +430,143 @@ describe('CSV export', () => {
 
   it('uses CRLF, which is what the format says and what Excel expects', () => {
     expect(toCsv([app()], NOW)).toContain('\r\n');
+  });
+});
+
+/**
+ * Gate G4 is the strongest promise this app makes: nothing here submits an application, so
+ * the only way a row becomes `submitted` is a person saying they did it. Half of that is
+ * structural — there is no submit endpoint — and the other half is this route refusing to
+ * take the claim on trust. Both halves are checked below, because the machine-checkable one
+ * was decorative for a while: the schema asked for `{ confirmed: true }` and the route never
+ * read a body, so any request that reached the URL stamped `submitted` on whatever it found,
+ * including a draft with no approved answers.
+ */
+describe('marking submitted takes the user at their word, and asks for it', () => {
+  let server: FastifyInstance;
+  let profileId: string;
+
+  beforeAll(async () => {
+    runMigrations();
+    server = await buildApp({ skipAuth: true });
+    await server.ready();
+
+    profileId = ulid();
+    db.insert(schema.profile)
+      .values({ id: profileId, fullName: 'x', email: 'x', payload: {}, derived: {} } as never)
+      .run();
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  /** A posting, a match, and an application sitting in `status`. Returns the application id. */
+  function seed(status: ApplicationStatus): string {
+    const postingId = ulid();
+    db.insert(schema.jobPosting)
+      .values({
+        id: postingId,
+        canonicalUrl: `https://example.com/j/${postingId}`,
+        applyUrl: `https://example.com/j/${postingId}/apply`,
+        company: 'Northwind Systems',
+        title: 'Software Engineering Intern',
+        descriptionText: 'Summer internship.',
+        fingerprint: postingId,
+      })
+      .run();
+
+    const matchId = ulid();
+    db.insert(schema.match)
+      .values({
+        id: matchId,
+        postingId,
+        profileId,
+        eligibility: 'eligible',
+        rules: [],
+        blockers: [],
+        score: 80,
+        breakdown: {},
+        rationale: 'test',
+      })
+      .run();
+
+    const id = ulid();
+    db.insert(schema.application)
+      .values({ id, matchId, status, applyUrl: `https://example.com/j/${postingId}/apply` })
+      .run();
+    return id;
+  }
+
+  const markSubmitted = (id: string, payload?: Record<string, unknown>) => {
+    const url = `/api/applications/${id}/mark-submitted`;
+    return payload === undefined
+      ? server.inject({ method: 'POST', url })
+      : server.inject({ method: 'POST', url, payload });
+  };
+
+  it('records the submission when the user confirms it', async () => {
+    const id = seed('awaiting_submit');
+    const res = await markSubmitted(id, { confirmed: true });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('submitted');
+    expect(res.json().submittedAt).toBeTruthy();
+
+    // The event log says who did it, because that distinction is the whole design.
+    const marked = db
+      .select()
+      .from(schema.applicationEvent)
+      .all()
+      .find((e) => e.applicationId === id && e.type === 'marked_submitted')!;
+    expect((marked.payload as { by: string }).by).toBe('user');
+  });
+
+  it('refuses a request that never says the user confirmed anything', async () => {
+    const id = seed('awaiting_submit');
+
+    for (const payload of [undefined, {}, { confirmed: false }, { confirmed: 'yes' }]) {
+      const res = await markSubmitted(id, payload);
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json().error.code).toBe('CONFIRMATION_REQUIRED');
+    }
+
+    // Nothing was written on the way to any of those refusals.
+    const row = db
+      .select()
+      .from(schema.application)
+      .all()
+      .find((a) => a.id === id)!;
+    expect(row.status).toBe('awaiting_submit');
+    expect(row.submittedAt).toBeNull();
+  });
+
+  it('refuses to call an application submitted that was never even filled', async () => {
+    // A draft has no approved answers and no filled form. Whatever the caller confirmed,
+    // it was not this application going to an employer.
+    const id = seed('draft');
+    const res = await markSubmitted(id, { confirmed: true });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('ILLEGAL_TRANSITION');
+
+    const row = db
+      .select()
+      .from(schema.application)
+      .all()
+      .find((a) => a.id === id)!;
+    expect(row.status).toBe('draft');
+    expect(row.submittedAt).toBeNull();
+  });
+
+  it('still has no endpoint that does the submitting', async () => {
+    const id = seed('awaiting_submit');
+    for (const url of [
+      `/api/applications/${id}/submit`,
+      `/api/applications/${id}/fill/submit`,
+      `/api/applications/${id}/send`,
+    ]) {
+      expect((await server.inject({ method: 'POST', url })).statusCode, url).toBe(404);
+    }
   });
 });

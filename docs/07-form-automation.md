@@ -101,11 +101,22 @@ Two-stage, cheap-first:
    label, surrounding text, control type, and options; returns `{semantic, confidence}`.
    Low confidence (< 0.75) → treated as `unknown`.
 
-`unknown` fields are **left blank** and surfaced in a "Needs your input" panel with a
-cropped screenshot of the field. They are never guessed at.
+`unknown` fields are **left blank** and surfaced for the user by label. They are never
+guessed at. There is no cropped screenshot of the field, as this section used to promise —
+nothing in the app captures a screenshot at all; see § The submit gate below.
 
-Learned mappings are cached per `(ats_vendor, normalized_label)` so the same field on the
-next Greenhouse form is free.
+> **Not built:** stage 2. Nothing in the classification path calls a model — there is no
+> `claude-haiku-4-5` request, and the descriptor stage 1 works from carries no
+> surrounding-text field for a model to read, so the seam that would feed one does not exist
+> either. What ships is stage 1 and the `unknown` behaviour above: a field the rule table
+> cannot name is left blank and handed to the user. That is the safe half of the two-stage
+> design, so its absence costs coverage rather than correctness — the fields it would have
+> recovered are the odd, one-off custom questions, and today those are all typed by hand.
+
+> **Not built:** the classification cache. There is no store keyed on
+> `(ats_vendor, normalized_label)`, so every field is classified from scratch on every run.
+> Stage 1 is a rule table and costs nothing, so what a cache would really save is a repeat
+> model call on the same odd label from the same vendor — worth having, not there yet.
 
 ## Redlines — fields that are never auto-filled
 
@@ -150,6 +161,13 @@ interface AtsAdapter {
 
 Detection order: URL host → embedded script fingerprints → DOM markers → `generic`.
 
+> **Not built:** any of the per-vendor adapters, and the interface above is the design
+> rather than shipped code — there is no `locateSubmit`, and nothing takes the per-step
+> screenshots the Workday row describes. What runs today is the generic `FormMap`-driven
+> path, which handles all of these in principle because it works from labels and roles
+> rather than vendor markup, but has never been pointed at a real posting from any of them.
+> docs/11 § M6 has the detail.
+
 ## Filling
 
 Per field, by control type:
@@ -166,8 +184,8 @@ Per field, by control type:
 - **file** — `setInputFiles` with the primary resume, plus generated cover letter / transcript
   when the field asks for them.
 - **richtext** — focus and type; verify via `innerText`.
-- **multi-step** — advance only after the current step validates; capture a screenshot per
-  step; on validation failure, stop and report which field the site rejected.
+- **multi-step** — advance only after the current step validates; on validation failure,
+  stop and report which field the site rejected. No screenshot is taken per step, or ever.
 
 Every write is verified by read-back. A field that didn't take is reported, not assumed.
 
@@ -202,10 +220,11 @@ static and behavioural; there is no runtime guard.
 
 ## Testing
 
-- **Fixture site** (`packages/fixtures`) — a local Express app serving deliberately nasty
-  forms: React-controlled inputs, shadow-DOM widgets, an iframe form, a 4-step wizard, a
-  fake login wall, a combobox with near-miss options, and a page containing every redlined
-  field type. Playwright tests run headless against it in CI.
+- **Fixture site** (`packages/fixtures`) — a dependency-free `node:http` server (the package
+  declares no dependencies at all) serving deliberately nasty forms: React-controlled
+  inputs, shadow-DOM widgets, an iframe form, a 3-step wizard, a fake login wall, a combobox
+  with near-miss options, and a page containing every redlined field type. Playwright tests
+  run headless against it in CI.
 - **Recorded page snapshots** — saved HTML from real ATS pages (scrubbed of PII) as
   regression fixtures for `formMap` + `classify`. No network, no real submissions.
 - **Redline test** — asserts that no redlined field is ever written, on every fixture.

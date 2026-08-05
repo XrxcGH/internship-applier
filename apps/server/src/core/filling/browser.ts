@@ -105,10 +105,26 @@ export interface Intervention {
  */
 const PASSWORD_FIELDS = ['input[type=password]', 'input[name*="password" i]'];
 
+/**
+ * A bot check is recognized by WHO IS SERVING IT, never by the word "challenge".
+ *
+ * `iframe[title*="challenge" i]` used to be in this list, and Playwright's title match is a
+ * case-insensitive substring, so it fired on every embedded coding assessment — HackerRank,
+ * Codility and CodeSignal all title their frame something like "Coding Challenge". And
+ * because this detector runs again on every continue, that verdict could never be cleared:
+ * the run sat in awaiting_user saying the page was running a bot check, while the
+ * application form beside the assessment was never read or filled.
+ */
 const BOT_CHECK_SIGNS = [
   'iframe[src*="recaptcha"]',
   'iframe[src*="hcaptcha"]',
-  'iframe[title*="challenge" i]',
+  'iframe[src*="challenges.cloudflare.com"]',
+  'iframe[src*="arkoselabs"]',
+  'iframe[src*="funcaptcha"]',
+  'iframe[src*="perimeterx"]',
+  // DataDome and GeeTest, which serve from their own hosts rather than a branded path.
+  'iframe[src*="captcha-delivery"]',
+  'iframe[src*="geetest"]',
   '[class*="cf-turnstile"]',
   '#challenge-running',
 ];

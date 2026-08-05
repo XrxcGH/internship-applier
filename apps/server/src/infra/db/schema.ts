@@ -224,7 +224,11 @@ export const application = sqliteTable(
     applyUrl: text('apply_url').notNull(),
     atsVendor: text('ats_vendor').notNull().default('unknown'),
     resumeDocumentId: text('resume_document_id').references(() => resumeDocument.id),
-    /** Gate G4. Written ONLY by POST /api/applications/:id/mark-submitted. */
+    /**
+     * Gate G4. Written only where the user themselves says it was submitted: POST
+     * /api/applications/:id/mark-submitted, and a user status change to 'submitted' via
+     * POST /api/applications/:id/status. Never by the fill run.
+     */
     submittedAt: text('submitted_at'),
     deadlineAt: text('deadline_at'),
     screenshotPath: text('screenshot_path'),

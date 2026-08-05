@@ -131,18 +131,27 @@ export interface Classified {
 
 /** Strip a question to comparable words, so trivial rewordings share a key. */
 function canonical(question: string): string {
-  return question
-    .toLowerCase()
-    .replace(/\(.*?\)/g, ' ')
-    .replace(/\b(?:max|maximum|no more than|up to|within|limit)\b.*$/i, ' ')
-    .replace(/\b\d+\s*(?:words?|characters?)\b/g, ' ')
-    .replace(/[^a-z\s]/g, ' ')
-    .replace(
-      /\b(?:please|kindly|briefly|the|a|an|your|you|us|we|our|is|are|do|does|to|of|in|for|and|or|that|this)\b/g,
-      ' ',
-    )
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    question
+      .toLowerCase()
+      .replace(/\(.*?\)/g, ' ')
+      // Only strip a stated limit, so a count has to follow. Without that requirement,
+      // "What excites you about working within fintech?" and the same question about
+      // healthcare both truncated to "what excites about working" and shared one reuse
+      // key, so approving the fintech answer pre-filled the healthcare application with it.
+      .replace(
+        /\b(?:max(?:imum)?|no more than|up to|within|limit(?:ed)?(?: to)?)\b[^a-z]*\d+.*$/i,
+        ' ',
+      )
+      .replace(/\b\d+\s*(?:words?|characters?)\b/g, ' ')
+      .replace(/[^a-z\s]/g, ' ')
+      .replace(
+        /\b(?:please|kindly|briefly|the|a|an|your|you|us|we|our|is|are|do|does|to|of|in|for|and|or|that|this)\b/g,
+        ' ',
+      )
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 /** Small stable hash. Not security-relevant — this is a bucket label. */

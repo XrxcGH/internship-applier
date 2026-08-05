@@ -45,6 +45,24 @@ function keyfilePath(): string {
   return config.paths.masterKey;
 }
 
+/**
+ * The key an earlier fallback run left on disk, if there is a usable one.
+ *
+ * Deliberately narrower than readFallbackKey: a keyfile of the wrong length is reported as
+ * absent rather than adopted, so a damaged file never gets copied into the credential store
+ * and made authoritative.
+ */
+function existingFallbackKey(): Buffer | null {
+  const file = keyfilePath();
+  if (!fs.existsSync(file)) return null;
+  try {
+    const key = Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'base64');
+    return key.length === KEY_BYTES ? key : null;
+  } catch {
+    return null;
+  }
+}
+
 function readFallbackKey(): Buffer {
   const file = keyfilePath();
   if (fs.existsSync(file)) {
@@ -95,9 +113,26 @@ export function getMasterKey(): Buffer {
         logger.error('master key in the OS keychain has the wrong length; refusing to use it');
         throw new CorruptMasterKeyError();
       }
-      const key = randomBytes(KEY_BYTES);
+      /**
+       * An empty credential store is not necessarily a first run.
+       *
+       * The fallback keyfile is a supported path — headless, CI, a locked session — so a
+       * profile can already be encrypted under it by the time the store becomes usable.
+       * Minting a fresh key here regardless meant name, email, phone, date of birth,
+       * address and resume text all stopped decrypting the moment the keychain started
+       * working, with nothing but an authentication failure to explain it. The keyfile is
+       * left where it is: the credential store may not persist what we just wrote, and one
+       * copy of the key is worth more than a tidy data directory. "Delete everything"
+       * still removes both.
+       */
+      const adopted = existingFallbackKey();
+      const key = adopted ?? randomBytes(KEY_BYTES);
       entry.setPassword(key.toString('base64'));
-      logger.info('generated a new field-encryption key in the OS credential store');
+      logger.info(
+        adopted
+          ? 'adopted the existing keyfile as the field-encryption key in the OS credential store'
+          : 'generated a new field-encryption key in the OS credential store',
+      );
       cached = key;
       return cached;
     } catch (err) {
@@ -125,11 +160,6 @@ export function getMasterKey(): Buffer {
   );
   cached = readFallbackKey();
   return cached;
-}
-
-/** Test-only: drop the cached key so a fresh one is read. */
-export function resetMasterKeyCache(): void {
-  cached = null;
 }
 
 /**

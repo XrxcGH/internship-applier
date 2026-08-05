@@ -29,6 +29,50 @@ const buckets = new Map<string, Bucket>();
 const cache = new Map<string, CacheEntry>();
 const robots = new Map<string, Set<string>>();
 
+/**
+ * How many response bodies to keep at once.
+ *
+ * The TTL above decides whether a hit is SERVED, never whether an entry is dropped, so
+ * every distinct URL a session touched used to stay resident for the life of the process.
+ * A server left running across a few scheduled refreshes fetches thousands of posting
+ * pages, and their HTML sat in memory with nothing bounding it.
+ */
+const MAX_CACHE_ENTRIES = 500;
+
+/**
+ * A cached body, if it is still worth having.
+ *
+ * Past the TTL an entry earns its keep only through its validators: an etag or a
+ * last-modified turns the next request into a 304 instead of a download. Without either,
+ * an expired body is a stale page taking up room and is dropped here.
+ */
+function readCache(url: string): CacheEntry | undefined {
+  const entry = cache.get(url);
+  if (!entry) return undefined;
+  if (Date.now() - entry.at < CACHE_TTL_MS) return entry;
+  if (entry.etag ?? entry.lastModified) return entry;
+  cache.delete(url);
+  return undefined;
+}
+
+function rememberResponse(url: string, entry: CacheEntry): void {
+  // Deleting before setting moves the key to the end, so map order is the order the bodies
+  // were WRITTEN, not the order they were last read — reads leave the order alone on
+  // purpose. What decides whether an entry is still worth anything here is its age: it is
+  // dead six hours after it was fetched, and being read does not make it any fresher. So
+  // the first key is the entry closest to expiring and is exactly the one to drop.
+  // Promoting on read would invert that, keeping a body with minutes of life left and
+  // evicting one downloaded seconds ago. The 304 path re-inserts as well, because a
+  // not-modified answer really does restart the clock on that body.
+  cache.delete(url);
+  cache.set(url, entry);
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    cache.delete(oldest.value);
+  }
+}
+
 export interface FetchOptions {
   /** Requests per second for this host. Defaults to 1. */
   rps?: number;
@@ -193,7 +237,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
     }
   }
 
-  const hit = cache.get(url);
+  const hit = readCache(url);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.body;
 
   let lastErr: unknown;
@@ -216,11 +260,21 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
       });
 
       if (res.status === 304 && hit) {
-        cache.set(url, { ...hit, at: Date.now() });
+        rememberResponse(url, { ...hit, at: Date.now() });
         return hit.body;
       }
 
       if (res.status === 429 || res.status >= 500) {
+        // Kept so the throw at the end of the loop carries the real status. Without it, a
+        // source that answered 429 five times in a row surfaced as HttpError(status 0),
+        // and the per-source health line the user reads said only that something failed —
+        // not that it was a rate limit rather than an outage or a dead network.
+        lastErr = new HttpError(`${res.status} ${res.statusText}`, res.status, url);
+
+        // Waiting after the final attempt delays the error by up to thirty seconds and
+        // changes nothing, because there is no attempt left to make.
+        if (attempt === MAX_ATTEMPTS - 1) break;
+
         /**
          * Two bugs lived in one line here.
          *
@@ -245,7 +299,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
       if (!res.ok) throw new HttpError(`${res.status} ${res.statusText}`, res.status, url);
 
       const body = await res.text();
-      cache.set(url, {
+      rememberResponse(url, {
         body,
         etag: res.headers.get('etag') ?? undefined,
         lastModified: res.headers.get('last-modified') ?? undefined,
@@ -264,6 +318,16 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
   throw lastErr instanceof Error ? lastErr : new HttpError('request failed after retries', 0, url);
 }
 
+/**
+ * A documented API endpoint, parsed.
+ *
+ * `isDocumentedApi` defaults on here, so every call through this function skips robots.txt.
+ * That is right for the endpoints it exists for — Greenhouse, Lever, Ashby and Adzuna all
+ * publish these as APIs — and wrong for anything that renders a page for humans. A page
+ * goes through politeFetch even when it happens to return JSON. Pass
+ * `isDocumentedApi: false` if a caller is ever unsure; the default is a convenience, not a
+ * claim about the URL.
+ */
 export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
   return JSON.parse(await politeFetch(url, { isDocumentedApi: true, ...opts })) as T;
 }
@@ -282,10 +346,3 @@ function backoffMs(attempt: number): number {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Test-only. */
-export function resetHttpState(): void {
-  buckets.clear();
-  cache.clear();
-  robots.clear();
-}

@@ -86,8 +86,11 @@ sessions are Playwright storage-state files created by the user logging in thems
 
 ## Data in transit
 
-- All outbound traffic is HTTPS with certificate validation on; there is no
-  `rejectUnauthorized: false` anywhere and a test asserts it.
+- All outbound traffic is HTTPS with certificate validation on. There is no
+  `rejectUnauthorized: false` anywhere in `apps/` or `packages/`, and nothing turns
+  validation off at the agent level. **No test asserts that**, unlike the G4 submit-click
+  scan — it is a true statement about the source as it stands, not a property guarded
+  against coming back.
 - The local API binds `127.0.0.1` only, never `0.0.0.0`. CORS is restricted to the local
   origin, and an `X-App-Token` header (random per run) gates every API route.
 
@@ -195,7 +198,9 @@ applications or missed ones.
 
 ## Dependency hygiene
 
-- `npm audit` in CI; Dependabot on.
+- `npm audit --audit-level=high` in CI, so high and critical findings fail the build. The
+  standing moderate is assessed in docs/13. **Dependabot is not configured** — `.github`
+  holds `workflows/ci.yml` and nothing else, so upgrades are done by hand.
 - Lockfile committed; `npm ci` in CI.
 - Playwright browsers pinned to a specific revision.
 - New runtime dependencies need a one-line justification in the PR — this app handles a

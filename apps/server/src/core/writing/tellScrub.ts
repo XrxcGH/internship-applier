@@ -270,6 +270,18 @@ function splitSentences(text: string): string[] {
 
 const countWords = (s: string): number => (s.match(/[\p{L}'-]+/gu) ?? []).length;
 
+/**
+ * Em-dashes, including the double hyphen people type when they have no — key.
+ * `styleProfile.ts` measures the user's baseline with this, and the density tell below
+ * compares against that baseline, so both sides have to count the same thing — otherwise
+ * someone who writes "--" gets a baseline they can never trip and the tell dies silently.
+ */
+export const EM_DASH = /—|--/g;
+
+export function countEmDashes(text: string): number {
+  return (text.match(EM_DASH) ?? []).length;
+}
+
 export function findTells(text: string, opts: ScrubOptions = {}): Tell[] {
   const tells: Tell[] = [
     ...scanPatterns(
@@ -346,7 +358,10 @@ export function findTells(text: string, opts: ScrubOptions = {}): Tell[] {
     const lens = sents.map(countWords);
     const mean = lens.reduce((a, b) => a + b, 0) / lens.length;
     const sd = Math.sqrt(lens.reduce((a, b) => a + (b - mean) ** 2, 0) / (lens.length - 1));
-    const floor = opts.baselineSentenceStdev !== undefined ? opts.baselineSentenceStdev * 0.6 : 4;
+    // A measured stdev of zero means one sentence of sample, not a writer with no rhythm
+    // at all, so it falls back to the generic floor rather than switching the loudest
+    // structural check off for anyone who supplied a single line of writing.
+    const floor = opts.baselineSentenceStdev ? opts.baselineSentenceStdev * 0.6 : 4;
     if (sd < floor) {
       tells.push({
         kind: 'uniform_rhythm',
@@ -358,15 +373,16 @@ export function findTells(text: string, opts: ScrubOptions = {}): Tell[] {
   }
 
   // Em-dash density, relative to how this person actually writes.
-  const emDashes = (text.match(/—/g) ?? []).length;
+  const emDashes = countEmDashes(text);
   const per100 = (emDashes / Math.max(1, totalWords)) * 100;
   const baseline = opts.baselineEmDashPer100 ?? 0.5;
   if (emDashes >= 2 && per100 > Math.max(baseline * 2, 1.2)) {
-    const idx = text.indexOf('—');
+    const first = text.match(/—|--/);
+    const idx = first?.index ?? 0;
     tells.push({
       kind: 'em_dash_density',
-      match: '—',
-      span: { start: idx, end: idx + 1 },
+      match: first?.[0] ?? '—',
+      span: { start: idx, end: idx + (first?.[0].length ?? 1) },
       note: `${emDashes} em-dashes in ${totalWords} words (${per100.toFixed(1)} per 100${
         opts.baselineEmDashPer100 !== undefined ? `, versus your usual ${baseline}` : ''
       }). Swap some for a period or a comma.`,

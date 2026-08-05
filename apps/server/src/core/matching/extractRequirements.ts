@@ -14,8 +14,9 @@
  * Both passes go through the same two guards before anything is persisted:
  *   - the quote must literally appear in the description (quoteGuard);
  *   - the value must validate against the per-kind schema (requirementValues).
- * A requirement failing either is dropped, not trusted — an invented requirement could
- * wrongly disqualify the user.
+ * A quote that is not in the posting is discarded outright. A value that does not validate
+ * is kept, but as `other`/`unclear`, which no rule can fail anyone on. Neither is taken at
+ * face value — an invented requirement could wrongly disqualify the user.
  */
 import { ulid } from 'ulid';
 import { z } from 'zod';
@@ -27,7 +28,14 @@ import { validateValue } from './requirementValues';
 
 export interface ExtractionResult {
   requirements: JobRequirement[];
-  /** Everything discarded, and why. Surfaced in the UI rather than swallowed. */
+  /**
+   * What the two guards caught, and why.
+   *
+   * A quote that is not in the posting is genuinely discarded. A value that fails its
+   * schema is not: the requirement is kept as `other`/`unclear`, which is non-blocking,
+   * and listed here so the reason is still visible. Only the length of this list reaches
+   * the run summary today — nothing shows the per-item detail to the user yet.
+   */
   dropped: Array<{ kind: string; quote: string; reason: string }>;
   usedModel: boolean;
 }
@@ -78,15 +86,54 @@ function sentenceAround(text: string, index: number, length: number): string {
   return text.slice(start, end).trim().slice(0, 400);
 }
 
+/**
+ * Where one clause stops and the next begins.
+ *
+ * A full stop is not the only thing that ends a clause — a comma, a semicolon, a colon, a
+ * dash, a line break in a bullet list and a coordinating conjunction all do it too. The
+ * negation checks below need this because a posting routinely puts a "no" that belongs to
+ * one clause in front of a requirement stated in the next: "This role does not offer
+ * relocation, and an active security clearance is required" is a posting that requires a
+ * clearance, and "Sponsorship is not available; security clearance is required" is another.
+ * Reading only as far back as the last `.` swallowed both, so a student saw no clearance
+ * requirement on a posting that has one and applied for something they cannot be hired for.
+ */
+const CLAUSE_BREAK =
+  /[.,;:!?()\n\r–—]|\b(?:and|but|or|nor|yet|so|however|although|though|while|whereas)\b/gi;
+
+/**
+ * The bounds of the clause containing the match at `index`.
+ *
+ * Breaks that fall inside the match itself are ignored, which matters because the
+ * citizenship pattern matches "U.S. citizenship" — full of full stops of its own.
+ */
+function clauseBounds(text: string, index: number, length: number): [number, number] {
+  CLAUSE_BREAK.lastIndex = 0;
+  let start = 0;
+  let end = text.length;
+  let m: RegExpExecArray | null;
+  while ((m = CLAUSE_BREAK.exec(text)) !== null) {
+    if (m.index + m[0].length <= index) start = m.index + m[0].length;
+    else if (m.index >= index + length) {
+      end = m.index;
+      break;
+    }
+  }
+  return [start, end];
+}
+
 export function deterministicRequirements(description: string): Candidate[] {
   const out: Candidate[] = [];
   const push = (c: Omit<Candidate, 'sourceQuote'>, m: RegExpMatchArray) => {
     out.push({ ...c, sourceQuote: sentenceAround(description, m.index ?? 0, m[0].length) });
   };
 
-  // Age — "must be at least 18 years of age", "18+ to apply"
+  // Age — "must be at least 18 years of age", "must be 18 years or older", "be 18+ to apply".
+  //
+  // "or older" is as common in real postings as "of age", and without it the clause fell
+  // through to the model, which is the one pass that does not run without an API key.
   for (const m of description.matchAll(
-    /\b(?:must be|be)\s+(?:at least\s+)?(\d{2})\s*(?:\+|years?\s*(?:of age|old))/gi,
+    /\b(?:must be|be)\s+(?:at least\s+)?(\d{2})\s*(?:\+|(?:years?\s*)?(?:of age|old|or older|or over|or above))/gi,
   )) {
     const min = Number(m[1]);
     if (min >= 14 && min <= 25) {
@@ -136,12 +183,19 @@ export function deterministicRequirements(description: string): Candidate[] {
   // hard-fails every applicant who is not a US citizen. docs/11 calls a false
   // `ineligible` the worst bug this app can have, and this was one, triggered by a
   // sentence the employer wrote to be welcoming.
+  //
+  // The negation has to be looked for on both sides of the phrase, because "U.S.
+  // citizenship" matches on its own and the "not" that cancels it usually comes after.
+  // The window is the clause, not the sentence: on "This role does not offer relocation,
+  // and U.S. citizenship is required" a sentence-wide check found the "not" that belonged
+  // to relocation and threw away a citizenship requirement the posting really states.
   for (const m of description.matchAll(
     /\b(?:must be a |requires? )?(?:U\.?S\.?|United States) citizen(?:ship)?\b(?:\s+is\s+required)?/gi,
   )) {
-    const sentence = sentenceAround(description, m.index ?? 0, m[0].length);
+    const [from, to] = clauseBounds(description, m.index ?? 0, m[0].length);
+    const clause = description.slice(from, to);
     if (
-      /\b(not|no|without|need not|regardless|any nationality|all nationalities)\b/i.test(sentence)
+      /\b(not|no|without|need not|regardless|any nationality|all nationalities)\b/i.test(clause)
     ) {
       continue;
     }
@@ -157,10 +211,21 @@ export function deterministicRequirements(description: string): Candidate[] {
     );
   }
 
-  // Security clearance
+  // Security clearance.
+  //
+  // "No security clearance is required for this role" contains the phrase, and without the
+  // negation check it produced a requirement that put "This posting requires a security
+  // clearance" on screen directly above the quote saying the opposite.
+  //
+  // Only the text before the phrase is examined. A "without" that comes after it is
+  // usually part of the requirement rather than a cancellation of it — "a clearance is
+  // required for applicants without prior federal experience" is still a clearance.
   for (const m of description.matchAll(
     /\b(?:active\s+)?(?:security\s+)?clearance\s+(?:is\s+)?(?:required|needed)\b|\bmust (?:be able to )?obtain .{0,20}clearance\b/gi,
   )) {
+    const [from] = clauseBounds(description, m.index ?? 0, m[0].length);
+    const lead = description.slice(from, m.index ?? 0);
+    if (/\b(?:no|not|without)\b/i.test(lead)) continue;
     push(
       {
         kind: 'citizenship',
@@ -273,6 +338,10 @@ const LlmRequirements = z.object({
         'enrollment',
         'work_auth',
         'citizenship',
+        // No rule reads `location`. The location rule judges the posting's own structured
+        // locations, which the board gives us directly and more reliably than prose. The
+        // kind stays here so a geographic restriction has somewhere to go instead of
+        // being flattened into `other`.
         'location',
         'term_dates',
         'experience_years',

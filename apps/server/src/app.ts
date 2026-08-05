@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { config } from './config';
 import { logger } from './infra/logger';
+import { constantTimeEquals } from './infra/crypto/fieldCrypto';
 import { healthRoutes } from './routes/health';
 import { profileRoutes } from './routes/profile';
 import { resumeRoutes } from './routes/resumes';
@@ -19,8 +20,6 @@ import { registerUiStatic } from './ui';
 export interface BuildOptions {
   /** Disable the X-App-Token check. Test-only. */
   skipAuth?: boolean;
-  /** Do not serve the built interface, even if one exists. */
-  skipUi?: boolean;
 }
 
 export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance> {
@@ -67,7 +66,14 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     // read data/app.db and the keyfile directly, so the token was never a boundary against
     // it. docs/10 says the same thing rather than the stronger claim it used to make.
     if (req.url === '/api/health' || req.url === '/api/session') return;
-    if (req.headers['x-app-token'] !== config.appToken) {
+
+    // A missing header is `undefined` and a header sent twice can arrive as an array;
+    // neither is the token, and both are rejected before the comparison rather than being
+    // coerced into a string that might accidentally match. The comparison itself is
+    // constant-time so that the time a rejection takes says nothing about how many leading
+    // characters of the token a guess got right.
+    const presented = req.headers['x-app-token'];
+    if (typeof presented !== 'string' || !constantTimeEquals(presented, config.appToken)) {
       return reply.code(401).send({
         error: { code: 'INTERNAL', message: 'Missing or invalid X-App-Token.' },
       });
@@ -76,8 +82,12 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
 
   app.setErrorHandler((err: FastifyError, _req, reply) => {
     logger.error({ err }, 'unhandled request error');
-    void reply.code(err.statusCode ?? 500).send({
-      error: { code: 'INTERNAL', message: err.message },
+    // Fastify raises client mistakes here too, and they kept the status while being labelled
+    // INTERNAL: a 13 MB resume trips the multipart limit and came back as a 413 that told the
+    // user the server had broken, when the fix was to upload a smaller file.
+    const status = err.statusCode ?? 500;
+    void reply.code(status).send({
+      error: { code: status < 500 ? 'VALIDATION_FAILED' : 'INTERNAL', message: err.message },
     });
   });
 
@@ -93,9 +103,13 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(trackerRoutes);
   await app.register(privacyRoutes);
 
-  // After the routes, so the static plugin cannot shadow one. Skipped in tests: they
-  // assert the JSON 404, and a built UI sitting on disk would change it.
-  const servingUi = !opts.skipUi && !config.isTest && (await registerUiStatic(app));
+  // Last only because it reads that way. Registration order does not decide anything here:
+  // Fastify's router resolves by specificity, and a genuinely duplicated path throws at
+  // boot rather than letting one side win quietly. The static plugin is registered with
+  // `wildcard: false` besides, so it claims concrete files and never `/api/*`.
+  // Skipped in tests: they assert the JSON 404, and a built UI sitting on disk would
+  // change it.
+  const servingUi = !config.isTest && (await registerUiStatic(app));
 
   /**
    * Exactly one not-found handler, because Fastify permits exactly one and throws at boot

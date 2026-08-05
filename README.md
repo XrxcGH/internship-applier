@@ -77,6 +77,9 @@ These are hard constraints in the design, not settings:
 | [09 — API](docs/09-api.md) | REST + SSE surface between frontend and backend |
 | [10 — Security & privacy](docs/10-security-privacy.md) | PII, encryption, minors, credentials, deletion |
 | [11 — Roadmap](docs/11-roadmap.md) | Milestones, testing strategy, risks, open questions |
+| [12 — Design language](docs/12-design-language.md) | Type, palette, motion, measured contrast |
+| [13 — Dependency audit](docs/13-dependency-audit.md) | Standing assessments for `npm audit` findings |
+| [14 — Model access](docs/14-model-access.md) | Claude Code CLI vs API key, and what runs without either |
 
 ## Environment (verified on this machine)
 
@@ -88,5 +91,8 @@ These are hard constraints in the design, not settings:
 
 ## Next step
 
-Read [`docs/11-roadmap.md`](docs/11-roadmap.md) § Open questions, then say go and M0
-(repo skeleton) starts.
+`npm install`, then `npm start`, then open the address it prints — see § Running it above.
+
+After that, [`docs/11-roadmap.md`](docs/11-roadmap.md) § Status is the honest account of
+what each milestone actually shipped, what was verified against real postings, and what has
+never been run outside the test suite.

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { Answer, AnswerEvidence } from '../lib/api';
 import { Badge, Button, Empty, Notice } from './Controls';
 
@@ -90,6 +90,16 @@ export function AnswerReview({
 }: {
   answer: Answer;
   canDraft: boolean;
+  /**
+   * The one action in flight anywhere on the page, as `verb:answerId`, or null.
+   *
+   * The whole key rather than a per-card verb, because every card has to go quiet while
+   * any request is running. This used to be told only about drafting and approving on its
+   * own answer, so a save, a reopen or a delete left every button live — and starting a
+   * draft on a second answer while the first was still running meant the first one
+   * finishing re-enabled the second's button mid-request, ready to fire the same paid
+   * call again.
+   */
   busy: string | null;
   onDraft: () => void;
   /** May return a promise; Save waits for it, so a rejection keeps the editor open. */
@@ -101,6 +111,23 @@ export function AnswerReview({
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(answer.text);
   const [active, setActive] = useState<number | null>(null);
+  const evidenceRefs = useRef<Array<HTMLLIElement | null>>([]);
+
+  const drafting = busy === `draft:${answer.id}`;
+  const approving = busy === `approve:${answer.id}`;
+
+  /**
+   * Highlight and evidence move together.
+   *
+   * The evidence column is as long as the answer has claims, so on a long answer the
+   * entry that just lit up was frequently below the fold — the reader clicked a
+   * highlighted sentence and, as far as they could tell, nothing happened.
+   */
+  const show = (index: number) => {
+    const next = active === index ? null : index;
+    setActive(next);
+    if (next !== null) evidenceRefs.current[next]?.scrollIntoView({ block: 'nearest' });
+  };
 
   const shown = editing ? text : answer.text;
   const segments = useMemo(
@@ -171,7 +198,7 @@ export function AnswerReview({
           <div className="mt-4 flex flex-wrap gap-3">
             {canDraft && (
               <Button variant="solid" onClick={onDraft} disabled={busy !== null}>
-                {busy === 'draft' ? 'Drafting…' : 'Draft it'}
+                {drafting ? 'Drafting…' : 'Draft it'}
               </Button>
             )}
             <Button
@@ -182,7 +209,7 @@ export function AnswerReview({
             >
               Write it myself
             </Button>
-            <Button variant="danger" size="sm" onClick={onDelete}>
+            <Button variant="danger" size="sm" onClick={onDelete} disabled={busy !== null}>
               Remove question
             </Button>
           </div>
@@ -217,7 +244,7 @@ export function AnswerReview({
                       className={`u-claim u-claim-${s.verdict!}`}
                       data-active={active === s.index}
                       aria-pressed={active === s.index}
-                      onClick={() => setActive(active === s.index ? null : s.index)}
+                      onClick={() => show(s.index!)}
                       title={VERDICT_LABEL[s.verdict!]}
                     >
                       {s.text}
@@ -236,6 +263,7 @@ export function AnswerReview({
                     <Button
                       variant="solid"
                       size="sm"
+                      disabled={busy !== null}
                       onClick={() => {
                         // Awaited, and only closed on success. Closing first meant a
                         // failed save left the typed answer nowhere: the view falls back
@@ -271,7 +299,7 @@ export function AnswerReview({
                     </Button>
                     {canDraft && (
                       <Button size="sm" onClick={onDraft} disabled={busy !== null}>
-                        {busy === 'draft' ? 'Drafting…' : 'Redraft'}
+                        {drafting ? 'Drafting…' : 'Redraft'}
                       </Button>
                     )}
                   </>
@@ -332,7 +360,7 @@ export function AnswerReview({
                     You approved this. It will be filled in for you; you still submit it{' '}
                     <em>yourself</em>.
                   </span>
-                  <Button size="sm" onClick={onUnapprove}>
+                  <Button size="sm" onClick={onUnapprove} disabled={busy !== null}>
                     Reopen
                   </Button>
                 </div>
@@ -356,7 +384,7 @@ export function AnswerReview({
                     onClick={onApprove}
                     disabled={busy !== null || editing || shown.trim().length === 0}
                   >
-                    {busy === 'approve' ? 'Checking…' : 'Approve (G3)'}
+                    {approving ? 'Checking…' : 'Approve (G3)'}
                   </Button>
                 </div>
               )}
@@ -373,13 +401,18 @@ export function AnswerReview({
             ) : (
               <ol className="space-y-3">
                 {answer.evidence.map((e, i) => (
-                  <li key={i}>
+                  <li
+                    key={i}
+                    ref={(el) => {
+                      evidenceRefs.current[i] = el;
+                    }}
+                  >
                     {/* The click target is a button, not the <li>. Same reason as the
                         claim highlights: this list is how a keyboard user finds out
                         which fact backs which sentence. */}
                     <button
                       type="button"
-                      onClick={() => setActive(active === i ? null : i)}
+                      onClick={() => show(i)}
                       aria-pressed={active === i}
                       className={`block w-full rounded px-3 py-2.5 text-left transition-colors ${
                         active === i ? 'bg-accent/12' : 'hover:bg-ink/[0.04]'

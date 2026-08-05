@@ -7,7 +7,11 @@
  */
 import type { AcademicLevel, CandidateProfile, DerivedProfile, SeniorityBand } from '@ia/shared';
 
-/** Internships and part-time roles count at half weight toward professional experience. */
+/**
+ * How much each kind of experience counts toward professional experience. Internships and
+ * research count at half weight, volunteer and club work at nothing, jobs and freelance in
+ * full.
+ */
 const WEIGHTS: Record<string, number> = {
   job: 1,
   internship: 0.5,
@@ -81,21 +85,36 @@ export function deriveExpectedGraduation(profile: CandidateProfile): string | nu
   return ends.reduce((a, b) => (a > b ? a : b));
 }
 
-/** Which year of an undergraduate program they're in, 1-indexed. Null when not applicable. */
+/**
+ * Which year of an undergraduate program they're in, 1-indexed. Null when not applicable.
+ *
+ * Only a program that is actually running counts. Taking the first entry that had a start
+ * date meant a finished degree kept accruing years after it ended: a bachelor that ran from
+ * 2019-09 to 2023-05 read as a seventh-year undergraduate three years after graduation, and
+ * that went into the privacy export as a fact about the person. Someone who has finished has
+ * no academic year at all.
+ */
 export function deriveAcademicYear(profile: CandidateProfile, now: Date): number | null {
   const level = deriveAcademicLevel(profile);
   if (level !== 'undergrad' && level !== 'high_school') return null;
 
-  const current = profile.education.find(
+  const nowYm = toYearMonth(now);
+  const enrolled = profile.education.filter(
     (e) =>
       (e.level === 'bachelor' || e.level === 'associate' || e.level === 'high_school') &&
-      e.startDate,
+      e.startDate !== undefined &&
+      e.startDate <= nowYm &&
+      (e.endDate === undefined || e.endDate >= nowYm),
   );
-  if (!current?.startDate) return null;
+  if (enrolled.length === 0) return null;
 
-  const elapsed = monthsBetween(current.startDate, toYearMonth(now));
-  if (elapsed < 0) return null;
-  const year = Math.floor(elapsed / 12) + 1;
+  // Someone finishing an associate while a bachelor's has already started is in the year of
+  // the bachelor's, which is the level the rest of the profile reports.
+  const current = enrolled.reduce((a, b) =>
+    (LEVEL_RANK[b.level] ?? 0) > (LEVEL_RANK[a.level] ?? 0) ? b : a,
+  );
+
+  const year = Math.floor(monthsBetween(current.startDate!, nowYm) / 12) + 1;
   return year >= 1 && year <= 8 ? year : null;
 }
 

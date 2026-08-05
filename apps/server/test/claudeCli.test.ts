@@ -21,7 +21,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { NoModelAccessError } from '../src/infra/llm/provider';
 import {
   claudeCliBackend,
@@ -29,6 +29,8 @@ import {
   resetCliProbe,
   usageLimitMessage,
 } from '../src/infra/llm/claudeCli';
+import { db, schema } from '../src/infra/db/client';
+import { runMigrations } from '../src/infra/db/migrate';
 
 let dir: string;
 let fakeBin: string;
@@ -75,9 +77,16 @@ function invocation(): { argv: string[]; stdin: string } {
   return JSON.parse(readFileSync(logFile, 'utf8')) as { argv: string[]; stdin: string };
 }
 
+// A generated answer is written to the llm_call ledger, so the tables have to exist or
+// every call in this file logs a failed insert.
+beforeAll(() => {
+  runMigrations();
+});
+
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'ia-fakecli-'));
   logFile = path.join(dir, 'invocation.json');
+  db.delete(schema.llmCall).run();
 });
 
 afterEach(() => {
@@ -132,8 +141,8 @@ describe('what the adapter actually runs', () => {
     expect(argv).toContain('--print');
     expect(argv[argv.indexOf('--output-format') + 1]).toBe('json');
     expect(argv[argv.indexOf('--max-turns') + 1]).toBe('1');
-    // Empty string, which the real CLI accepts and which grants nothing.
-    // Not an empty string: cmd.exe drops empty argv elements when spawning the .cmd shim.
+    // 'none', not an empty string: cmd.exe drops empty argv elements when spawning the
+    // .cmd shim, and a name matching no tool grants exactly as much as one.
     expect(argv[argv.indexOf('--allowedTools') + 1]).toBe('none');
   }, 60_000);
 
@@ -151,6 +160,23 @@ describe('what the adapter actually runs', () => {
     expect(argv[argv.indexOf('--add-dir') + 1]).toBe(dir);
     // A document needs more than one turn to find and read.
     expect(Number(argv[argv.indexOf('--max-turns') + 1])).toBeGreaterThan(1);
+  }, 60_000);
+
+  /**
+   * The cost panel reads the llm_call ledger and nothing else, so a backend that skips it
+   * reports "No model calls yet." however much work it has done. That was the state for
+   * the CLI path, which is the one most users are on.
+   */
+  it('records the call in the ledger, at no cost', async () => {
+    writeFakeCli('ok');
+    await claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' });
+
+    const rows = db.select().from(schema.llmCall).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.purpose).toBe('answer_draft');
+    // A subscription is not billed per token, and the CLI does not say which model
+    // answered, so the row is a count and a latency rather than a price.
+    expect(rows[0]?.costUsd).toBe(0);
   }, 60_000);
 
   it('passes a JSON schema through when one is asked for', async () => {

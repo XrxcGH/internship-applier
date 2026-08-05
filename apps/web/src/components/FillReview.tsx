@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   continueFill,
   discardFill,
+  getFill,
   markSubmitted,
   startFill,
   type FillFieldResult,
@@ -65,6 +66,29 @@ export function FillReview({
    * they had just told it they submitted.
    */
   const [submittedAt, setSubmittedAt] = useState<string | null>(null);
+
+  /**
+   * Picks up a run the server already has open. Returns null when there is none.
+   *
+   * The run lives on the server, but this screen only ever knew about the one it started
+   * itself. Reload the tab — or just switch to the tracker and back — while a run was
+   * paused at a login wall, and the panel offered "Open and read the form" as if nothing
+   * were happening. Pressing it closed the browser the user had just signed into and
+   * started again from the top.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    getFill(applicationId)
+      .then((r) => {
+        if (!cancelled) setRun(r);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [applicationId]);
 
   const act = async (key: string, fn: () => Promise<FillRunView | null>): Promise<void> => {
     setBusy(key);
@@ -166,7 +190,10 @@ export function FillReview({
         </Notice>
       )}
 
-      {run && !run.intervention && run.state !== 'done' && (
+      {/* A failed run is excluded rather than lumped in with the states that are still
+          going: it has nothing to fill, and offering "Fill the form" for it put a button
+          on screen whose only outcome was a second error. */}
+      {run && !run.intervention && run.state !== 'done' && run.state !== 'failed' && (
         <div className="u-card-flat px-5 py-5">
           <p className="u-eyebrow mb-2">What it found</p>
           <p className="text-dim">{run.summary ?? run.message}</p>
@@ -269,7 +296,35 @@ export function FillReview({
         </>
       )}
 
-      {run?.state === 'failed' && <Empty title="The run could not finish.">{run.message}</Empty>}
+      {run?.state === 'failed' && (
+        <>
+          <Empty title="The run could not finish.">{run.message}</Empty>
+          {/* The failed run stays on the server until something clears it, and the card
+              that starts a fill only shows when there is no run at all. Without this the
+              screen was a dead end: an error, and no control that led anywhere. */}
+          <div className="flex flex-wrap gap-3">
+            <Button
+              disabled={busy !== null}
+              onClick={() =>
+                void act('discard', async () => {
+                  await discardFill(applicationId);
+                  return null;
+                })
+              }
+            >
+              {busy === 'discard' ? 'Closing…' : 'Close the browser and start over'}
+            </Button>
+            <a
+              href={applyUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="u-data border-rule text-dim hover:text-ink hover:border-rule-strong hover:bg-ink/[0.04] inline-flex items-center rounded border px-4 py-2 tracking-wide uppercase transition-colors"
+            >
+              Open posting myself ↗
+            </a>
+          </div>
+        </>
+      )}
     </div>
   );
 }

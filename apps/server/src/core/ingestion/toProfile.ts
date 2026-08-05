@@ -1,10 +1,11 @@
 /**
  * Maps a ResumeExtraction onto a draft CandidateProfile.
  *
- * Everything the resume cannot tell us — date of birth, work authorization,
- * availability window, location preferences — is left at a neutral default and added to
- * `needsReview` so gate G1 forces the user to supply it. Guessing any of these would
- * silently corrupt eligibility.
+ * Everything the resume cannot tell us — date of birth, work authorization, availability
+ * window — is left at a neutral default and added to `needsReview` so gate G1 forces the
+ * user to supply it. Guessing any of these would silently corrupt eligibility. Home city and
+ * state are the exception: a resume usually does print them, so they arrive as a suggestion
+ * and stay flagged until the user has looked at them.
  */
 import { ulid } from 'ulid';
 import type { CandidateProfile, Skill } from '@ia/shared';
@@ -41,8 +42,30 @@ function asYearMonth(raw: string | null | undefined): string | undefined {
   return /^\d{4}-(0[1-9]|1[0-2])$/.test(raw.trim()) ? raw.trim() : undefined;
 }
 
+/** A trailing "USA" on a location line is a country, not a state. */
+const COUNTRY_TAIL = /^(u\.?s\.?a?\.?|united states( of america)?)$/i;
+
+/**
+ * The candidate's own location line, split into the home city and state the profile keeps.
+ *
+ * The extractor is asked for this on every run and the answer used to be dropped on the
+ * floor, so at G1 the user retyped a city the tool had already read off the page. Both
+ * halves stay in `needsReview`: this is a suggestion to check, not a fact being asserted. A
+ * line that is not recognisably "City, State" leaves the state empty rather than inventing
+ * one.
+ */
+function splitLocation(raw: string | null | undefined): { city: string; region: string } {
+  const parts = (raw ?? '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length > 1 && COUNTRY_TAIL.test(parts[parts.length - 1]!)) parts.pop();
+  return { city: parts[0] ?? '', region: parts[1] ?? '' };
+}
+
 export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): CandidateProfile {
   const ts = now.toISOString();
+  const home = splitLocation(x.location);
 
   const skills: Skill[] = x.skills.map((s) => ({
     name: s.name,
@@ -102,7 +125,7 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
     languages: x.languages,
     availability: { flexible: true },
     locationPrefs: {
-      base: { city: '', region: '', country: 'US' },
+      base: { city: home.city, region: home.region, country: 'US' },
       maxCommuteKm: 50,
       remoteOk: true,
       hybridOk: true,

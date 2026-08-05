@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@ia/shared';
 import * as api from '../lib/api';
 import { Page, RunningHead, Section } from '../components/Chrome';
@@ -11,6 +11,32 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Picks up the profile that already exists, if there is one.
+   *
+   * Without this, "Revisit profile" dropped a confirmed user back on the dropzone with no
+   * way past it except uploading their resume a second time — so correcting a home city
+   * meant re-extracting the whole document.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getProfile()
+      .then((p) => {
+        if (cancelled || !p) return;
+        // Never overtakes an upload that is already running: whatever the extractor
+        // produces is newer than what was on disk when this request went out.
+        setStep((s) => (s === 'upload' ? 'confirm' : s));
+        setProfile((prev) => prev ?? p);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const flagged = useCallback(
     (path: string) => profile?.needsReview.includes(path) ?? false,
@@ -67,7 +93,6 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       await api.saveProfile(profile!);
       await api.confirmProfile();
       setStep('done');
-      onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -138,12 +163,18 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             </p>
           </Section>
 
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Button disabled={busy !== null} onClick={() => void persist()}>
               Save
             </Button>
             <Button variant="primary" disabled={busy !== null} onClick={() => setStep('facts')}>
               Continue
+            </Button>
+            {/* The way back to the dropzone. This screen is where anyone who already has a
+                profile now lands, so without it a new resume could never be uploaded a
+                second time. */}
+            <Button disabled={busy !== null} onClick={() => setStep('upload')}>
+              Upload a different resume
             </Button>
           </div>
         </>
@@ -321,6 +352,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               profile established
             </p>
             <p className="text-dim">Discovery and matching are now unlocked.</p>
+          </div>
+          {/* This screen leaves, rather than being left. Confirming used to navigate for
+              the user, which meant the stamp above was rendered and unmounted in the same
+              breath and nobody ever saw it. */}
+          <div className="mt-5">
+            <Button variant="primary" onClick={onDone}>
+              Open the queue (G2)
+            </Button>
           </div>
         </Section>
       )}

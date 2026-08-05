@@ -10,6 +10,14 @@ const HEARTBEAT_MS = 20_000;
  * On reconnect the client sends `Last-Event-ID`; anything still in the ring buffer is
  * replayed. If the requested position has fallen out of the buffer we say so explicitly
  * with a `refetch` event rather than pretending continuity we can't provide.
+ *
+ * NOTHING LISTENS YET. Every screen refetches instead, so the replay path above has never
+ * run against a real client. The stream stays because the events are published anyway and
+ * this is the piece that would make a long fill run watchable — but wiring the interface up
+ * is more than `new EventSource('/api/events')`. The token hook in app.ts guards every
+ * `/api/` URL on a request header, and the browser's EventSource cannot set one; the
+ * headers @fastify/cors queues would also be lost, because this handler writes through
+ * `reply.raw` and never flushes them. Both need answering before a client can connect.
  */
 export async function eventRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/events', async (req, reply) => {

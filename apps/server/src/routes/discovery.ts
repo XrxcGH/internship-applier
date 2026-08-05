@@ -90,8 +90,17 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: { code: 'PROFILE_NOT_CONFIRMED', message: 'Confirm your profile first.' } });
     }
 
-    const body = z.object({ filters: SearchFilters.optional() }).parse(req.body ?? {});
-    const filters = body.filters ?? DEFAULT_FILTERS;
+    const body = z.object({ filters: SearchFilters.optional() }).safeParse(req.body ?? {});
+    if (!body.success) {
+      return reply.code(400).send({
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Expected { filters }.',
+          details: { issues: body.error.issues },
+        },
+      });
+    }
+    const filters = body.data.filters ?? DEFAULT_FILTERS;
 
     const knownBoards = db
       .select({ label: schema.source.label, kind: schema.source.kind })
@@ -148,14 +157,26 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post('/api/discovery/refresh', async (req) => {
+  app.post('/api/discovery/refresh', async (req, reply) => {
     const body = z
       .object({
         checkUrls: z.boolean().default(false),
-        limit: z.number().int().max(200).default(50),
+        // SQLite reads a negative LIMIT as no limit at all, so `limit: -1` inverted the
+        // cap: one request went out and checked every open-or-stale posting URL in the
+        // database, rate limiter and all.
+        limit: z.number().int().min(1).max(200).default(50),
       })
-      .parse(req.body ?? {});
-    return refreshPostings(body);
+      .safeParse(req.body ?? {});
+    if (!body.success) {
+      return reply.code(400).send({
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Expected { checkUrls?, limit? }.',
+          details: { issues: body.error.issues },
+        },
+      });
+    }
+    return refreshPostings(body.data);
   });
 
   app.post<{ Params: { id: string } }>('/api/postings/:id/refresh', async (req, reply) => {
@@ -192,6 +213,15 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         .code(400)
         .send({ error: { code: 'VALIDATION_FAILED', message: 'Expected { enabled }.' } });
     }
+    const row = db
+      .select({ id: schema.source.id })
+      .from(schema.source)
+      .where(eq(schema.source.id, req.params.id))
+      .all()[0];
+    if (!row) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such source.' } });
+    }
+
     db.update(schema.source)
       .set({ enabled: body.data.enabled })
       .where(eq(schema.source.id, req.params.id))
@@ -199,10 +229,15 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     return { id: req.params.id, enabled: body.data.enabled };
   });
 
-  app.get('/api/postings', async (req) => {
+  app.get('/api/postings', async (req, reply) => {
     const q = z
       .object({ limit: z.coerce.number().int().min(1).max(200).default(50) })
-      .parse(req.query ?? {});
+      .safeParse(req.query ?? {});
+    if (!q.success) {
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_FAILED', message: 'Expected a limit between 1 and 200.' },
+      });
+    }
 
     return db
       .select({
@@ -221,7 +256,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       })
       .from(schema.jobPosting)
       .orderBy(desc(schema.jobPosting.firstSeenAt))
-      .limit(q.limit)
+      .limit(q.data.limit)
       .all();
   });
 

@@ -40,6 +40,19 @@ export function getRun(applicationId: string): FillRun | undefined {
   return runs.get(applicationId);
 }
 
+/**
+ * One definition of "skipped", so the event stream and the serialized run cannot disagree.
+ *
+ * The `fill.done` event used to count everything that was not `ok`, so a run with ten filled
+ * fields, two mismatches and one skip announced three skipped fields while GET /fill reported
+ * one, and a UI showing live totals beside the fetched run showed two different numbers for
+ * the same fields. Mismatches and failures now travel in their own counts, so narrowing this
+ * one to a genuine skip drops nothing on the floor.
+ */
+function countSkipped(result: FillResult): number {
+  return result.results.filter((r) => r.status === 'skipped').length;
+}
+
 /** Everything the UI needs, minus the things that cannot be serialized. */
 export function serializeRun(run: FillRun) {
   return {
@@ -63,7 +76,7 @@ export function serializeRun(run: FillRun) {
           filled: run.result.filled,
           mismatched: run.result.mismatched,
           failed: run.result.failed,
-          skipped: run.result.results.filter((r) => r.status === 'skipped').length,
+          skipped: countSkipped(run.result),
         }
       : null,
   };
@@ -158,6 +171,17 @@ export async function continueRun(input: StartInput): Promise<FillRun> {
     run.state = 'awaiting_user';
     run.intervention = blocked;
     run.message = blocked.detail;
+    // The same announcement start makes. An intervention that appears BETWEEN start and
+    // continue — a login wall behind a wizard step, a bot check the first interaction
+    // triggered — is the one a watching UI is least expecting, and without this it reached
+    // nobody: the run parked in awaiting_user and the screen sat unchanged until someone
+    // reloaded it by hand.
+    publish({
+      type: 'fill.needs_input',
+      applicationId: input.applicationId,
+      reason: blocked.reason,
+      detail: blocked.detail,
+    });
     return run;
   }
 
@@ -177,7 +201,7 @@ export async function continueRun(input: StartInput): Promise<FillRun> {
       type: 'fill.step',
       applicationId: input.applicationId,
       field: r.field.label,
-      status: r.status === 'ok' ? 'ok' : r.status === 'skipped' ? 'skipped' : 'failed',
+      status: r.status,
       note: r.note,
     });
   });
@@ -185,11 +209,18 @@ export async function continueRun(input: StartInput): Promise<FillRun> {
   run.state = 'done';
   run.message = describeFill(run.result);
 
+  // All four outcomes, because this is the last thing a stream consumer ever hears about the
+  // run. Announcing only `filled` and `skipped` meant a run that typed five values and had
+  // three of them quietly rejected by the page signed off as "5 filled, 0 skipped": the two
+  // counts that carried the bad news had nowhere to go, and a screen watching the stream
+  // showed a clean run over a form with three wrong boxes in it.
   publish({
     type: 'fill.done',
     applicationId: input.applicationId,
     filled: run.result.filled,
-    skipped: run.result.results.filter((r) => r.status !== 'ok').length,
+    mismatched: run.result.mismatched,
+    failed: run.result.failed,
+    skipped: countSkipped(run.result),
   });
 
   return run;

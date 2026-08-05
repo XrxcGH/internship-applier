@@ -70,9 +70,13 @@ export function App() {
     if (view === 'setup') {
       return (
         <Onboarding
+          // Called by the confirmation screen, not by the confirm request. Navigating the
+          // moment the request returned unmounted Onboarding in the same render, so the
+          // "profile established" stamp — the one acknowledgement G1 gives the user for
+          // the work they just did — was never on screen for a single frame.
           onDone={() => {
             refresh();
-            setView('home');
+            setView('queue');
           }}
         />
       );
@@ -204,9 +208,11 @@ function Home({
       </div>
 
       <Section n="03" title="Build" step={6}>
-        {/* A horizontal track rather than a stacked list: seven short items read as
-            progress across the page, and it uses width the list was wasting. */}
-        <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        {/* A horizontal track rather than a stacked list: nine short items read as
+            progress across the page, and it uses width the list was wasting. Nine across
+            needs a very wide screen, so narrower ones wrap — the column counts are chosen
+            so the track never ends with one card stranded on its own row. */}
+        <ol className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-9">
           {MILESTONES.map((m) => (
             <li
               key={m.id}

@@ -10,13 +10,30 @@ import { ulid } from 'ulid';
 import { db, schema } from '../db/client';
 import { logger } from '../logger';
 
-/** docs/02: Opus for extraction/drafting/verification, Haiku for bulk classification. */
+/**
+ * docs/02: Opus for extraction, drafting and verification; Haiku for bulk classification.
+ *
+ * `classification` is wired up and unused. `apiBackend` maps the `field_classification`
+ * purpose onto it, but nothing asks for that purpose — field classification is entirely
+ * deterministic today and its model fallback was never built (docs/07 § Classification).
+ * The entry stays because the mapping is correct for the day it is, and because deleting
+ * it would leave `apiBackend` with a purpose it cannot resolve.
+ */
 export const MODELS = {
   extraction: 'claude-opus-5',
   drafting: 'claude-opus-5',
   verification: 'claude-opus-5',
   classification: 'claude-haiku-4-5',
 } as const;
+
+/**
+ * The ledger name for a call served by the Claude Code CLI.
+ *
+ * Deliberately absent from PRICING below. The CLI does not report which model answered or
+ * how many tokens it used, and a subscription is not billed per token, so these rows carry
+ * a zero cost — which the cost panel spells out in words rather than showing "$0.00".
+ */
+export const CLI_MODEL = 'claude-code-cli';
 
 /** USD per million tokens, for the cost panel. */
 const PRICING: Record<string, { input: number; output: number }> = {

@@ -56,18 +56,46 @@ function stripRegexLiterals(src: string): string {
   return src.replace(/\/(?![/*])(?:[^/\\\n[]|\\.|\[(?:[^\]\\]|\\.)*\])+\/[gimsuy]*/g, ' ');
 }
 
+/**
+ * The prose between JSX tags — the sentences a user actually reads on screen.
+ *
+ * Only `.tsx` has JSX. Run over server `.ts` this pattern matched whatever sat between a
+ * `>` (a comparison, an arrow, a closing generic) and the next `<`, so two dozen fragments
+ * of ordinary code were audited as interface copy on every run, and a fifth of the words in
+ * the aggregate corpus were TypeScript rather than English.
+ */
+function textNodes(file: string, src: string): string[] {
+  if (!file.endsWith('.tsx')) return [];
+  return (src.match(/>[^<>{}]{25,400}</g) ?? []).map((s) => s.slice(1, -1));
+}
+
+/**
+ * Quoted strings long enough to be prose.
+ *
+ * A run of characters between two quotes that crosses a line break is never one string
+ * literal — TypeScript does not allow it — it is the gap between two of them, and that gap
+ * is code. One `className="…"` followed by a JSX comment three lines down was enough to
+ * capture the comment as user-facing copy and fail the build on a word in it.
+ */
+function quotedStrings(src: string): string[] {
+  return [
+    ...(src.match(/'[^'\n]{35,400}'/g) ?? []).map((s) => s.slice(1, -1)),
+    ...(src.match(/"[^"\n]{35,400}"/g) ?? []).map((s) => s.slice(1, -1)),
+  ];
+}
+
+function normalize(raw: string[]): string[] {
+  return raw.map((s) => s.replace(/\s+/g, ' ').trim()).filter((s) => s.length >= 25);
+}
+
+const allProse: string[] = [];
+
 for (const f of files) {
   const src = stripRegexLiterals(readFileSync(f, 'utf8'));
-  // User-facing text: JSX text nodes plus quoted strings long enough to be prose.
-  const strings = [
-    ...(src.match(/>[^<>{}]{25,400}</g) ?? []).map((s) => s.slice(1, -1)),
-    ...(src.match(/'[^']{35,400}'/g) ?? []).map((s) => s.slice(1, -1)),
-    ...(src.match(/"[^"]{35,400}"/g) ?? []).map((s) => s.slice(1, -1)),
-  ];
+  const prose = normalize(textNodes(f, src));
+  allProse.push(...prose);
 
-  for (const s of strings) {
-    const text = s.replace(/\s+/g, ' ').trim();
-    if (text.length < 25) continue;
+  for (const text of [...prose, ...normalize(quotedStrings(src))]) {
     // Structural checks are meaningless on individual UI strings; lexical ones are not.
     for (const t of findTells(text, { minWordsForStructural: 100_000 })) {
       findings.push({
@@ -100,15 +128,11 @@ for (const f of unique) {
 /**
  * Structural checks need the copy in aggregate — em-dash density and sentence rhythm are
  * properties of a body of prose, not of one button label.
+ *
+ * Screen text only, which is why this corpus is narrower than what the lexical pass reads.
+ * Quoted strings are mostly class attributes and query fragments; feeding those in counted
+ * every `--custom-property` as an em-dash and reported a density five times the real one.
  */
-const allProse: string[] = [];
-for (const f of files) {
-  const src = readFileSync(f, 'utf8');
-  for (const s of src.match(/>[^<>{}]{25,400}</g) ?? []) {
-    allProse.push(s.slice(1, -1).replace(/\s+/g, ' ').trim());
-  }
-}
-
 const corpus = allProse.join(' ');
 const wordCount = (corpus.match(/[\p{L}'-]+/gu) ?? []).length;
 const emDashes = (corpus.match(/—/g) ?? []).length;

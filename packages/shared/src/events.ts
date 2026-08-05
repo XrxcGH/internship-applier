@@ -59,7 +59,14 @@ export const AppEvent = z.discriminatedUnion('type', [
     seq: z.number().int(),
     applicationId: z.string(),
     field: z.string(),
-    status: z.enum(['ok', 'skipped', 'failed']),
+    /**
+     * The same four outcomes the fill engine produces, `mismatch` included. While this
+     * vocabulary was three words wide, a read-back mismatch — the tool typed a value and the
+     * page kept something else, which is the one signal that catches a silently wrong fill —
+     * had to be sent as `failed`, arriving at a stream consumer indistinguishable from a
+     * field that never got typed at all.
+     */
+    status: z.enum(['ok', 'mismatch', 'skipped', 'failed']),
     note: z.string().optional(),
   }),
   z.object({
@@ -74,6 +81,15 @@ export const AppEvent = z.discriminatedUnion('type', [
     seq: z.number().int(),
     applicationId: z.string(),
     filled: z.number().int(),
+    /**
+     * Every outcome gets a home, because this is the terminal event and anything without a
+     * field here simply stops existing for a consumer that only watches the stream. With
+     * `filled` and `skipped` alone, a run whose values were rejected by the page on read-back
+     * finished by reporting nothing but the fields that went right.
+     */
+    mismatched: z.number().int(),
+    failed: z.number().int(),
+    /** Fields deliberately left alone — never a euphemism for one that went wrong. */
     skipped: z.number().int(),
   }),
   z.object({

@@ -11,7 +11,13 @@ const ListQuery = z.object({
   minScore: z.coerce.number().min(0).max(100).default(0),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
-  hideDecided: z.coerce.boolean().default(true),
+  // Not `z.coerce.boolean()`: coercion is JavaScript's `Boolean()`, and `Boolean('false')`
+  // is true, so `?hideDecided=false` asked for decided matches and got them hidden anyway.
+  // The only string that turned the filter off was an empty one.
+  hideDecided: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 });
 
 const DecisionBody = z.object({
@@ -36,9 +42,18 @@ export async function matchRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/matches/recompute', async (req, reply) => {
     const body = z
       .object({ reextract: z.boolean().default(false), useModel: z.boolean().default(true) })
-      .parse(req.body ?? {});
+      .safeParse(req.body ?? {});
+    if (!body.success) {
+      return reply.code(400).send({
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Expected { reextract?: boolean, useModel?: boolean }.',
+          details: { issues: body.error.issues },
+        },
+      });
+    }
     try {
-      return await runMatching(body);
+      return await runMatching(body.data);
     } catch (err) {
       const code = (err as Error & { code?: string }).code;
       return reply
@@ -47,8 +62,21 @@ export async function matchRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.get('/api/matches', async (req) => {
-    const q = ListQuery.parse(req.query ?? {});
+  app.get('/api/matches', async (req, reply) => {
+    // A bad query string is the client's mistake. Left to throw, it reached the app-level
+    // error handler, which has no status on a ZodError and so reported a 500 INTERNAL —
+    // telling the user the server broke when what broke was their `?limit=1000`.
+    const parsed = ListQuery.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: parsed.error.issues[0]?.message ?? 'Invalid query.',
+          details: { issues: parsed.error.issues },
+        },
+      });
+    }
+    const q = parsed.data;
 
     const bands =
       q.eligibility === 'all'

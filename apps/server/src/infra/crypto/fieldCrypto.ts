@@ -49,11 +49,27 @@ export function isEncrypted(value: string): boolean {
   return value.startsWith(`${PREFIX}:`) && value.split(':').length === 4;
 }
 
+/**
+ * Compares two secrets without letting the comparison time say how close a guess was.
+ *
+ * `a === b` on a string stops at the first byte that differs, so a wrong token that shares
+ * its first eight characters takes measurably longer to reject than one that differs
+ * immediately. Anything that can time the answer — a local script hammering the API, a
+ * page measuring its own failed fetches — can recover a secret a character at a time from
+ * that difference instead of having to guess all thirty-six at once.
+ *
+ * `timingSafeEqual` throws on unequal lengths rather than returning false, which would
+ * hand back the same leak through an exception, so a length mismatch is compared against
+ * itself and reported false. That still reveals the length, which is not a secret here.
+ */
 export function constantTimeEquals(a: string, b: string): boolean {
-  const ab = Buffer.from(a, 'utf8');
-  const bb = Buffer.from(b, 'utf8');
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
+  const left = Buffer.from(a, 'utf8');
+  const right = Buffer.from(b, 'utf8');
+  if (left.length !== right.length) {
+    timingSafeEqual(left, left);
+    return false;
+  }
+  return timingSafeEqual(left, right);
 }
 
 const b64 = (b: Buffer): string => b.toString('base64url');

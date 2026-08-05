@@ -43,6 +43,20 @@
   --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -12px rgb(0 0 0 / 0.6);
 }
 
+/* The light palette is written out twice on purpose, and the two copies must stay
+   identical. Plain CSS cannot share one declaration block between a media query and a
+   plain selector, and both are needed: the first honours an explicit choice recorded as
+   `data-theme` on `<html>`, the second honours a machine set to light where no choice has
+   been recorded. They had already drifted — the media copy lost `--grid-alpha`, so the
+   drafting grid could only be retuned for half the people seeing it.
+
+   The `:not([data-theme])` on the media copy is the only thing letting a recorded choice
+   beat the machine setting, and it is doing real work rather than reading as a tidy-up.
+   `:root[data-theme='dark']` and `:root:not([data-theme])` weigh exactly the same — `:not`
+   carries the weight of its argument — and the media copy comes later in the file, so
+   without that exclusion someone who had chosen dark on a machine set to light would get
+   the light palette back on every load with no way to escape it. */
+
 :root[data-theme='light'] {
   --paper: #eaeef3;
   --paper-raised: #f6f8fb;
@@ -80,8 +94,21 @@
     --redline: #ad3628;
 
     --glow-alpha: 0.07;
+    --grid-alpha: 0.05;
     --shadow: 0 1px 2px rgb(18 24 32 / 0.06), 0 8px 24px -14px rgb(18 24 32 / 0.28);
   }
+}
+
+/* An explicit choice has to carry the native surfaces with it — scrollbars, date pickers,
+   the canvas behind the page. `html` below declares both schemes and lets the OS pick,
+   which is right until someone overrides it: forcing light on a dark machine gave a light
+   palette with dark form controls sitting in the middle of it. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
 }
 
 @theme inline {
@@ -253,11 +280,6 @@ i {
   background: color-mix(in srgb, var(--paper-sunk) 55%, transparent);
   border: 1px solid var(--rule);
   border-radius: 6px;
-}
-
-.u-inset {
-  background: color-mix(in srgb, var(--paper-sunk) 70%, transparent);
-  border-radius: 4px;
 }
 
 /* Tinted panels for the three verification states. Colour carries meaning here, so the
@@ -466,17 +488,4 @@ i {
   html {
     scroll-behavior: auto;
   }
-}
-
-/* ─────────────────────────────────────────────── states
-   A redlined field reads as struck out, not as an error box. */
-
-.u-redlined {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    transparent,
-    transparent 5px,
-    color-mix(in srgb, var(--redline) 22%, transparent) 5px,
-    color-mix(in srgb, var(--redline) 22%, transparent) 6px
-  );
 }

@@ -14,11 +14,37 @@
  * actual data directory and encryption key. Every path now hangs off `DATA_DIR`, and this
  * points it somewhere disposable.
  */
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const root = mkdtempSync(path.join(tmpdir(), 'internship-applier-test-'));
+const PREFIX = 'internship-applier-test-';
+
+/**
+ * Clear out what earlier runs left behind.
+ *
+ * This file runs once per test file, so every `npm test` dropped twenty-five directories of
+ * SQLite databases — fixture profiles, resumes, an encryption key — into the OS temp
+ * directory, and nothing ever removed them. On Windows, where nothing purges %TEMP%, an
+ * afternoon of `test:watch` leaves hundreds.
+ *
+ * Cleaning up on the way out does not work: Windows will not unlink the database while the
+ * connection is still open, and a teardown that threw would fail an otherwise green test
+ * file. So each run clears the previous one's, and leaves alone anything recent enough to
+ * belong to a worker running right now.
+ */
+const stale = Date.now() - 60 * 60 * 1000;
+for (const name of readdirSync(tmpdir())) {
+  if (!name.startsWith(PREFIX)) continue;
+  const dir = path.join(tmpdir(), name);
+  try {
+    if (statSync(dir).mtimeMs < stale) rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Another worker's, still locked, or already gone. None of that is worth failing over.
+  }
+}
+
+const root = mkdtempSync(path.join(tmpdir(), PREFIX));
 
 process.env['NODE_ENV'] = 'test';
 process.env['DATA_DIR'] = root;

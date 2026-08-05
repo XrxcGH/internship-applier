@@ -95,7 +95,7 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>('/api/resumes/:id/extract', async (req, reply) => {
     if (!hasApiKey()) {
       return reply.code(400).send({
-        error: { code: 'INTERNAL', message: new MissingApiKeyError().message },
+        error: { code: 'NO_MODEL_ACCESS', message: new MissingApiKeyError().message },
       });
     }
 

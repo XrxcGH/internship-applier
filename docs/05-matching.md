@@ -45,10 +45,14 @@ and year are ordinary values — nothing in the system hardcodes summer or 2027.
 
 ### Presets
 
-`filter_preset` rows are named, saved filter sets. Eight ship as starters and are all
-editable or deletable: *Summer 2027*, *Remote only*, *Co-ops (6+ months)*, *Paid only*,
-*Quick applications*, *Closing soon*, *Government & research*, and *Cast a wide net* (every
+`filter_preset` rows are named, saved filter sets. Eight starters are defined in
+`STARTER_PRESETS`: *Summer 2027*, *Remote only*, *Co-ops (6+ months)*, *Paid only*, *Quick
+applications*, *Closing soon*, *Government & research*, and *Cast a wide net* (every
 position type, every season, every year, ineligible postings shown — maximum recall).
+
+> **Not built:** nothing loads them. No code seeds the `filter_preset` table, no route reads
+> or writes it, and there is no control for saving, editing or deleting a preset. The eight
+> sit in `packages/shared/src/filters.ts` as data, waiting for the screen that offers them.
 
 ## Stage 0 — Requirement extraction
 
@@ -93,31 +97,51 @@ type RuleResult = {
   because: string;            // human-readable, shown in the UI
   requirementId?: string;     // links to the verbatim JD quote
   profileRef?: string;        // which profile field decided it
+  evidence?: string;          // verbatim text for rules that read the posting directly
 };
 
-type EligibilityRule = (p: ConfirmedProfile, j: JobPosting, r: JobRequirement[]) => RuleResult;
+type RuleInput = {
+  profile: ConfirmedProfile;
+  posting: PostingFacts;          // just the posting fields the rules read
+  requirements: JobRequirement[];
+  now: Date;                      // injected, never read from the clock, so tests are stable
+};
+
+type EligibilityRule = (input: RuleInput) => RuleResult;
 ```
 
 ### The rules
 
-| Rule | Logic | On missing data |
+Twelve of them, in `RULES` in `eligibility.ts`. There are two distinct ways a rule declines
+to decide and the difference is load-bearing: **`not_applicable`** means the posting never
+raised the question, **`unknown`** means it did and the tool could not settle it. Only
+`unknown` badges a posting in the queue and pushes it below the eligible ones — a rule that
+doesn't apply is not a question anyone needs to look at, and treating the two the same
+badged nearly every row and meant nothing.
+
+| Rule | Logic | When it doesn't decide |
 | --- | --- | --- |
-| `age_minimum` | `profile.derived.age >= req.value`. Common values: 16, 18. | If DOB absent → `unknown` + prompt the user to add it (it's the single highest-value missing field). |
-| `age_work_permit` | If `isMinor` and jurisdiction requires a work permit / restricts hours for the posting's location, attach an advisory (not a fail) with what's needed. | `unknown` |
-| `education_level` | `profile.derived.academicLevel` ∈ required set. Handles "currently enrolled in a Bachelor's" vs "must have completed". | `unknown` |
-| `enrollment_status` | Many internships require active enrollment during the term or return-to-school after. Checks `education[].endDate` against `term`. | `unknown` |
-| `graduation_window` | `expectedGraduation` within `[min, max]`. Very common ("graduating Dec 2027 – Jun 2028") and a frequent silent disqualifier. | `unknown` |
-| `work_authorization` | If posting requires authorization without sponsorship and `profile.work_authorization.needs_sponsorship` → `fail`. | `unknown` |
-| `citizenship` | Federal/defense postings requiring US citizenship or a clearance. Checked against `profile.citizenships`. | `unknown` |
-| `location` | Onsite/hybrid: `primaryLocation` within `max_commute_km` of `location_prefs.base`, or in `relocate_to`. Remote: pass, subject to any stated geo restriction. | `unknown` |
-| `term_overlap` | Posting term must overlap `profile.availability` by ≥ 6 weeks (configurable). | `unknown` |
-| `deadline` | `closes_at` in the future (with a 24h grace warning band). | pass |
-| `posting_open` | `is_open = 1`. | `fail` |
-| `experience_ceiling` | `fail` if required professional years > `derived.yearsProfessionalExperience + tolerance` (default tolerance 1). Catches "internships" wanting 3+ years. | pass |
-| `excluded_company` | `company` ∈ `preferences.exclude_companies`. | pass |
+| `posting_open` | `is_open = 1`. | Always decides. |
+| `deadline` | `closes_at` in the future. A date with no time means the whole of that day, not its first instant — bare dates parse to midnight UTC, which closed postings a day early on people who still had hours to apply. | `not_applicable` with no closing date; `unknown` if the date can't be read. |
+| `age_minimum` | `derived.age >= req.value`. Common values: 16, 18. | `not_applicable` if no minimum is stated; `unknown` if one is and DOB is absent — the single highest-value missing field, so the user is prompted for it. |
+| `education_level` | `derived.academicLevel` ∈ required set. Handles "currently enrolled in a Bachelor's" vs "must have completed". | `not_applicable` if no level is stated; `unknown` if the clause is unparseable or there is no education history to check against. |
+| `graduation_window` | `expectedGraduation` within the stated window. Very common ("graduating Dec 2027 – Jun 2028") and a frequent silent disqualifier. | `not_applicable` if no window is stated; `unknown` if the window or your expected graduation can't be read. |
+| `enrollment` | Many internships require active enrolment during the term or return-to-school after. Checks the graduation date against the requirement. | `not_applicable` if enrolment isn't required; `unknown` if the clause is unparseable or your graduation date is unknown. |
+| `work_authorization` | `fail` when the posting requires authorization without sponsorship and `workAuthorization.needsSponsorship` is set. | `not_applicable` if unmentioned; `unknown` if the clause is unparseable or your status is not on file. |
+| `citizenship` | Federal/defense postings requiring US citizenship, checked against `profile.citizenships`. | `not_applicable` if unstated. A clearance requirement always returns `unknown` — the tool cannot verify one and says so. |
+| `location` | Text comparison, not distance. Nothing geocodes a posting, so `locationPrefs.maxCommuteKm` decides nothing here: the rule matches the posting's cities against your base city and relocation targets, and weighs remote and hybrid against your stated preferences. | `unknown` when the posting doesn't say where the role is based, and `unknown` for a location that isn't your city or a target — a radius can't be measured without coordinates, and guessing would hide a job in the next town. Never `not_applicable`. |
+| `term_overlap` | The posting's term window must overlap `availability` by ≥ 6 weeks. The window comes from explicit dates, else from "Summer 2027" and similar, else from an extracted `term_dates` requirement — an inferred window can raise a question but never hard-fails anyone. | `not_applicable` when the posting doesn't say when the role runs. |
+| `experience_ceiling` | `fail` if required professional years > `derived.yearsProfessionalExperience + 1`. Catches "internships" wanting 3+ years. | `not_applicable` if no experience requirement is stated; `unknown` if it's unparseable. Experience listed as preferred rather than required passes. |
+| `excluded_company` | `company` contains an entry from `preferences.excludeCompanies`. | Always decides. |
 
 `eligibility` = `ineligible` if any rule fails; else `unknown` if any rule is unknown; else
-`eligible`.
+`eligible`. `not_applicable` never moves the outcome.
+
+> **Deferred with Guardian mode:** an `age_work_permit` rule, which would attach an advisory
+> (never a fail) when the user is a minor and the posting's jurisdiction requires a work
+> permit or restricts hours. The locked decision of 2026-08-03 puts Guardian mode out of v1
+> — see docs/10 § Guardian mode and docs/11 § Decisions — so it is not in `RULES` and there
+> is no thirteenth rule.
 
 ### How the three states are presented
 
@@ -146,9 +170,9 @@ listed".
 
 | Dimension | Default weight | Computation |
 | --- | --- | --- |
-| Required-skill coverage | 30 | Fraction of `necessity: 'required'` skill requirements matched by `derived.skillIndex`. Exact + alias + embedding-similarity match, in that order of confidence. |
+| Required-skill coverage | 30 | Fraction of `necessity: 'required'` skill requirements matched against the user's skill names. Exact match on a normalized name, then a small hand-written alias table (`js`/`node` → javascript, `k8s` → kubernetes, and a handful more). The alias list is deliberately short: a wrong alias inflates a score silently. |
 | Preferred-skill coverage | 12 | Same over `preferred`. |
-| Role-family alignment | 18 | Cosine similarity between the posting title/description embedding and the user's role-family vector. |
+| Role-family alignment | 18 | Fraction of the posting title's terms that appear in the user's own vocabulary — experience titles, skill names and project names — after dropping stopwords and the words every internship title carries (`intern`, `internship`, `summer`). Cheap, explainable, and traceable to a specific word on the user's resume. |
 | Domain/interest match | 10 | Company industry vs `preferences.industries`. |
 | Seniority fit | 10 | Distance between required experience and `derived.seniorityBand`. Penalizes both over- and under-shooting. |
 | Location desirability | 8 | Remote / base city / relocation target, ranked by stated preference. |
@@ -157,11 +181,27 @@ listed".
 
 Score is clamped 0–100 and stored with the full breakdown so the UI can show the bars.
 
+**There are no embeddings anywhere in the app.** Skill coverage is exact-plus-alias and role
+alignment is token overlap; `core/writing/retrieve.ts` carries the same note about
+retrieval, and dedupe rejected them for its own reasons in docs/04. Embeddings would help
+the two skill rows most — "React" against "ReactJS", "Postgres" against "relational
+databases" — and `job_posting.embedding` is already in the schema waiting for them. Until
+something writes that column, every bar traces to a word the user can point at, which is
+worth something on its own.
+
 **`rationale`** is a 2–3 sentence explanation generated from the breakdown — and it is
-required to include the honest downside. The prompt asks explicitly for "the strongest
-reason to apply and the most likely reason you'd be rejected," both grounded in the
-breakdown and the requirement quotes. A ranking tool that only tells you why things are
-good is a ranking tool you stop believing.
+required to include the honest downside. There is no prompt and no model call:
+`core/matching/rationale.ts` composes the sentences in TypeScript from the scored
+dimensions and the rule results. The highest-scoring dimension that actually has evidence
+behind it becomes the reason to apply. The downside is any eligibility rule that came back
+`unknown`, plus the lowest-scoring dimension whenever it falls below 0.6; if neither applies
+it says outright that nothing stands out as a likely rejection reason. Dimensions that scored
+neutrally for lack of data are never named on either side, because a missing number is not
+evidence of anything. All of which means it cannot invent a reason it has no number for, and
+it reads exactly the same with or without an API key. A model polish pass over these
+sentences is **not built**; if one is added it has to take the same breakdown as its only
+source of facts, for the same reason. A ranking tool that only tells you why things are good
+is a ranking tool you stop believing.
 
 ## Preference learning — NOT BUILT
 

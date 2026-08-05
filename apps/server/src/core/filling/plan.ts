@@ -11,6 +11,7 @@
  * the finished form, which is exactly the review burden this design tries to remove.
  */
 import type { ApplicationAnswer, ConfirmedProfile, FormField } from '@ia/shared';
+import { isActionable } from './classify';
 import { checkRedline } from './redlines';
 
 export interface FillAction {
@@ -210,7 +211,13 @@ export function buildFillPlan(input: PlanInput): FillPlan {
       continue;
     }
 
-    if (field.semantic === 'unknown') {
+    // A weak guess is the same answer as no guess. classify.ts promises that anything below
+    // the confidence floor is left blank, and this is the only place that promise can be
+    // kept — nothing between the scanner and here reads `confidence` at all, so a
+    // classification scored 0.4 would have been typed into the form as if it were certain.
+    // Every stage-1 rule scores well above the floor today, so nothing changes until a
+    // weaker source of classifications exists, which is exactly when it needs to be here.
+    if (!isActionable(field)) {
       skips.push({
         field,
         reason: 'unknown',
@@ -287,7 +294,13 @@ export function buildFillPlan(input: PlanInput): FillPlan {
   return { actions, skips };
 }
 
-/** Counts for the pre-submit review. */
+/**
+ * One line describing a plan before a single key has been pressed.
+ *
+ * Not what the pre-submit review renders — that counts the run's RESULTS, after the fact.
+ * This counts the INTENT, which is the only thing that exists while the form is still
+ * untouched, and it is what the fill suite asserts a redline-only page produces.
+ */
 export function summarizePlan(plan: FillPlan): string {
   const red = plan.skips.filter((s) => s.reason === 'redline').length;
   const other = plan.skips.length - red;

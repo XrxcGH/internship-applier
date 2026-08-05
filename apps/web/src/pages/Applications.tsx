@@ -151,6 +151,11 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
    * AnswerReview closes on save, and closing it after a FAILED save threw away whatever
    * the user had typed — the view falls back to the stored text and there is no copy of
    * the new one anywhere.
+   *
+   * The key is always `verb:id`. Drafting used to pass the bare answer id while its four
+   * siblings passed prefixes, and the value handed to AnswerReview recognised only two of
+   * the five — so a save, a reopen or a delete left every button on the card enabled and
+   * a second click fired the request again.
    */
   const run = async (key: string, fn: () => Promise<unknown>): Promise<boolean> => {
     setBusy(key);
@@ -234,8 +239,8 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
                 key={a.id}
                 answer={a}
                 canDraft={app.canDraft}
-                busy={busy === a.id ? 'draft' : busy === `approve:${a.id}` ? 'approve' : null}
-                onDraft={() => void run(a.id, () => draftAnswer(a.id))}
+                busy={busy}
+                onDraft={() => void run(`draft:${a.id}`, () => draftAnswer(a.id))}
                 onSave={(text) => run(`save:${a.id}`, () => saveAnswer(a.id, text))}
                 onApprove={() => void run(`approve:${a.id}`, () => approveAnswer(a.id))}
                 onUnapprove={() => void run(`un:${a.id}`, () => unapproveAnswer(a.id))}

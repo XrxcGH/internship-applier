@@ -27,7 +27,8 @@ import * as llm from '../../infra/llm';
 import { logger } from '../../infra/logger';
 import { guardDraft, type GuardResult } from './factGuard';
 import { formatEvidence, retrieveEvidence, type Evidence } from './retrieve';
-import { findTells, summarize as summarizeTells, type Tell } from './tellScrub';
+import { PUNCTUATION_NAME } from './styleProfile';
+import { findTells, type ScrubOptions, type Tell } from './tellScrub';
 
 export interface DraftRequest {
   profile: ConfirmedProfile;
@@ -89,7 +90,7 @@ export function voiceInstructions(style: StyleProfile | undefined): string {
 
   const punct = Object.entries(style.punctuation)
     .filter(([, v]) => v > 0.4)
-    .map(([k]) => k);
+    .map(([k]) => PUNCTUATION_NAME[k as keyof StyleProfile['punctuation']]);
   if (punct.length > 0) lines.push(`This person uses ${punct.join(' and ')} more than most.`);
   if (style.punctuation.emDash < 0.2) {
     lines.push('This person almost never uses em dashes. Do not use them.');
@@ -198,7 +199,16 @@ export function buildRevisionMessage(guard: GuardResult, tells: Tell[]): string 
   }
 
   if (tells.length > 0) {
-    parts.push('', 'These phrasings read as machine-written. Replace them:', summarizeTells(tells));
+    // The counts alone ("1 overused word, 1 contrast reframe") told the model a phrase was
+    // wrong somewhere without saying which, so the revision came back with the phrase
+    // still in it and got thrown away by the better-than check.
+    parts.push(
+      '',
+      'These phrasings read as machine-written. Replace them:',
+      ...tells.map(
+        (t) => `- "${t.match}"\n  ${t.note}${t.suggestion ? ` Try: ${t.suggestion}` : ''}`,
+      ),
+    );
   }
 
   parts.push(
@@ -226,9 +236,18 @@ export async function draftAnswer(req: DraftRequest): Promise<DraftResult> {
   const user = userMessage(req);
   const maxTokens = Math.max(1500, (req.maxWords ?? 300) * 6);
 
+  // Em-dash density and sentence rhythm are only tells relative to how this person
+  // actually writes. Judged against the generic defaults, someone who genuinely writes
+  // with em dashes had their own habit called machine-written and revised out of the
+  // draft they were about to sign.
+  const scrub: ScrubOptions = {
+    baselineEmDashPer100: req.style?.punctuation.emDash,
+    baselineSentenceStdev: req.style?.sentenceLengthStdev,
+  };
+
   let text = await generate(system, user, maxTokens);
   let guard = guardDraft(text, evidence);
-  let tells = findTells(text);
+  let tells = findTells(text, scrub);
   let revised = false;
 
   const needsWork = guard.blocking.length > 0 || tells.length > 0;
@@ -249,7 +268,7 @@ export async function draftAnswer(req: DraftRequest): Promise<DraftResult> {
     // unsupported claims for three is not progress.
     if (revisedText.length > 0) {
       const revisedGuard = guardDraft(revisedText, evidence);
-      const revisedTells = findTells(revisedText);
+      const revisedTells = findTells(revisedText, scrub);
       const better =
         revisedGuard.blocking.length < guard.blocking.length ||
         (revisedGuard.blocking.length === guard.blocking.length &&

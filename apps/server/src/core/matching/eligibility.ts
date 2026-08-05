@@ -132,43 +132,61 @@ const ACADEMIC_TO_LEVEL: Record<string, string> = {
 };
 
 export function educationLevel({ profile, requirements }: RuleInput): RuleResult {
-  const req = firstOfKind(requirements, 'education_level');
-  if (!req) return na('education_level', 'The posting does not state an education level.');
+  const reqs = requirements.filter((r) => r.kind === 'education_level');
+  if (reqs.length === 0) {
+    return na('education_level', 'The posting does not state an education level.');
+  }
 
-  const value = typedValue<{ levels: string[] }>(req);
-  if (!value) {
+  // "Bachelor's or Master's degree" arrives as two separate requirements, one per level,
+  // and reading only the first of them let the sort order decide the rule. When the model
+  // was the one to spot the master's clause it outranked the regex's bachelor's on
+  // confidence and hard-failed an undergraduate the posting had explicitly welcomed.
+  // Every level a posting names is an alternative, so they are pooled and meeting any one
+  // of them is enough.
+  const wanted = new Map<string, JobRequirement>();
+  for (const r of reqs) {
+    for (const level of typedValue<{ levels: string[] }>(r)?.levels ?? []) {
+      if (!wanted.has(level)) wanted.set(level, r);
+    }
+  }
+
+  if (wanted.size === 0) {
     return unknown('education_level', 'An education requirement could not be parsed.', {
-      requirementId: req.id,
+      requirementId: reqs[0]!.id,
     });
   }
-  if (value.levels.includes('any')) {
-    return pass('education_level', 'Open to any education level.', { requirementId: req.id });
+
+  const openToAny = wanted.get('any');
+  if (openToAny) {
+    return pass('education_level', 'Open to any education level.', {
+      requirementId: openToAny.id,
+    });
   }
 
   const mine = ACADEMIC_TO_LEVEL[profile.derived.academicLevel] ?? 'none';
   if (mine === 'none') {
     return unknown('education_level', 'No education history on file to check against.', {
-      requirementId: req.id,
+      requirementId: reqs[0]!.id,
       profileRef: 'education',
     });
   }
 
   // "Enrolled in a Bachelor's" is satisfied by anyone at or above that level.
   const mineRank = LEVEL_ORDER.indexOf(mine);
-  const ok = value.levels.some((l) => {
-    const rank = LEVEL_ORDER.indexOf(l);
+  const met = [...wanted].find(([level]) => {
+    const rank = LEVEL_ORDER.indexOf(level);
     return rank === -1 ? false : mineRank >= rank;
   });
 
-  return ok
+  return met
     ? pass('education_level', `Your level (${mine}) meets the requirement.`, {
-        requirementId: req.id,
+        requirementId: met[1].id,
         profileRef: 'derived.academicLevel',
       })
     : fail(
         'education_level',
-        `This posting wants ${value.levels.join(' or ')}; your level is ${mine}.`,
-        { requirementId: req.id, profileRef: 'derived.academicLevel' },
+        `This posting wants ${[...wanted.keys()].join(' or ')}; your level is ${mine}.`,
+        { requirementId: reqs[0]!.id, profileRef: 'derived.academicLevel' },
       );
 }
 
@@ -240,105 +258,136 @@ export function enrollment({ profile, requirements, now }: RuleInput): RuleResul
       });
 }
 
-export function workAuthorization({ profile, requirements }: RuleInput): RuleResult {
-  const req = firstOfKind(requirements, 'work_auth');
-  if (!req) return na('work_authorization', 'The posting does not mention work authorization.');
+interface WorkAuthValue {
+  sponsorshipUnavailable?: boolean;
+  requiresExistingAuthorization?: boolean;
+}
 
-  const value = typedValue<{
-    sponsorshipUnavailable?: boolean;
-    requiresExistingAuthorization?: boolean;
-  }>(req);
-  if (!value) {
+export function workAuthorization({ profile, requirements }: RuleInput): RuleResult {
+  const reqs = requirements.filter((r) => r.kind === 'work_auth');
+  if (reqs.length === 0) {
+    return na('work_authorization', 'The posting does not mention work authorization.');
+  }
+
+  const parsed: Array<{ req: JobRequirement; value: WorkAuthValue }> = [];
+  for (const req of reqs) {
+    const value = typedValue<WorkAuthValue>(req);
+    if (value) parsed.push({ req, value });
+  }
+
+  if (parsed.length === 0) {
     return unknown('work_authorization', 'A work-authorization clause could not be parsed.', {
-      requirementId: req.id,
+      requirementId: reqs[0]!.id,
     });
   }
 
   const auth = profile.workAuthorization;
   if (auth.status === 'unknown') {
     return unknown('work_authorization', 'Your work-authorization status is not on file.', {
-      requirementId: req.id,
+      requirementId: reqs[0]!.id,
       profileRef: 'workAuthorization.status',
     });
   }
 
   if (!auth.needsSponsorship) {
     return pass('work_authorization', 'You do not need sponsorship.', {
-      requirementId: req.id,
+      requirementId: reqs[0]!.id,
       profileRef: 'workAuthorization.needsSponsorship',
     });
   }
 
-  return value.sponsorshipUnavailable
+  // A posting can say both "must be authorized to work in the US" and "we do not sponsor".
+  // Judging it on whichever of the two sorted first told a user who needs sponsorship that
+  // the posting "does not rule it out" while one of its own sentences did exactly that, so
+  // every clause is read and any refusal decides.
+  //
+  // Requiring existing authorization is deliberately not a blocker by itself: plenty of
+  // employers write that line and sponsor anyway, and treating it as a refusal would hide
+  // postings the user could actually get.
+  const refuses = parsed.find((p) => p.value.sponsorshipUnavailable);
+
+  return refuses
     ? fail(
         'work_authorization',
         'You need sponsorship and this posting states it is not available.',
-        { requirementId: req.id, profileRef: 'workAuthorization.needsSponsorship' },
+        { requirementId: refuses.req.id, profileRef: 'workAuthorization.needsSponsorship' },
       )
     : pass('work_authorization', 'You need sponsorship; the posting does not rule it out.', {
-        requirementId: req.id,
+        requirementId: parsed[0]!.req.id,
         profileRef: 'workAuthorization.needsSponsorship',
       });
 }
 
 export function citizenship({ profile, requirements }: RuleInput): RuleResult {
-  const req = firstOfKind(requirements, 'citizenship');
-  if (!req) return na('citizenship', 'The posting does not state a citizenship requirement.');
+  const reqs = requirements.filter((r) => r.kind === 'citizenship');
+  if (reqs.length === 0) {
+    return na('citizenship', 'The posting does not state a citizenship requirement.');
+  }
 
-  const value = typedValue<{ countries?: string[]; clearanceRequired?: boolean }>(req);
-  if (!value) {
+  // "Requires US citizenship and an active security clearance" is two requirements, and
+  // reading only one of them dropped the clearance advisory on the floor — the user was
+  // told the citizenship requirement was met and never heard about the clearance at all.
+  // Countries are pooled across the clauses, which can only widen who qualifies.
+  const countries: string[] = [];
+  let countriesFrom: JobRequirement | undefined;
+  let clearanceFrom: JobRequirement | undefined;
+  let parsedAny = false;
+
+  for (const r of reqs) {
+    const value = typedValue<{ countries?: string[]; clearanceRequired?: boolean }>(r);
+    if (!value) continue;
+    parsedAny = true;
+    if (value.countries?.length) {
+      countries.push(...value.countries);
+      countriesFrom ??= r;
+    }
+    if (value.clearanceRequired) clearanceFrom ??= r;
+  }
+
+  if (!parsedAny) {
     return unknown('citizenship', 'A citizenship clause could not be parsed.', {
-      requirementId: req.id,
+      requirementId: reqs[0]!.id,
     });
   }
 
-  if (value.countries?.length) {
+  if (countriesFrom && countries.length) {
     if (profile.citizenships.length === 0) {
       return unknown(
         'citizenship',
-        `This posting requires ${value.countries.join(' or ')} citizenship; yours is not on file.`,
-        { requirementId: req.id, profileRef: 'citizenships' },
+        `This posting requires ${countries.join(' or ')} citizenship; yours is not on file.`,
+        { requirementId: countriesFrom.id, profileRef: 'citizenships' },
       );
     }
-    const ok = value.countries.some((c) =>
+    const ok = countries.some((c) =>
       profile.citizenships.some((mine) => mine.toUpperCase() === c.toUpperCase()),
     );
     if (!ok) {
       return fail(
         'citizenship',
-        `Requires ${value.countries.join(' or ')} citizenship; you hold ${profile.citizenships.join(', ')}.`,
-        { requirementId: req.id, profileRef: 'citizenships' },
+        `Requires ${countries.join(' or ')} citizenship; you hold ${profile.citizenships.join(', ')}.`,
+        { requirementId: countriesFrom.id, profileRef: 'citizenships' },
       );
     }
   }
 
-  if (value.clearanceRequired) {
+  if (clearanceFrom) {
     return unknown(
       'citizenship',
       'This posting requires a security clearance. The tool cannot verify that — check yourself.',
-      { requirementId: req.id },
+      { requirementId: clearanceFrom.id },
     );
   }
 
-  return pass('citizenship', 'Citizenship requirement met.', { requirementId: req.id });
+  return pass('citizenship', 'Citizenship requirement met.', { requirementId: reqs[0]!.id });
 }
 
-const EARTH_RADIUS_KM = 6371;
-
-/** Great-circle distance. Only used when both points have coordinates. */
-export function haversineKm(
-  a: { lat: number; lon: number },
-  b: { lat: number; lon: number },
-): number {
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLon = toRad(b.lon - a.lon);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(h));
-}
-
+/**
+ * Locations are compared as text, not as distances.
+ *
+ * Nothing upstream geocodes a posting, so there are no coordinates to measure with and
+ * `locationPrefs.maxCommuteKm` decides nothing in this rule. A city the rule does not
+ * recognise comes back `unknown` for the user to judge, rather than being guessed at.
+ */
 export function location({ profile, posting }: RuleInput): RuleResult {
   const arrangement = posting.workArrangement;
   const prefs = profile.locationPrefs;
@@ -502,8 +551,28 @@ export function deriveTermWindow(term: PostingFacts['term']): {
   return { window: null, approximate: false };
 }
 
-export function termOverlap({ profile, posting }: RuleInput): RuleResult {
-  const { window, approximate } = deriveTermWindow(posting.term);
+export function termOverlap({ profile, posting, requirements }: RuleInput): RuleResult {
+  const derived = deriveTermWindow(posting.term);
+  let window = derived.window;
+  let approximate = derived.approximate;
+  let inferredAs = `a ${posting.term.season} ${posting.term.year} term`;
+  let requirementId: string | undefined;
+
+  // Dates a posting only states in prose ("runs June through August 2027") never reach
+  // posting.term — they come back as a term_dates requirement — so the rule went
+  // not_applicable on postings that plainly said when the role runs. Extracted dates are
+  // treated as approximate, which means they can raise a question but can never hard-fail
+  // anyone on a date nobody parsed from a structured field.
+  if (!window) {
+    const req = firstOfKind(requirements, 'term_dates');
+    const value = req ? typedValue<{ start?: string; end?: string }>(req) : null;
+    if (req && value?.start && value.end) {
+      window = { start: value.start, end: value.end };
+      approximate = true;
+      inferredAs = `a ${value.start} to ${value.end} term`;
+      requirementId = req.id;
+    }
+  }
 
   if (!window) {
     // The posting simply doesn't say when the role runs. That's missing information
@@ -518,6 +587,7 @@ export function termOverlap({ profile, posting }: RuleInput): RuleResult {
       'Your availability window is not set, so overlap cannot be checked.',
       {
         profileRef: 'availability',
+        ...(requirementId ? { requirementId } : {}),
       },
     );
   }
@@ -528,6 +598,7 @@ export function termOverlap({ profile, posting }: RuleInput): RuleResult {
     return unknown(
       'term_overlap',
       'Either the posting or your availability has unreadable dates, so overlap cannot be checked.',
+      requirementId ? { requirementId } : {},
     );
   }
 
@@ -536,9 +607,9 @@ export function termOverlap({ profile, posting }: RuleInput): RuleResult {
   if (approximate && weeks < MIN_OVERLAP_WEEKS) {
     return unknown(
       'term_overlap',
-      `Inferred a ${posting.term.season} ${posting.term.year} term from the posting, which looks like ` +
+      `Inferred ${inferredAs} from the posting, which looks like ` +
         `about ${Math.round(weeks)} week(s) of overlap with your availability. The posting gives no exact dates — check it.`,
-      { profileRef: 'availability' },
+      { profileRef: 'availability', ...(requirementId ? { requirementId } : {}) },
     );
   }
 
@@ -546,6 +617,7 @@ export function termOverlap({ profile, posting }: RuleInput): RuleResult {
   return weeks >= MIN_OVERLAP_WEEKS
     ? pass('term_overlap', `Overlaps your availability by about ${rounded} weeks.`, {
         profileRef: 'availability',
+        ...(requirementId ? { requirementId } : {}),
       })
     : fail(
         'term_overlap',

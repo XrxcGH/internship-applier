@@ -103,7 +103,11 @@ export function parseWorkArrangement(text: string): WorkArrangement | null {
 }
 
 export function parseHybridDays(text: string): number | null {
-  const m = text.match(/(\d)\s*(?:days?|x)\s*(?:per|a|\/)\s*week\s*(?:in|on[- ]site|in office)/i);
+  // "onsite" as one word is written at least as often as "on-site", and without the
+  // optional hyphen "3 days per week onsite" came back as no answer at all while
+  // "on-site" parsed — so parseWorkArrangement called the same sentence hybrid and this
+  // called the day count unknown. The bare "in" already covers "in office" and "in person".
+  const m = text.match(/(\d)\s*(?:days?|x)\s*(?:per|a|\/)\s*week\s*(?:in|on[- ]?site)/i);
   if (m?.[1]) {
     const n = Number(m[1]);
     return n >= 0 && n <= 7 ? n : null;

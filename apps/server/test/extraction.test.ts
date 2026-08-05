@@ -109,6 +109,39 @@ describe('deterministic extraction', () => {
     );
     expect(soft.find((r) => r.kind === 'experience_years')?.necessity).toBe('preferred');
   });
+
+  /**
+   * A clearance requirement is one of the few things that can genuinely disqualify a
+   * student, so both directions of this matter: inventing one contradicts the quote shown
+   * beside it, and dropping a real one hides the reason a posting is out of reach.
+   *
+   * The negation guard has to end at a clause, not a sentence. Scanning back to the last
+   * full stop meant any unrelated "no", "not" or "without" earlier in the same sentence
+   * suppressed a real requirement — and job descriptions are full of them.
+   */
+  const clearanceOf = (text: string) =>
+    deterministicRequirements(text).find(
+      (r) =>
+        r.kind === 'citizenship' && (r.value as { clearanceRequired?: boolean }).clearanceRequired,
+    );
+
+  it('still finds a clearance requirement after an unrelated negation in the same sentence', () => {
+    expect(
+      clearanceOf(
+        'This role does not offer relocation, and an active security clearance is required.',
+      ),
+      'negation belongs to relocation, not to the clearance',
+    ).toBeDefined();
+    expect(
+      clearanceOf('Sponsorship is not available; security clearance is required.'),
+      'the semicolon ends the negated clause',
+    ).toBeDefined();
+  });
+
+  it('does not invent a clearance requirement from a sentence denying one', () => {
+    expect(clearanceOf('No security clearance is required for this role.')).toBeUndefined();
+    expect(clearanceOf('This position does not require a security clearance.')).toBeUndefined();
+  });
 });
 
 describe('value validation', () => {

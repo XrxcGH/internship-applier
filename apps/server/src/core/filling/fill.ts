@@ -60,8 +60,10 @@ function locate(frame: Frame, field: FormField): Locator {
 /**
  * Above this many characters, keystroke pacing is dropped.
  *
- * An essay is the only thing that gets near it, and pacing a 600-character answer at
- * human speed costs a minute per field for no benefit — the key events still fire.
+ * The pacing exists so a debouncing widget — an autocomplete, a validator that fires on
+ * change — has time to keep up. An essay box has nothing watching it, so at `TYPING_DELAY`
+ * a 600-character answer would spend somewhere between six and eighteen seconds asleep for
+ * no benefit at all. The key events fire either way, which is the part that matters.
  */
 const LONG_TEXT = 120;
 
@@ -242,9 +244,7 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
         // Clear anything prefilled, or values concatenate.
         await loc.fill('');
         // Real key events, because that is what widgets listen for. The DELAY between
-        // them is not what makes them work, so long text gets no pacing: an essay typed
-        // at 40-120ms per character takes over a minute and times out, while the events
-        // themselves are dispatched either way.
+        // them is not what makes them work, so anything past LONG_TEXT gets none.
         await loc.pressSequentially(value, {
           delay: value.length > LONG_TEXT ? 0 : keyDelay(),
           timeout: 60_000,

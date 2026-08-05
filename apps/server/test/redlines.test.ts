@@ -15,8 +15,7 @@
 import { describe, expect, it } from 'vitest';
 import { checkRedline, describeSkipped, normalizeField } from '../src/core/filling/redlines';
 
-const redline = (label: string, extra: Record<string, string> = {}) =>
-  checkRedline({ label, ...extra });
+const redline = (label: string) => checkRedline({ label });
 
 describe('must never be filled', () => {
   const CASES: Array<[string, string]> = [
@@ -87,6 +86,11 @@ describe('must never be filled', () => {
     ['Government-issued ID', 'government_id'],
     ['Work Permit Number', 'government_id'],
     ['Passport expiry date', 'government_id'],
+    // The identifier senses of "numero de", which is the phrase that has to keep working
+    // now that it no longer matches on its own.
+    ['Número de Seguridad Social', 'government_id'],
+    ['Numero de identidad', 'government_id'],
+    ['Numéro de sécurité sociale', 'government_id'],
 
     // International banking, and the autocomplete tokens a form can declare with no label.
     ['BSB', 'financial'],
@@ -112,6 +116,27 @@ describe('must never be filled', () => {
     ['This declaration must be notarised', 'attestation'],
     ['DocuSign', 'attestation'],
     ['Please sign below', 'attestation'],
+
+    // Health disclosure, in every phrasing the pattern claims to cover. "Medical" needs a
+    // second word to separate a health question from "Medical school", and each of those
+    // second words has to be checked in both numbers — see the plural block below for why.
+    ['Medical condition', 'eeo_demographic'],
+    ['Do you have any medical conditions?', 'eeo_demographic'],
+    ['Medical history', 'eeo_demographic'],
+    ['Medical histories', 'eeo_demographic'],
+    ['Medical information', 'eeo_demographic'],
+    ['Medical leave', 'eeo_demographic'],
+    ['Medical leaves', 'eeo_demographic'],
+    ['Medical record', 'eeo_demographic'],
+    ['Medical records', 'eeo_demographic'],
+    ['Medical exam', 'eeo_demographic'],
+    ['Medical exams', 'eeo_demographic'],
+    ['Medical examination', 'eeo_demographic'],
+    ['Medical examinations', 'eeo_demographic'],
+    ['Medical screening', 'eeo_demographic'],
+    ['Medical screenings', 'eeo_demographic'],
+    ['Health condition', 'eeo_demographic'],
+    ['Health conditions', 'eeo_demographic'],
 
     // AI disclosure
     ['Did you use AI to write any part of this application?', 'ai_disclosure'],
@@ -193,6 +218,17 @@ describe('must still be filled', () => {
     // And an academic declaration is not a legal one.
     'Declaration of major',
     'Marketing',
+    // A middle initial is a name, not a signature.
+    'Middle initial',
+    'First initial',
+    // "Medical" only means a health disclosure with a second word behind it, and "school"
+    // is not one of them in either number.
+    'Medical school',
+    'Medical schools',
+    // On a Spanish or French form, "numero de" is how you ask for a phone number.
+    'Numero de telefono',
+    'Número de teléfono',
+    'Numéro de téléphone',
   ];
 
   for (const label of ORDINARY) {
@@ -228,6 +264,83 @@ describe('must still be filled', () => {
     expect(redline('Salary expectation')).toBeNull();
     expect(redline('Desired compensation')).toBeNull();
     expect(redline('Current salary')?.category).toBe('financial');
+  });
+});
+
+/**
+ * Plurals, which are not a detail.
+ *
+ * Several patterns pair a broad word with a narrower one to pin down the dangerous sense —
+ * `medical condition` rather than bare `medical`, `background check` rather than bare
+ * `background`. Every such pattern is one `\b` away from covering only half the labels it
+ * looks like it covers, and the half it loses is the one forms use more: a page says
+ * "Medical conditions", "Background checks", "Security questions". A singular-only list
+ * reads as if the field is protected while the plural walks straight through it, which is
+ * the worst kind of gap because nothing about the pattern looks wrong.
+ *
+ * So each of these is asserted in both numbers, and the block below asserts that widening
+ * did not start swallowing ordinary plural labels.
+ */
+describe('plural labels are caught too', () => {
+  const BOTH_NUMBERS: Array<[string, string, string]> = [
+    ['Medical condition', 'Medical conditions', 'eeo_demographic'],
+    ['Health condition', 'Health conditions', 'eeo_demographic'],
+    ['Political affiliation', 'Political affiliations', 'eeo_demographic'],
+    ['Emergency contact', 'Emergency contacts', 'eeo_demographic'],
+    ['Protected veteran', 'Protected veterans', 'eeo_demographic'],
+    ['Background check', 'Background checks', 'consent'],
+    ['Background screening', 'Background screenings', 'consent'],
+    ['Drug test', 'Drug tests', 'consent'],
+    ['Credit check', 'Credit checks', 'consent'],
+    ['Consumer report', 'Consumer reports', 'consent'],
+    ['Security question', 'Security questions', 'credential'],
+    ['Verification code', 'Verification codes', 'credential'],
+    ['One-time password', 'One-time passwords', 'credential'],
+    ['Bank account', 'Bank accounts', 'financial'],
+    ['Account number', 'Account numbers', 'financial'],
+    ['Voided cheque', 'Voided cheques', 'financial'],
+    ['Work permit', 'Work permits', 'government_id'],
+    ['ID document', 'ID documents', 'government_id'],
+    ['Alien registration number', 'Alien registration numbers', 'government_id'],
+    ['Applicant declaration', 'Applicant declarations', 'attestation'],
+    ['Certification statement', 'Certification statements', 'attestation'],
+    ['Signature', 'Signatures', 'attestation'],
+  ];
+
+  for (const [singular, plural, category] of BOTH_NUMBERS) {
+    it(`catches "${singular}" and "${plural}"`, () => {
+      expect(redline(singular)?.category, singular).toBe(category);
+      expect(redline(plural)?.category, plural).toBe(category);
+    });
+  }
+
+  it('does not start refusing ordinary fields that happen to be plural', () => {
+    // The other direction. Widening a redline is only safe if it stops at the plural of the
+    // same word, and these are the labels closest to the ones just widened.
+    for (const label of [
+      'Medical schools',
+      'GitHub usernames',
+      'LinkedIn usernames',
+      'Salary expectations',
+      'Middle initials',
+      'Professional certifications',
+      'Certification names',
+      'Cover letters',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+  });
+
+  it('catches a card expiry field that never says "credit card"', () => {
+    // The stem `expir` followed by a word boundary matched no real label at all, so a
+    // checkout-style "Card expiration date" was left looking like an ordinary date.
+    expect(redline('Card expiration date')?.category).toBe('financial');
+    expect(redline('Card expiry')?.category).toBe('financial');
+  });
+
+  it('catches the bare "Disability" label EEO sections actually use', () => {
+    expect(redline('Disability')?.category).toBe('eeo_demographic');
+    expect(redline('Disability status')?.category).toBe('eeo_demographic');
   });
 });
 

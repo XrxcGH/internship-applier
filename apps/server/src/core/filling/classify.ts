@@ -1,12 +1,15 @@
 /**
  * Field classification — docs/07-form-automation.md § Classification.
  *
- * Turns "what is this input?" into a `FieldSemantic`. Two stages, cheap first:
+ * Turns "what is this input?" into a `FieldSemantic`. Two stages were specified, cheap
+ * first, and only the first of them exists:
  *
  *   1. This file. A rule table over the normalized label + name + id + autocomplete.
  *      Free, instant, unit-testable, and it handles the large majority of real fields.
- *   2. An LLM fallback for the remainder (see `classifyWithModel`), which only runs on
- *      fields stage 1 could not name.
+ *   2. Not built. docs/07 § Classification specifies an LLM fallback over the fields stage 1
+ *      cannot name, returning its own semantic and confidence. Until it exists, a field
+ *      stage 1 does not recognize stays `unknown` and is handed back to the user, which is
+ *      the safe half of that design and the reason its absence is not urgent.
  *
  * THE ORDER OF CHECKS IS THE DESIGN. Redlines are consulted before anything else, so a
  * field can never be classified into something fillable and then filled — a mislabeled SSN
@@ -16,9 +19,10 @@
  * what the field is, in a standard vocabulary, on purpose. That beats any guess made from
  * prose. Regexes only run when the attribute is absent or unrecognized.
  *
- * UNRECOGNIZED IS A REAL ANSWER. Anything below the confidence floor stays `unknown`, is
- * left blank, and is surfaced for the user. A wrong guess in a job application is worse
- * than a blank the user fills in themselves, so this file never reaches for a default.
+ * UNRECOGNIZED IS A REAL ANSWER. Anything below the confidence floor is treated as
+ * `unknown` by the planner, left blank, and surfaced for the user. A wrong guess in a job
+ * application is worse than a blank the user fills in themselves, so this file never
+ * reaches for a default.
  */
 import type { FieldSemantic } from '@ia/shared';
 import { checkRedline, normalizeField } from './redlines';
@@ -39,15 +43,13 @@ export interface FieldDescriptor {
    * the user approved for exactly that question.
    */
   control?: string;
-  /** Nearby text, used only by the model fallback. */
-  context?: string;
 }
 
 export interface Classification {
   semantic: FieldSemantic;
   confidence: number;
   /** Which rule decided, so a surprising fill can be traced back. */
-  via: 'redline' | 'autocomplete' | 'rule' | 'model' | 'none';
+  via: 'redline' | 'autocomplete' | 'rule' | 'none';
 }
 
 /** Below this, a guess is not worth acting on. docs/07 sets it at 0.75. */
@@ -271,7 +273,14 @@ export function classifyField(d: FieldDescriptor): Classification {
   return { semantic: 'unknown', confidence: 0, via: 'none' };
 }
 
-/** Anything at or above the floor may be acted on. */
-export function isActionable(c: Classification): boolean {
+/**
+ * Anything at or above the floor may be acted on.
+ *
+ * Takes the semantic and the confidence rather than a whole `Classification`, because the
+ * planner asks this question of a `FormField` that has already been through the scanner and
+ * no longer carries which rule decided it. The floor has to be enforced there — the plan is
+ * the last thing between a guess and a keystroke.
+ */
+export function isActionable(c: { semantic: FieldSemantic; confidence: number }): boolean {
   return c.semantic !== 'unknown' && c.semantic !== 'REDLINE' && c.confidence >= CONFIDENCE_FLOOR;
 }

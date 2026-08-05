@@ -17,6 +17,8 @@
  * happens in the wild rather than being difficult for its own sake.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const page = (title: string, body: string, head = ''): string => /* html */ `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>${title}</title>${head}</head>
@@ -325,7 +327,11 @@ export interface FixtureServer {
 
 export function startFixtureServer(port = 0): Promise<FixtureServer> {
   const server = createFixtureServer();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    // A failed bind — 4310 already taken by an earlier fixture — raises 'error' rather than
+    // throwing. With no listener the process died on an unhandled event while this promise
+    // stayed pending forever, so the caller never got to say what went wrong.
+    server.once('error', reject);
     // Port 0 lets the OS assign a free one, so parallel test files never collide.
     server.listen(port, '127.0.0.1', () => {
       const addr = server.address();
@@ -346,8 +352,25 @@ export function startFixtureServer(port = 0): Promise<FixtureServer> {
   });
 }
 
-if (process.argv[1]?.endsWith('index.ts')) {
-  void startFixtureServer(4310).then(({ url }) => {
-    console.log(`fixture ATS listening on ${url}`);
-  });
+/**
+ * Only when this file is the thing that was run: `npm start -w @ia/fixtures`.
+ *
+ * The old test asked whether the entry script was called index.ts, which is equally true of
+ * the server's own `tsx src/index.ts`. @ia/fixtures is a production dependency of
+ * @ia/server, so the first time anything under apps/server/src imported a helper from here,
+ * `npm run dev` would have bound a mock ATS to 127.0.0.1:4310 as an import side effect.
+ */
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(path.resolve(entry)).href) {
+  void startFixtureServer(4310).then(
+    ({ url }) => {
+      console.log(`fixture ATS listening on ${url}`);
+    },
+    (err: unknown) => {
+      console.error(
+        `fixture ATS could not start on 4310: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exitCode = 1;
+    },
+  );
 }

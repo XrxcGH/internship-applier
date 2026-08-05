@@ -13,7 +13,14 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * The one fetch wrapper. Exported because `lib/matches.ts` needs it too.
+ *
+ * It used to keep a near-identical copy of this function that threw a plain Error, so a
+ * 404 from the match endpoints arrived at the queue indistinguishable from a 500 — and
+ * the 401 token recovery below had to be remembered in two places.
+ */
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
@@ -39,17 +46,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const fetchHealth = () => request<HealthResponse>('/api/health').then(HealthResponse.parse);
-
-export interface ResumeDoc {
-  id: string;
-  filename: string;
-  mime: string;
-  bytes: number;
-  isPrimary: boolean;
-  createdAt: string;
-}
-
-export const listResumes = () => request<ResumeDoc[]>('/api/resumes');
 
 export async function uploadResume(file: File): Promise<{ documentId: string }> {
   const form = new FormData();
@@ -300,7 +296,14 @@ export const discardFill = (id: string) =>
 export const markSubmitted = (id: string) =>
   request<{ id: string; status: string; submittedAt: string }>(
     `/api/applications/${id}/mark-submitted`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // The server refuses the call without this and answers CONFIRMATION_REQUIRED. It is
+      // the user stating they clicked Submit on the real page, which is the only evidence
+      // this app can ever have that an application was actually sent.
+      body: JSON.stringify({ confirmed: true }),
+    },
   );
 
 // ─────────────────────────────────────────────────────────────────── tracker
@@ -317,6 +320,8 @@ export interface DerivedState {
     | 'none';
   nudge: string | null;
   daysSinceSubmitted: number | null;
+  /** Days since the last thing that happened, which is the number the silence nudge quotes. */
+  daysQuiet: number | null;
   daysUntilDeadline: number | null;
 }
 
@@ -338,7 +343,7 @@ export interface TrackedApp {
 
 export interface Reminder {
   applicationId: string;
-  kind: 'deadline' | 'follow_up' | 'still_open' | 'stale_offer';
+  kind: 'deadline' | 'follow_up' | 'still_open';
   urgency: number;
   headline: string;
   detail: string;

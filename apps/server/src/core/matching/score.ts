@@ -39,6 +39,11 @@ export interface ScoreInput {
     positionType: string | null;
   };
   requirements: JobRequirement[];
+  /**
+   * Nothing passes these yet — there is no settings screen for weights — so every run
+   * scores on DEFAULT_WEIGHTS. The seam is here because the weights are the one part of
+   * ranking a user would reasonably want to argue with.
+   */
   weights?: ScoreWeights;
 }
 
@@ -64,7 +69,10 @@ function normalizeSkill(s: string): string {
 
 /** Common aliases. Deliberately small — a wrong alias inflates a score silently. */
 const ALIASES: Record<string, string[]> = {
-  javascript: ['js', 'node', 'nodejs'],
+  // 'node.js' is spelled out because normalizeSkill keeps the dot: the commonest spelling
+  // of the skill matched neither 'node' nor 'nodejs', so a resume listing Node.js scored
+  // zero against a posting asking for Node — the one case this group exists for.
+  javascript: ['js', 'node', 'nodejs', 'node.js'],
   typescript: ['ts'],
   python: ['py'],
   postgresql: ['postgres', 'psql'],

@@ -189,13 +189,25 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
       .orderBy(desc(schema.application.createdAt))
       .all();
 
+    /**
+     * One grouped read of the answers rather than a query per application, the same way
+     * the tracker board counts them. This list is fetched every time the Applications
+     * screen opens, and a season's worth of applications turned that into a hundred round
+     * trips against the local SQLite file for three numbers.
+     */
+    const counts = new Map<string, { total: number; approved: number; blocked: number }>();
+    for (const a of db.select().from(schema.applicationAnswer).all()) {
+      const cur = counts.get(a.applicationId) ?? { total: 0, approved: 0, blocked: 0 };
+      counts.set(a.applicationId, {
+        total: cur.total + 1,
+        approved: cur.approved + (a.approvedAt ? 1 : 0),
+        blocked: cur.blocked + (((a.flags ?? []) as AnswerFlag[]).some(isBlocking) ? 1 : 0),
+      });
+    }
+
     return {
       applications: rows.map((r) => {
-        const answers = db
-          .select()
-          .from(schema.applicationAnswer)
-          .where(eq(schema.applicationAnswer.applicationId, r.application.id))
-          .all();
+        const c = counts.get(r.application.id) ?? { total: 0, approved: 0, blocked: 0 };
         return {
           id: r.application.id,
           status: r.application.status,
@@ -205,10 +217,9 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
           deadlineAt: r.application.deadlineAt,
           submittedAt: r.application.submittedAt,
           createdAt: r.application.createdAt,
-          answerCount: answers.length,
-          approvedCount: answers.filter((a) => a.approvedAt).length,
-          blockedCount: answers.filter((a) => ((a.flags ?? []) as AnswerFlag[]).some(isBlocking))
-            .length,
+          answerCount: c.total,
+          approvedCount: c.approved,
+          blockedCount: c.blocked,
         };
       }),
     };
@@ -239,8 +250,11 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * Adds a question by hand. Until M6 reads forms directly, this is how a question gets
-   * into the workspace — paste it from the application page.
+   * Adds a question by hand.
+   *
+   * A fill run does read the form, but it maps essay boxes to answers that already exist
+   * here; it never turns a question it found on the page into a workspace question. So
+   * pasting the question from the application page is still the only way one gets in.
    */
   app.post<{ Params: { id: string } }>('/api/applications/:id/questions', async (req, reply) => {
     const ctx = loadContext(req.params.id);

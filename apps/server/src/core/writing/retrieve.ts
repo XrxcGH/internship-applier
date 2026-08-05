@@ -40,15 +40,21 @@ const STOPWORDS = new Set(
     // Function words long enough to survive the length filter. Kept here rather than in a
     // second list so retrieval and FactGuard score against the same notion of "content".
     'where while there then than also just very really still after before because though into ' +
-    'over more most much some any all like being them these those such over under both each ' +
+    'over more most much some any all like being them these those such under both each ' +
     'through during without within across among between able'
   ).split(' '),
 );
 
 /** Content tokens — shared by retrieval scoring and FactGuard's support scoring. */
 export function tokens(s: string): string[] {
-  return (s.toLowerCase().match(/[\p{L}0-9+#.]+/gu) ?? []).filter(
-    (t) => t.length > 2 && !STOPWORDS.has(t),
+  return (
+    (s.toLowerCase().match(/[\p{L}0-9+#.]+/gu) ?? [])
+      // The dot is in the class so "node.js" and ".NET" survive whole, but it also glued
+      // the full stop onto the last word of every sentence: "store." never matched the
+      // evidence token "store", so each claim quietly lost a content word and coverage
+      // came out low enough to push honest sentences from green to amber.
+      .map((t) => t.replace(/^\.+|\.+$/g, ''))
+      .filter((t) => t.length > 2 && !STOPWORDS.has(t))
   );
 }
 
@@ -171,14 +177,20 @@ export function retrieveEvidence(
   const ranked = items.sort((a, b) => b.score - a.score);
 
   // Always keep at least one education and one experience item if the profile has them,
-  // even when the question is about something else.
+  // even when the question is about something else. Each missing kind takes its own slot
+  // at the tail: both used to be written into the last one, so a profile where neither
+  // made the cut got its education item and then had it overwritten by the experience
+  // one, and a true "my GPA is 3.8" sentence was blocked for having no education fact to
+  // check against.
   const chosen = ranked.slice(0, limit);
-  for (const kind of ['education', 'experience'] as const) {
-    if (!chosen.some((c) => c.kind === kind)) {
-      const first = ranked.find((r) => r.kind === kind);
-      if (first) chosen[chosen.length - 1] = first;
-    }
-  }
+  const topUps = (['education', 'experience'] as const)
+    .filter((kind) => !chosen.some((c) => c.kind === kind))
+    .map((kind) => ranked.find((r) => r.kind === kind))
+    .filter((e): e is Evidence => e !== undefined);
+  topUps.forEach((item, i) => {
+    const slot = chosen.length - 1 - i;
+    if (slot >= 0) chosen[slot] = item;
+  });
   return chosen;
 }
 

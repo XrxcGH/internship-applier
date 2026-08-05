@@ -5,9 +5,13 @@ import { z } from 'zod';
  *
  * Three rules govern this whole file:
  *
- * 1. Every filter is OPTIONAL and every default is PERMISSIVE. An unset filter widens
- *    the search; it never narrows it. A tool that silently excludes opportunities is
- *    worse than one that shows too many.
+ * 1. Every filter is OPTIONAL — nobody has to state a preference to get results. What an
+ *    omitted filter falls back to is mostly permissive, but not uniformly, and the
+ *    exceptions are deliberate: the term block (summer, 2027, six weeks of overlap), the
+ *    US country default, the internship-and-co-op position types, and the `exclude*` flags
+ *    that mirror hard eligibility all narrow to the cycle a user is actually applying for.
+ *    Nothing else here narrows anything by default, because a tool that silently excludes
+ *    opportunities is worse than one that shows too many.
  * 2. Filters that mirror a hard eligibility rule (age, graduation window, work
  *    authorization) are *preferences about what to show*, not the rules themselves.
  *    Eligibility is still computed deterministically in matching/eligibility.ts.
@@ -244,7 +248,13 @@ export const FilterPreset = z.object({
  */
 export const DEFAULT_FILTERS: SearchFilters = SearchFilters.parse({});
 
-/** Starter presets offered on first run. The user can edit or delete any of them. */
+/**
+ * The starting set of named filters, meant to be editable and deletable like any other.
+ *
+ * Not wired up: nothing seeds `filter_preset` from this list, no route serves presets, and
+ * the web app has no preset picker, so no user has ever seen one of these. The shared tests
+ * are the only reader. Treat it as the intended starting set, not as shipped behaviour.
+ */
 export const STARTER_PRESETS: ReadonlyArray<{ name: string; description: string; patch: unknown }> =
   [
     {
@@ -304,8 +314,10 @@ export const STARTER_PRESETS: ReadonlyArray<{ name: string; description: string;
           'new_grad',
           'part_time',
           'seasonal',
+          'contract',
           'externship',
           'trainee_program',
+          'volunteer',
         ],
         term: { seasons: [], years: [] },
         view: { eligibility: 'all' },

@@ -9,6 +9,7 @@
  * mean on its own tells you very little.
  */
 import type { StyleProfile } from '@ia/shared';
+import { countEmDashes } from './tellScrub';
 
 /**
  * Abbreviations whose trailing period is not a sentence end. `Intl.Segmenter` does not
@@ -101,8 +102,15 @@ function stdev(xs: number[]): number {
   return Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (xs.length - 1));
 }
 
+/**
+ * The 's contractions are listed rather than matched generically, because a generic
+ * \w+'s also swallows every possessive. "My advisor's lab studied the university's
+ * archive" contains no contractions at all, but it used to score three, which pushed a
+ * deliberately formal writer past the 1.5 threshold and got their drafts written with
+ * "don't" and "it's" all through them.
+ */
 const CONTRACTIONS =
-  /\b\w+'(?:s|t|re|ve|ll|d|m)\b|\b(?:can't|won't|don't|isn't|aren't|wasn't|weren't|didn't|doesn't|haven't|hasn't|hadn't|shouldn't|wouldn't|couldn't)\b/gi;
+  /\b\w+'(?:t|re|ve|ll|d|m)\b|\b(?:it|that|there|here|what|who|how|where|he|she|let)'s\b/gi;
 
 const FIRST_PERSON = /\b(?:i|me|my|mine|myself|we|us|our|ours)\b/gi;
 
@@ -192,7 +200,7 @@ export function computeStyleProfile(samples: SampleInput[], now = new Date()): S
     firstPersonRate: per100((text.match(FIRST_PERSON) ?? []).length),
     vocabularyTier: vocabularyTier(ws),
     punctuation: {
-      emDash: per100((text.match(/—|--/g) ?? []).length),
+      emDash: per100(countEmDashes(text)),
       semicolon: per100((text.match(/;/g) ?? []).length),
       parenthetical: per100((text.match(/\(/g) ?? []).length),
       exclamation: per100((text.match(/!/g) ?? []).length),
@@ -242,6 +250,18 @@ export function sampleAdequacy(totalWords: number): {
   return { level: 'plenty', message: `${totalWords} words — plenty.` };
 }
 
+/**
+ * These keys reach prose — the description below, and the drafting prompt in `draft.ts` —
+ * so they need English names. Without the map it says "You reach for emDash and
+ * parenthetical more than most people."
+ */
+export const PUNCTUATION_NAME: Record<keyof StyleProfile['punctuation'], string> = {
+  emDash: 'em dashes',
+  semicolon: 'semicolons',
+  parenthetical: 'parentheses',
+  exclamation: 'exclamation marks',
+};
+
 /** Plain-language description of the measured voice, shown back to the user. */
 export function describeStyle(p: StyleProfile): string[] {
   const out: string[] = [];
@@ -255,15 +275,6 @@ export function describeStyle(p: StyleProfile): string[] {
   if (p.contractionRate > 1.5) out.push("You use contractions freely — don't, it's, I've.");
   else if (p.contractionRate < 0.3)
     out.push('You rarely use contractions, which reads more formal.');
-
-  // These keys go straight into a sentence the user reads, so they need English names.
-  // Without the map it says "You reach for emDash and parenthetical more than most people."
-  const PUNCTUATION_NAME: Record<keyof StyleProfile['punctuation'], string> = {
-    emDash: 'em dashes',
-    semicolon: 'semicolons',
-    parenthetical: 'parentheses',
-    exclamation: 'exclamation marks',
-  };
 
   const punct = Object.entries(p.punctuation)
     .filter(([, v]) => v > 0.4)

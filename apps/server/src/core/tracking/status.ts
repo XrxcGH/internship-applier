@@ -35,15 +35,20 @@ export const SET_BY: Record<ApplicationStatus, 'tool' | 'user' | 'derived'> = {
  * Deliberately permissive after `submitted`: real hiring processes skip stages, and a
  * state machine that refuses "submitted → interview" because no acknowledgement was
  * recorded would be wrong about the world rather than protecting anything.
+ *
+ * `ghosted` is a legal next status from nowhere. It is worked out from silence as the tracker
+ * is read and never written down, so canTransition refuses it above, before this table is
+ * ever consulted — listing it here said the opposite for no gain. Its own row stays a real
+ * recovery path in case a stored row ever does hold it, which nothing in this app writes.
  */
 const NEXT: Record<ApplicationStatus, ApplicationStatus[]> = {
   draft: ['answers_ready', 'withdrawn'],
   answers_ready: ['filled', 'draft', 'withdrawn'],
   filled: ['awaiting_submit', 'answers_ready', 'withdrawn'],
   awaiting_submit: ['submitted', 'filled', 'withdrawn'],
-  submitted: ['acknowledged', 'interview', 'offer', 'rejected', 'withdrawn', 'ghosted'],
-  acknowledged: ['interview', 'offer', 'rejected', 'withdrawn', 'ghosted'],
-  interview: ['interview', 'offer', 'rejected', 'withdrawn', 'ghosted'],
+  submitted: ['acknowledged', 'interview', 'offer', 'rejected', 'withdrawn'],
+  acknowledged: ['interview', 'offer', 'rejected', 'withdrawn'],
+  interview: ['interview', 'offer', 'rejected', 'withdrawn'],
   offer: ['rejected', 'withdrawn'],
   rejected: [],
   withdrawn: [],
@@ -147,6 +152,15 @@ export interface Derived {
   /** One sentence, in the second person, saying what to do. Null when nothing is needed. */
   nudge: string | null;
   daysSinceSubmitted: number | null;
+  /**
+   * Days since the last thing that happened, which is what the silence nudge counts.
+   *
+   * Separate from `daysSinceSubmitted` because the two genuinely differ once an employer
+   * has acknowledged: the card said "No word for 12 days" next to a `daysSinceSubmitted`
+   * of 60, and anything reading the number rather than the sentence disagreed with the
+   * sentence. Null when there is nothing to count from.
+   */
+  daysQuiet: number | null;
   daysUntilDeadline: number | null;
 }
 
@@ -163,10 +177,35 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
   const openStatuses: ApplicationStatus[] = ['draft', 'answers_ready', 'filled', 'awaiting_submit'];
   const isOpen = openStatuses.includes(app.status);
 
+  /**
+   * Silence runs from the last thing that happened, not always from submission.
+   *
+   * `submitted` used to be the only status that could go quiet, so an application the
+   * employer had acknowledged sat in "Waiting" for ever: forty-five days of nothing after an
+   * automated "we received this" left the card with no nudge and no way out, and the one
+   * status that describes it could not be reached by hand either. An acknowledgement also
+   * restarts the clock — someone who wrote back on day ten was not silent for those ten days
+   * — so the anchor moves to when that was recorded.
+   *
+   * That moment is `respondedAt`, read out of the status-change history. It is emphatically
+   * not `updatedAt`, which is the row's generic last-modified stamp and gets rewritten by
+   * every single status write — including re-setting the status the application already has,
+   * which the transition rules allow. Anchored on `updatedAt`, opening the tracker and
+   * clicking "Acknowledged" on a card that already said Acknowledged pushed the silence
+   * clock back to zero, so an employer who had said nothing for four months looked like they
+   * had answered today and the application could never be worked out as ghosted at all.
+   *
+   * Falls back to the submission date when nothing has come back yet, which is also what a
+   * row carried over from before the history was read looks like.
+   */
+  const quietSince =
+    app.status === 'acknowledged' ? (app.respondedAt ?? app.submittedAt) : app.submittedAt;
+  const daysQuiet = quietSince === null ? null : daysBetween(quietSince, now);
+
   const silent =
-    app.status === 'submitted' &&
-    daysSinceSubmitted !== null &&
-    daysSinceSubmitted >= GHOST_AFTER_DAYS;
+    (app.status === 'submitted' || app.status === 'acknowledged') &&
+    daysQuiet !== null &&
+    daysQuiet >= GHOST_AFTER_DAYS;
 
   const effectiveStatus: ApplicationStatus = silent ? 'ghosted' : app.status;
 
@@ -180,6 +219,7 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
         `This closed ${String(Math.abs(daysUntilDeadline))} ` +
         `day${Math.abs(daysUntilDeadline) === 1 ? '' : 's'} ago and was never submitted.`,
       daysSinceSubmitted,
+      daysQuiet,
       daysUntilDeadline,
     };
   }
@@ -193,6 +233,7 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
           ? 'This closes today.'
           : `This closes in ${String(daysUntilDeadline)} day${daysUntilDeadline === 1 ? '' : 's'}.`,
       daysSinceSubmitted,
+      daysQuiet,
       daysUntilDeadline,
     };
   }
@@ -203,6 +244,7 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
       attention: 'awaiting_your_submit',
       nudge: 'The form is filled. Read it and submit it yourself.',
       daysSinceSubmitted,
+      daysQuiet,
       daysUntilDeadline,
     };
   }
@@ -213,6 +255,7 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
       attention: 'ready_to_fill',
       nudge: 'Every answer is approved. This one is ready to fill.',
       daysSinceSubmitted,
+      daysQuiet,
       daysUntilDeadline,
     };
   }
@@ -228,6 +271,7 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
           : // The verb has to agree too, not just the noun.
             `${String(left)} answer${left === 1 ? '' : 's'} still need${left === 1 ? 's' : ''} your approval.`,
       daysSinceSubmitted,
+      daysQuiet,
       daysUntilDeadline,
     };
   }
@@ -236,8 +280,9 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
     return {
       effectiveStatus,
       attention: 'silent',
-      nudge: `No word for ${String(daysSinceSubmitted)} days. Worth following up, or letting go.`,
+      nudge: `No word for ${String(daysQuiet)} days. Worth following up, or letting go.`,
       daysSinceSubmitted,
+      daysQuiet,
       daysUntilDeadline,
     };
   }
@@ -247,6 +292,7 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
     attention: 'none',
     nudge: null,
     daysSinceSubmitted,
+    daysQuiet,
     daysUntilDeadline,
   };
 }

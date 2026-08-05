@@ -1,11 +1,12 @@
 /**
  * Privacy and cost — docs/10 § User control, docs/11 § M8.
  *
- * The delete endpoint is the only irreversible operation in this codebase, so it is built
- * to be hard to reach by accident: it requires a typed phrase in the body, it tells the
- * user exactly what will go before they type it, and it says plainly that there is no undo.
- * A DELETE verb on a resource path would have been tidier REST and much easier to fire by
- * mistake.
+ * Deleting a resume or an answer is irreversible too; the delete endpoint here is the one
+ * that takes everything at once — the database, the uploaded files, the browser profile and
+ * the encryption key — and leaves nothing to go back to. So it is built to be hard to reach
+ * by accident: it requires a typed phrase in the body, it tells the user exactly what will
+ * go before they type it, and it says plainly that there is no undo. A DELETE verb on a
+ * resource path would have been tidier REST and much easier to fire by mistake.
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';

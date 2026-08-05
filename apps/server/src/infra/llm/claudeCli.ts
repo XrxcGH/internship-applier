@@ -33,6 +33,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config } from '../../config';
 import { logger } from '../logger';
+import { CLI_MODEL, recordCall } from './client';
 import {
   NoModelAccessError,
   type Backend,
@@ -332,6 +333,11 @@ export const claudeCliBackend: Backend = {
       await writeFile(systemFile, req.system, 'utf8');
 
       const wantsDocuments = (req.documents?.length ?? 0) > 0;
+
+      // `req.maxTokens` has no counterpart on this path. The CLI publishes no flag for an
+      // output cap, and every flag below was checked against the real binary rather than
+      // guessed, so length here is bounded by the word target the prompt already states.
+      // The API path applies it as a hard limit; expect the two to differ a little.
       const args = [
         '--print',
         STDIN_DIRECTIVE,
@@ -429,15 +435,23 @@ export const claudeCliBackend: Backend = {
       }
 
       const text = extractText(env);
+      const latencyMs = Date.now() - started;
       logger.debug(
-        {
-          purpose: req.purpose,
-          ms: Date.now() - started,
-          costUsd: env.total_cost_usd,
-          chars: text.length,
-        },
+        { purpose: req.purpose, ms: latencyMs, costUsd: env.total_cost_usd, chars: text.length },
         'claude cli call',
       );
+
+      // The cost panel reads the llm_call ledger and nothing else, and this backend wrote
+      // nothing to it. A user whose drafting all runs through the CLI — the preferred
+      // backend under `auto` — opened the panel after twenty answers and read "No model
+      // calls yet.", with no per-purpose counts and no way to trace a bad draft back.
+      recordCall({
+        purpose: req.purpose,
+        model: CLI_MODEL,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        latencyMs,
+        stopReason: env.subtype ?? null,
+      });
 
       return {
         text,

@@ -1,5 +1,5 @@
 import type { RuleResult, ScoreBreakdown } from '@ia/shared';
-import { appToken, clearToken } from './session';
+import { request } from './api';
 
 export interface MatchRow {
   id: string;
@@ -65,34 +65,45 @@ export interface MatchDetail {
   decision: { action: string; reason: string | null } | null;
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      accept: 'application/json',
-      'x-app-token': await appToken(),
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (res.status === 401) clearToken();
-  const body: unknown = res.status === 204 ? null : await res.json().catch(() => null);
-  if (!res.ok) {
-    const e = body as { error?: { message?: string } } | null;
-    throw new Error(e?.error?.message ?? `${path} responded ${res.status}`);
-  }
-  return body as T;
-}
+/** The server's own ceiling on one page. Asking for more is rejected outright. */
+const PAGE = 500;
 
-export const listMatches = (params: {
+/**
+ * Every match in the band, not the first pageful.
+ *
+ * This asked for 300 rows and stopped there, with nothing on screen to say so. A real
+ * discovery run produces more than that — the counts chip beside the list reads off the
+ * whole table — so the queue claimed several hundred eligible postings and then quietly
+ * withheld the tail of them, which only surfaced as rows mysteriously appearing after
+ * earlier ones were decided. The safety bound is far past any local dataset and exists so
+ * a server that ignored `offset` could not spin this forever.
+ */
+export async function listMatches(params: {
   eligibility: string;
   minScore: number;
   hideDecided: boolean;
-}) =>
-  req<MatchListResponse>(
-    `/api/matches?eligibility=${params.eligibility}&minScore=${params.minScore}&hideDecided=${params.hideDecided}&limit=300`,
-  );
+}): Promise<MatchListResponse> {
+  const matches: MatchRow[] = [];
+  let counts: Record<string, number> = {};
 
-export const getMatch = (id: string) => req<MatchDetail>(`/api/matches/${id}`);
+  for (let page = 0; page < 20; page += 1) {
+    const q = new URLSearchParams({
+      eligibility: params.eligibility,
+      minScore: String(params.minScore),
+      hideDecided: String(params.hideDecided),
+      limit: String(PAGE),
+      offset: String(page * PAGE),
+    });
+    const r = await request<MatchListResponse>(`/api/matches?${q.toString()}`);
+    matches.push(...r.matches);
+    counts = r.counts;
+    if (r.matches.length < PAGE) break;
+  }
+
+  return { matches, counts };
+}
+
+export const getMatch = (id: string) => request<MatchDetail>(`/api/matches/${id}`);
 
 export const decide = (
   id: string,
@@ -100,14 +111,14 @@ export const decide = (
   reason?: string,
   reasonTags: string[] = [],
 ) =>
-  req<{ action: string; applicationId: string | null }>(`/api/matches/${id}/decision`, {
+  request<{ action: string; applicationId: string | null }>(`/api/matches/${id}/decision`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ action, reason, reasonTags }),
   });
 
 export const recompute = () =>
-  req<{ matched: number; eligible: number; unknown: number; ineligible: number }>(
+  request<{ matched: number; eligible: number; unknown: number; ineligible: number }>(
     '/api/matches/recompute',
     { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
   );
@@ -166,8 +177,17 @@ export function payLabel(c: Record<string, unknown> | null): string {
   return `$${money(min)}${max}${period}`;
 }
 
+/**
+ * Whole days left, rounded away from now in both directions.
+ *
+ * Ceiling alone turned a deadline that passed a few hours ago into -0, which is not less
+ * than zero and prints as "0" — so the queue told someone a posting that had already
+ * closed had "0d left", in the same red it uses for urgency.
+ */
 export function daysUntil(iso: string | null): number | null {
   if (!iso) return null;
   const ms = Date.parse(iso) - Date.now();
-  return Number.isNaN(ms) ? null : Math.ceil(ms / 86_400_000);
+  if (Number.isNaN(ms)) return null;
+  const days = ms / 86_400_000;
+  return ms < 0 ? Math.floor(days) : Math.ceil(days);
 }
