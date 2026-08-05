@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export type View = 'home' | 'setup' | 'queue' | 'applications' | 'voice';
+export type View = 'home' | 'setup' | 'queue' | 'applications' | 'tracker' | 'voice';
 
 interface NavItem {
   id: View;
@@ -34,6 +34,7 @@ export function Nav({
     { id: 'voice', label: 'Voice' },
     { id: 'queue', label: 'Queue', blocked: locked },
     { id: 'applications', label: 'Applications', blocked: locked },
+    { id: 'tracker', label: 'Tracker', blocked: locked },
   ];
 
   return (

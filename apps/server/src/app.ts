@@ -12,6 +12,7 @@ import { eventRoutes } from './routes/events';
 import { writingRoutes } from './routes/writing';
 import { answerRoutes } from './routes/answers';
 import { fillingRoutes } from './routes/filling';
+import { trackerRoutes } from './routes/tracker';
 
 export interface BuildOptions {
   /** Disable the X-App-Token check. Test-only. */
@@ -74,6 +75,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(writingRoutes);
   await app.register(answerRoutes);
   await app.register(fillingRoutes);
+  await app.register(trackerRoutes);
 
   return app;
 }
