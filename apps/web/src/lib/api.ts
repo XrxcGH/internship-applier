@@ -293,3 +293,86 @@ export const markSubmitted = (id: string) =>
     `/api/applications/${id}/mark-submitted`,
     { method: 'POST' },
   );
+
+// ─────────────────────────────────────────────────────────────────── tracker
+
+export interface DerivedState {
+  effectiveStatus: string;
+  attention:
+    | 'deadline_soon'
+    | 'deadline_passed'
+    | 'unfinished'
+    | 'ready_to_fill'
+    | 'awaiting_your_submit'
+    | 'silent'
+    | 'none';
+  nudge: string | null;
+  daysSinceSubmitted: number | null;
+  daysUntilDeadline: number | null;
+}
+
+export interface TrackedApp {
+  id: string;
+  status: string;
+  company: string;
+  title: string;
+  applyUrl: string;
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt: string | null;
+  deadlineAt: string | null;
+  answerCount: number;
+  approvedCount: number;
+  derived: DerivedState;
+}
+
+export interface Reminder {
+  applicationId: string;
+  kind: 'deadline' | 'follow_up' | 'still_open' | 'stale_offer';
+  urgency: number;
+  headline: string;
+  detail: string;
+}
+
+export interface Rate {
+  value: number | null;
+  numerator: number;
+  denominator: number;
+  why?: string;
+}
+
+export interface TrackerStats {
+  funnel: Record<string, number>;
+  responseRate: Rate;
+  interviewRate: Rate;
+  medianDaysToResponse: number | null;
+  bySource: Array<{
+    key: string;
+    submitted: number;
+    responded: number;
+    advanced: number;
+    responseRate: Rate;
+  }>;
+  notes: string[];
+}
+
+export interface TrackerView {
+  applications: TrackedApp[];
+  reminders: Reminder[];
+  stats: TrackerStats;
+}
+
+export const getTracker = () => request<TrackerView>('/api/tracker');
+
+export const setStatus = (id: string, status: string) =>
+  request<{ id: string; status: string }>(`/api/applications/${id}/status`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+
+export const getDraftMessage = (id: string, kind: 'follow_up' | 'withdrawal' = 'follow_up') =>
+  request<{ kind: string; text: string; note: string }>(
+    `/api/applications/${id}/draft-message?kind=${kind}`,
+  );

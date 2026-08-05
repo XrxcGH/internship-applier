@@ -8,6 +8,7 @@ import { Onboarding } from './pages/Onboarding';
 import { Matches } from './pages/Matches';
 import { Applications } from './pages/Applications';
 import { Voice } from './pages/Voice';
+import { Tracker } from './pages/Tracker';
 
 type State =
   | { kind: 'loading' }
@@ -43,7 +44,8 @@ const MILESTONES = [
   { id: 'M3', label: 'Matching', done: true },
   { id: 'M4', label: 'Review queue', done: true },
   { id: 'M5', label: 'Writing engine', done: true },
-  { id: 'M6', label: 'Form automation', done: false },
+  { id: 'M6', label: 'Form automation', done: true },
+  { id: 'M7', label: 'Tracker', done: true },
 ];
 
 export function App() {
@@ -76,6 +78,7 @@ export function App() {
     if (view === 'voice') return <Voice />;
     if (view === 'queue') return <Matches onOpenApplications={() => setView('applications')} />;
     if (view === 'applications') return <Applications onBack={() => setView('queue')} />;
+    if (view === 'tracker') return <Tracker />;
     return <Home state={state} confirmed={confirmed} onNavigate={setView} />;
   };
 
