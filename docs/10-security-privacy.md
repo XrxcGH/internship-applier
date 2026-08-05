@@ -26,35 +26,59 @@ adversary on the user's machine.
 data/                          # gitignored in full
 ├─ app.db                      # SQLite; 🔒 columns field-encrypted
 ├─ resumes/                    # original uploads
-├─ artifacts/                  # generated cover letters, screenshots
+├─ artifacts/                  # generated cover letters (no screenshots — see docs/07)
 ├─ browser-profile/            # Playwright persistent context + storage state
-└─ logs/app.jsonl              # structured logs, PII-redacted
+└─ .master.key                 # ONLY when the OS credential store was unavailable
 ```
 
 **Field-level encryption.** Columns marked 🔒 in doc 03 are encrypted with AES-256-GCM
 before insert and decrypted on read. Each value gets a fresh 96-bit nonce; the row id is
 bound in as AAD so ciphertext can't be moved between rows. The master key is a 256-bit
-random value stored in the OS credential store via `keytar` (Windows Credential Manager
-here). It never touches disk in plaintext and never appears in a config file.
+random value stored in the OS credential store via `@napi-rs/keyring` (Windows Credential
+Manager here). It never appears in a config file.
+
+**There is a keyfile fallback, and it is plaintext.** When the credential store cannot be
+opened, the key is written base64-encoded to `data/.master.key` with mode `0600`, and the
+app logs a loud warning saying exactly that. Base64 is not encryption: anyone who can read
+that directory can decrypt the profile. This is a deliberate trade — a tool that refuses to
+start because a keyring is unavailable is a tool nobody can use — but "never touches disk
+in plaintext", which this section used to claim, was not true.
+
+A key that IS present but the wrong length is a different case and is handled the opposite
+way: the app refuses to start rather than minting a replacement, because generating a new
+key would abandon everything encrypted under the old one.
 
 Why field-level rather than whole-DB (SQLCipher): it keeps `better-sqlite3` as a plain
 dependency, keeps non-sensitive columns queryable and indexable, and makes it explicit at
 the schema level which fields are sensitive. The tradeoff — encrypted fields can't be
 indexed or searched — is fine, because nothing needs to search by name, phone, or DOB.
 
-**File permissions.** `data/` is created with restrictive ACLs (owner-only on Windows via
-`icacls`, `0700` on POSIX). A startup check warns loudly if permissions are wider than
-expected.
+**File permissions — NOT IMPLEMENTED.** `data/` is created with whatever the OS default
+gives it. Nothing runs `icacls`, nothing chmods the directory to `0700`, and there is no
+startup check on permissions. The single exception is the keyfile itself, which is written
+`0600`. This section previously asserted all three; a security document claiming
+protections that do not exist is worse than one marking them TODO, which is what this now
+is.
 
-**`.gitignore`** covers `data/`, `.env`, `*.db`, `*.db-wal`, `*.db-shm`,
-`browser-profile/`, and `logs/`. There is also a pre-commit hook that refuses commits
-containing anything matching resume/PII file patterns or an `sk-ant-` key prefix.
+**`.gitignore`** covers `data/*` (the contents, not the directory — a directory exclusion
+would defeat the `.gitkeep` negation), `.env`, `*.db`, `*.db-wal`, `*.db-shm`, and
+`*.sqlite`.
+
+> **Not built:** the pre-commit hook this section used to describe, which was supposed to
+> refuse commits containing resume/PII file patterns or an `sk-ant-` prefix. There is no
+> hook. The `.gitignore` above is the only thing standing between the data directory and a
+> commit.
 
 ## Secrets
 
-API keys (Anthropic, search provider, USAJOBS, Adzuna) go to the OS keychain via
-`POST /api/settings/keys`. They are **write-only through the API** — there is no endpoint
-that returns a key. `.env` is supported for development only and warned about at startup.
+API keys (Anthropic, USAJOBS, Adzuna) are read from the environment, and `.env` is loaded
+at startup for exactly that purpose. There is no endpoint that returns a key — because
+there is no settings API at all.
+
+> **Not built:** `POST /api/settings/keys` and the OS-keychain storage for API keys that
+> this section described. The keychain is used for the field-encryption master key only.
+> Keys live in the environment, which means they live in `.env` on this machine, which is
+> gitignored and nothing more.
 
 **No passwords, ever.** The tool does not store, type, or read website passwords. Site
 sessions are Playwright storage-state files created by the user logging in themselves; the
@@ -91,9 +115,11 @@ Stated plainly because the user deserves to know:
 The drafting prompt is assembled from an explicit allowlist of profile fields. Adding a new
 sensitive field to the schema does not silently start sending it.
 
-A Settings toggle can disable all LLM features; the tool then degrades to
-deterministic-only (source-API discovery, rule-based eligibility, no drafting) rather than
-failing.
+Model use is off unless a backend is available: with no Claude Code CLI signed in and no
+API key set, the tool degrades to deterministic-only — source-API discovery, rule-based
+eligibility, fact-checking and the writing checks all still run — rather than failing.
+That is the LLM_PROVIDER setting rather than a toggle in Settings; there is no settings
+API to hold one.
 
 ## Prompt injection
 
@@ -114,14 +140,19 @@ Job descriptions and web pages are untrusted input that the model reads. Mitigat
 
 ## Logging and redaction
 
-- Structured JSON (`pino`) with a redaction serializer applied at the logger level, not at
-  call sites: name, email, phone, address, DOB, and any 🔒 field are replaced with
-  `[redacted]` plus a stable hash for correlation.
-- Prompts and completions are **not** logged by default. A `--debug-llm` flag enables it
-  with a startup warning and writes to a separate, ACL-restricted file.
-- Screenshots are stored locally and never uploaded. Pre-submit screenshots may contain the
-  user's data by nature; they're deleted with the application on request.
-- Log retention default 30 days, rotated, configurable.
+- Structured JSON (`pino`) with redaction configured at the logger, not at call sites:
+  name, email, phone, address, DOB, any 🔒 field, the app token, and any URL (job-source
+  API keys travel in query strings) are replaced with the literal `[redacted]`.
+- Prompts and completions are **not** logged, at all. There is no flag to turn that on.
+- **Logs go to stdout.** `logs/app.jsonl` is named in a few places in these docs and is
+  never written: there is no file destination, no rotation, and no retention setting.
+  Whatever collects the process's stdout is where the logs live.
+- No screenshots are captured anywhere in the app. See docs/07 § G4.
+
+Two claims removed from this section because they were not true: a "stable hash for
+correlation" (the censor is a fixed literal — correlating two redacted values is not
+possible) and a `--debug-llm` flag (it does not exist, which is the stricter behaviour, but
+the doc should say so).
 
 ## Guardian mode (users under 18) — DEFERRED
 
@@ -156,7 +187,7 @@ applications or missed ones.
 - **Export everything** — `GET /api/privacy/export` returns a single JSON file containing all
   stored data, decrypted, for the user to keep.
 - **Delete everything** — `POST /api/privacy/delete-all` with a typed confirmation string
-  wipes `app.db`, `resumes/`, `artifacts/`, `browser-profile/`, `logs/`, and the keychain
+  wipes every table in `app.db`, `resumes/`, `artifacts/`, `browser-profile/`, and the keychain
   entries. Files are removed, not just unlinked from the DB.
 - **Per-item deletion** for resumes, writing samples, and applications.
 - A Settings → Privacy panel that states, in plain sentences, exactly what is stored where
