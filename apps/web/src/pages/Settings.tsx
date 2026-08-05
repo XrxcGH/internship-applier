@@ -82,8 +82,17 @@ export function Settings() {
     }
   };
 
-  const phrase = preview?.confirmationPhrase ?? 'delete everything';
-  const armed = confirmText.trim().toLowerCase() === phrase;
+  /**
+   * No fallback phrase, deliberately.
+   *
+   * It used to default to the real confirmation string, so while the preview was in
+   * flight — or had failed, since refresh() has no catch — the warning paragraph rendered
+   * empty, the counts were omitted, and typing the phrase still armed the button. The
+   * section header promises the user sees what will be destroyed before anything happens;
+   * that promise has to be a precondition, not a paragraph.
+   */
+  const phrase = preview?.confirmationPhrase ?? null;
+  const armed = phrase !== null && confirmText.trim().toLowerCase() === phrase;
 
   return (
     <Page>
@@ -168,8 +177,9 @@ export function Settings() {
       <Section n="03" title="Your data" step={5}>
         <div className="u-card-flat px-5 py-5">
           <p className="text-dim u-prose">
-            Everything is stored on this machine and nothing was ever sent anywhere. You can take
-            all of it with you at any time.
+            Everything is stored on this machine. The only things that ever leave it are the
+            job-source lookups you run, whatever is sent to the model when you draft an answer, and
+            the application sites themselves. You can take all of it with you at any time.
           </p>
           <div className="mt-4">
             <Button
@@ -194,11 +204,18 @@ export function Settings() {
       <Section n="04" title="Delete everything" step={6}>
         {deleted ? (
           <Notice tone="verified">{deleted}</Notice>
+        ) : preview === null ? (
+          <div className="u-card-flat px-5 py-5">
+            <p className="text-dim u-prose">
+              Loading what is stored. Nothing can be deleted until this page can tell you exactly
+              what would go.
+            </p>
+          </div>
         ) : (
           <div className="u-tint-redline rounded px-5 py-5">
-            <p className="text-dim u-prose">{preview?.warning}</p>
+            <p className="text-dim u-prose">{preview.warning}</p>
 
-            {preview && preview.items.some((i) => i.count > 0) && (
+            {preview.items.some((i) => i.count > 0) && (
               <ul className="mt-4 space-y-1">
                 {preview.items
                   .filter((i) => i.count > 0)
@@ -215,7 +232,7 @@ export function Settings() {
                 label={`Type "${phrase}" to confirm`}
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
-                placeholder={phrase}
+                placeholder={phrase ?? undefined}
               />
             </div>
 

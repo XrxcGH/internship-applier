@@ -38,6 +38,15 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  /**
+   * The in-flight guard for triage actions.
+   *
+   * A ref rather than the `busy` state, because the keyboard handler and the action it
+   * calls are both closures captured at render: a second keypress inside one round-trip
+   * would read the stale `busy` and go through anyway. A ref is current at the moment it
+   * is read, which is what a guard has to be.
+   */
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   /** Approvals made this session, so triage never has to stop to go look at them. */
   const [approved, setApproved] = useState(0);
@@ -64,6 +73,11 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
       setDetail(null);
       return;
     }
+    // Cleared first. Without this the pane rendered the PREVIOUS posting's title,
+    // rationale, requirements and score beside the NEW posting's location, because
+    // the selected row updates synchronously and the detail only when the fetch resolves.
+    // On a failed fetch the mismatch stayed on screen for the rest of the session.
+    setDetail(null);
     let cancelled = false;
     getMatch(selected)
       .then((d) => !cancelled && setDetail(d))
@@ -86,7 +100,11 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
 
   const act = useCallback(
     async (action: 'approved' | 'skipped' | 'saved', reason?: string, tags: string[] = []) => {
-      if (!selected) return;
+      // One decision at a time. Two 'a' presses inside one round-trip both decided the
+      // same match: the banner counted two applications for one, and the second row
+      // removal indexed a list the id had already left, blanking the detail pane.
+      if (!selected || busyRef.current) return;
+      busyRef.current = true;
       setBusy(action === 'approved' ? 'Approving' : action === 'saved' ? 'Saving' : 'Skipping');
       try {
         const r = await decide(selected, action, reason, tags);
@@ -100,6 +118,7 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
+        busyRef.current = false;
         setBusy(null);
         setRejecting(false);
       }
@@ -109,7 +128,8 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
 
   const reject = useCallback(
     async (tag: string, label: string) => {
-      if (!selected) return;
+      if (!selected || busyRef.current) return;
+      busyRef.current = true;
       setBusy('Rejecting');
       try {
         await decide(selected, 'rejected', label, [tag]);
@@ -119,7 +139,13 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
           setSelected(next[Math.min(i, next.length - 1)]?.id ?? null);
           return next;
         });
+      } catch (e) {
+        // The catch act() has always had. Without it a failed rejection became an
+        // unhandled promise rejection, the sheet still closed, and the UI looked like it
+        // had worked while the row stayed in the queue.
+        setError(e instanceof Error ? e.message : String(e));
       } finally {
+        busyRef.current = false;
         setBusy(null);
         setRejecting(false);
       }
