@@ -314,6 +314,30 @@ describe('proper-noun extraction', () => {
     expect(names).toContain('Rutgers University');
   });
 
+  it('does not read a contraction as a company name', () => {
+    // This blocked G3 approval on any naturally written answer: "I've" normalised to
+    // "i ve", matched nothing on the profile, and came back unsupported.
+    for (const s of [
+      "I've been writing Python since high school.",
+      "I'm proud of that one.",
+      "Don't ask me why it took so long.",
+      "It's the part I liked most.",
+      "We've shipped it twice.",
+    ]) {
+      expect(
+        extractProperNouns(s).filter((n) => /['’]/.test(n)),
+        s,
+      ).toEqual([]);
+    }
+    expect(verdictOf("I've been writing code since high school.")).toBeNull();
+  });
+
+  it('reads a possessive as the name that owns it', () => {
+    // "Google's" used to normalise to "google s" and match no employer at all.
+    expect(extractProperNouns("I worked on Google's search team.")).toContain('Google');
+    expect(verdictOf("I worked on Google's search team.")).toBe('unsupported');
+  });
+
   it('leaves ordinary capitalised words alone', () => {
     expect(extractProperNouns('Last summer was hard.')).toEqual([]);
     expect(extractProperNouns('During June I moved.')).toEqual([]);

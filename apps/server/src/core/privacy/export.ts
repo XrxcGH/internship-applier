@@ -147,7 +147,7 @@ export async function deleteEverything(): Promise<DeleteResult> {
     config.paths.artifacts,
     config.paths.browserProfile,
     // The master key goes last. Without it nothing that survived is readable.
-    `${config.paths.data}/.master.key`,
+    config.paths.masterKey,
   ];
 
   for (const target of targets) {

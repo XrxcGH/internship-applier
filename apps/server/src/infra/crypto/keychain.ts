@@ -41,7 +41,7 @@ function openEntry(): Entry | null {
 }
 
 function keyfilePath(): string {
-  return path.join(config.paths.data, '.master.key');
+  return config.paths.masterKey;
 }
 
 function readFallbackKey(): Buffer {

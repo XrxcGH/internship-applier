@@ -12,6 +12,8 @@ const Env = z.object({
   SERVER_PORT: z.coerce.number().int().positive().default(8787),
   WEB_PORT: z.coerce.number().int().positive().default(5173),
   DATABASE_PATH: z.string().default('./data/app.db'),
+  /** The single root for everything this app writes. Tests point it at a temp directory. */
+  DATA_DIR: z.string().default('./data'),
 
   /**
    * Where model calls go. See docs/14-model-access.md.
@@ -39,6 +41,12 @@ if (!parsed.success) {
 
 const env = parsed.data;
 
+/**
+ * The one directory everything is written under. A guard rather than a convenience: see
+ * the comment on `paths` below for what a half-isolated version of this cost.
+ */
+const DATA_DIR = path.resolve(REPO_ROOT, env.DATA_DIR);
+
 export const config = {
   env: env.NODE_ENV,
   isDev: env.NODE_ENV === 'development',
@@ -61,13 +69,23 @@ export const config = {
     cliTimeoutMs: env.CLAUDE_CLI_TIMEOUT_MS,
   },
 
+  /**
+   * Everything the app writes lives under ONE root, and every path below derives from it.
+   *
+   * This was not always true, and the consequence was severe: the test suite pointed
+   * DATABASE_PATH at a temp file while `resumes`, `artifacts`, `browser-profile` and the
+   * master key stayed hardcoded to the repository, so `npm test` deleted the real ones
+   * through the privacy tests. One root means isolating the tests is a single variable
+   * and cannot be half-done.
+   */
   paths: {
     root: REPO_ROOT,
-    data: path.resolve(REPO_ROOT, 'data'),
+    data: DATA_DIR,
     database: path.resolve(REPO_ROOT, env.DATABASE_PATH),
-    resumes: path.resolve(REPO_ROOT, 'data/resumes'),
-    artifacts: path.resolve(REPO_ROOT, 'data/artifacts'),
-    browserProfile: path.resolve(REPO_ROOT, 'data/browser-profile'),
+    resumes: path.resolve(DATA_DIR, 'resumes'),
+    artifacts: path.resolve(DATA_DIR, 'artifacts'),
+    browserProfile: path.resolve(DATA_DIR, 'browser-profile'),
+    masterKey: path.resolve(DATA_DIR, '.master.key'),
     migrations: path.resolve(REPO_ROOT, 'apps/server/drizzle'),
   },
 
