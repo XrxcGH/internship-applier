@@ -25,7 +25,9 @@
     "db:migrate": "npm run db:migrate -w @ia/server",
     "hooks:install": "git config core.hooksPath .githooks",
     "check": "npm run typecheck && npm run lint && npm run test && npm run audit:copy",
-    "audit:copy": "tsx scripts/audit-copy.ts"
+    "audit:copy": "tsx scripts/audit-copy.ts",
+    "start": "npm run build && npm run start:server",
+    "start:server": "npm run start -w @ia/server"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

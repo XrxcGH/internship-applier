@@ -574,15 +574,18 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
    * an error: if the prompt never reaches the model, generation still "succeeds" and
    * quietly answers the wrong question. This checks the answer came back.
    */
-  app.post('/api/model-access/test', async (_req, reply) => {
+  app.post('/api/model-access/test', async () => {
     resetBackend();
     resetCliProbe();
     const access = await describeAccess();
     if (access.provider !== 'claude_cli') {
       return { ...access, tested: false, detail: 'Nothing to test for this provider.' };
     }
+    // 200 even when the answer is no. The test RAN and produced a verdict, which `ok`
+    // carries; a 5xx would say the endpoint is broken, and it would also drop the useful
+    // detail, since the client's error path reads a different response shape.
     const result = await claudeCliSelfTest();
-    return reply.code(result.ok ? 200 : 503).send({ ...access, tested: true, ...result });
+    return { ...access, tested: true, ...result };
   });
 
   app.get('/api/answer-library', async () => ({ entries: listLibrary() }));

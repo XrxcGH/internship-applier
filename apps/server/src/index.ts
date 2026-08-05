@@ -3,6 +3,7 @@ import { config } from './config';
 import { runMigrations } from './infra/db/migrate';
 import { logger } from './infra/logger';
 import { closeAllRuns } from './core/filling/run';
+import { uiIsBuilt } from './ui';
 
 async function main(): Promise<void> {
   runMigrations();
@@ -10,10 +11,19 @@ async function main(): Promise<void> {
   const app = await buildApp();
   await app.listen({ host: config.server.host, port: config.server.port });
 
-  logger.info(
-    { url: `http://${config.server.host}:${config.server.port}`, token: config.appToken },
-    'server listening (loopback only)',
-  );
+  const url = `http://${config.server.host}:${config.server.port}`;
+  logger.info({ url, token: config.appToken }, 'server listening (loopback only)');
+
+  // Through the logger everything is one structured line among many, and the address is
+  // the thing a person actually needs. Printed plainly, once, on the way up.
+  if (uiIsBuilt()) {
+    console.log(`\n  Internship applier is running at ${url}\n  Press Ctrl+C to stop.\n`);
+  } else {
+    console.log(
+      `\n  API running at ${url}. The interface is not built yet.\n` +
+        `  Run \`npm run build\` and restart, or use \`npm run dev\` while working on it.\n`,
+    );
+  }
 
   const shutdown = (signal: string) => {
     logger.info({ signal }, 'shutting down');

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  downloadFile,
   getDraftMessage,
   getTracker,
   setStatus,
@@ -252,12 +253,16 @@ export function Tracker() {
             title="The board"
             step={4}
             actions={
-              <a
-                href="/api/tracker/export.csv"
-                className="u-data border-rule text-dim hover:text-ink hover:border-rule-strong rounded border px-2.5 py-1 tracking-wide uppercase transition-colors"
+              <Button
+                size="sm"
+                onClick={() =>
+                  void downloadFile('/api/tracker/export.csv', 'applications.csv').catch(
+                    (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+                  )
+                }
               >
                 Export CSV
-              </a>
+              </Button>
             }
           >
             <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-5">
