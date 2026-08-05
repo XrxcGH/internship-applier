@@ -54,6 +54,26 @@ product offering claude.ai login, which is the thing named above. If this ever s
 anyone else, that build must default to `api` and the CLI backend should be removed or
 gated behind a clear notice.
 
+### Verified against the real CLI (2.1.222)
+
+Every flag below was checked by running the installed binary, not inferred from docs:
+`--print`, `--output-format json`, `--system-prompt-file`, `--max-turns`,
+`--allowedTools`, `--add-dir`, and `--json-schema` all exist and parse. The response
+envelope carries `result`, `is_error`, `subtype`, `total_cost_usd`, `session_id`, and
+`num_turns`, which is what the parser reads.
+
+Two things measurement found that reading would not have:
+
+- **An empty `--allowedTools ""` is broken when spawned.** It parses fine typed into a
+  shell, but an empty argv element is dropped in transit and the CLI then rejects the
+  flag as missing its argument, which would have failed every call. The allowlist now
+  carries a name that matches no tool: it grants nothing and survives the trip.
+- **The npm `claude.cmd` shim cannot be used.** Node needs `shell: true` to run a .cmd,
+  which concatenates arguments rather than escaping them (Node’s DEP0190 warning), and
+  a JSON schema argument arrives mangled and is rejected as invalid JSON. The adapter
+  skips the shim and runs the `bin/claude.exe` inside the package that the shim itself
+  calls, so there is no shell anywhere in this path.
+
 ### How it is invoked, and why
 
 Three constraints shape the command, none of them obvious:

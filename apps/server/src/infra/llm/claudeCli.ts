@@ -57,22 +57,57 @@ const INSTALL_HINT =
  */
 interface Candidate {
   bin: string;
-  shell: boolean;
 }
 
+/**
+ * Where to look, best first.
+ *
+ * NOTHING HERE USES A SHELL, and that is the important property. The npm install puts a
+ * `claude.cmd` shim on PATH, and Node cannot execute a .cmd without `shell: true` — which
+ * concatenates arguments instead of escaping them (Node's own DEP0190 warning). Measured:
+ * `--json-schema {"type":"object"}` reaches the CLI mangled and is rejected as invalid
+ * JSON. So the shim is skipped entirely in favour of the real executable it wraps, which
+ * both the npm package and the native installer ship.
+ */
 function candidates(): Candidate[] {
-  if (config.llm.cliPath) return [{ bin: config.llm.cliPath, shell: false }];
-  if (process.platform !== 'win32') return [{ bin: 'claude', shell: false }];
+  // Read from the environment rather than the frozen config snapshot, so setting this
+  // takes effect without a restart.
+  const override = process.env['CLAUDE_CLI_PATH'] ?? config.llm.cliPath;
+  if (override) return [{ bin: override }];
+
+  if (process.platform !== 'win32') return [{ bin: 'claude' }];
 
   const home = process.env['USERPROFILE'] ?? os.homedir();
+  const appData = process.env['APPDATA'] ?? path.join(home, 'AppData', 'Roaming');
+
   return [
-    { bin: path.join(home, '.local', 'bin', 'claude.exe'), shell: false },
-    { bin: 'claude.exe', shell: false },
-    // Last resort: the npm shim, which needs a shell. Every long or user-controlled
-    // string is already on stdin or in a file by this point, so the command line the
-    // shell sees contains only flags and paths we constructed.
-    { bin: 'claude.cmd', shell: true },
+    // Native installer.
+    { bin: path.join(home, '.local', 'bin', 'claude.exe') },
+    // npm global: the executable the .cmd shim calls. Named explicitly rather than
+    // trusting PATH, because a server started before the install has a stale environment.
+    {
+      bin: path.join(
+        appData,
+        'npm',
+        'node_modules',
+        '@anthropic-ai',
+        'claude-code',
+        'bin',
+        'claude.exe',
+      ),
+    },
+    { bin: 'claude.exe' },
   ];
+}
+
+/** Interpreted targets, so a JS entry point can be pointed at directly. */
+const JS_ENTRY = /\.(c|m)?js$/i;
+
+/** Resolves a candidate to something spawnable with no shell involved. */
+function commandFor(c: Candidate): { file: string; prefix: string[] } {
+  return JS_ENTRY.test(c.bin)
+    ? { file: process.execPath, prefix: [c.bin] }
+    : { file: c.bin, prefix: [] };
 }
 
 interface RunResult {
@@ -86,10 +121,12 @@ async function run(c: Candidate, args: string[], stdin: string): Promise<RunResu
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(c.bin, args, {
+      const { file, prefix } = commandFor(c);
+      child = spawn(file, [...prefix, ...args], {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
-        shell: c.shell,
+        // Never a shell. See `candidates()` for what that costs and why it is worth it.
+        shell: false,
       });
     } catch (err) {
       resolve({ code: null, stdout: '', stderr: String(err), timedOut: false });
@@ -140,7 +177,9 @@ async function probe(): Promise<Candidate | null> {
     const r = await run(c, ['--version'], '');
     if (r.code === 0 && /\d+\.\d+/.test(r.stdout)) {
       found = c;
-      version = r.stdout.trim();
+      // `--version` prints "2.1.222 (Claude Code)". Keep the number; the name is already
+      // in every sentence this gets interpolated into.
+      version = (/[\d.]+/.exec(r.stdout)?.[0] ?? r.stdout).trim();
       logger.info({ bin: c.bin, version }, 'model calls will use the Claude Code CLI');
       return found;
     }
@@ -233,11 +272,37 @@ export function usageLimitMessage(text: string): string | null {
   );
 }
 
+/**
+ * The other failure a subscription user actually hits, and the first one they will hit.
+ *
+ * Verified against the real CLI: an unauthenticated run exits with `is_error: true` and
+ * `result: "Not logged in · Please run /login"`. That is accurate but assumes you are
+ * sitting in Claude Code, which the person reading this is not.
+ */
+export function notLoggedInMessage(text: string): string | null {
+  if (!/not logged in|please run \/login|\bunauthorized\b|no credentials/i.test(text)) {
+    return null;
+  }
+  return (
+    'The Claude Code CLI is installed but not signed in yet.\n\n' +
+    'Open a terminal, run `claude`, and sign in with your Claude account. It only needs ' +
+    'doing once. Then come back and press Test.'
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────── the backend
 
 /** Short, fixed, and safe on any command line. The real content arrives on stdin. */
 const STDIN_DIRECTIVE =
   'The full task is provided on standard input. Read it and respond to it directly.';
+
+/**
+ * An allowlist entry that matches no tool, which is how "grant nothing" is expressed.
+ *
+ * See the call site: the obvious spelling, an empty string, is silently dropped when the
+ * npm .cmd shim is spawned through cmd.exe on Windows.
+ */
+const NO_TOOLS = 'none';
 
 export const claudeCliBackend: Backend = {
   kind: 'claude_cli',
@@ -288,7 +353,12 @@ export const claudeCliBackend: Backend = {
           args.push('--add-dir', d);
         }
       } else {
-        args.push('--allowedTools', '');
+        // NOT an empty string. `--allowedTools ""` parses fine from a shell, but an
+        // empty argv element is dropped when the .cmd shim is spawned through cmd.exe,
+        // and the CLI then rejects the flag as missing its argument. This is an
+        // allowlist, so a name that matches no tool grants nothing — and unlike an empty
+        // string it survives the trip. `--max-turns 1` bounds it regardless.
+        args.push('--allowedTools', NO_TOOLS);
       }
 
       if (req.schema) {
@@ -309,10 +379,31 @@ export const claudeCliBackend: Backend = {
         );
       }
 
-      const limit = usageLimitMessage(`${r.stdout}\n${r.stderr}`);
+      // Both of these arrive inside a successful-looking JSON envelope with is_error set,
+      // so they are matched on the text before the generic error path flattens them into
+      // "the CLI reported an error: Not logged in".
+      const combined = `${r.stdout}\n${r.stderr}`;
+      const notSignedIn = notLoggedInMessage(combined);
+      if (notSignedIn) throw new NoModelAccessError(notSignedIn);
+
+      const limit = usageLimitMessage(combined);
       if (limit) throw new NoModelAccessError(limit);
 
       const env = parseEnvelope(r.stdout);
+
+      // A crash is diagnosed before a parse failure, because a crashed process produces
+      // no output and "the output format must have changed" is then exactly the wrong
+      // thing to tell someone. Order matters more than either message.
+      if (env?.is_error === true || r.code !== 0) {
+        const detail =
+          (env ? extractText(env) : '') || r.stderr.trim() || `exit code ${String(r.code)}`;
+        logger.error(
+          { code: r.code, detail: detail.slice(0, 300) },
+          'claude cli reported an error',
+        );
+        throw new NoModelAccessError(`The Claude CLI reported an error: ${detail}`);
+      }
+
       if (!env) {
         logger.error(
           { code: r.code, stdout: r.stdout.slice(0, 400), stderr: r.stderr.slice(0, 400) },
@@ -325,11 +416,6 @@ export const claudeCliBackend: Backend = {
             `Output began: ${r.stdout.slice(0, 200) || '(empty)'}\n` +
             `Errors: ${r.stderr.slice(0, 200) || '(none)'}`,
         );
-      }
-
-      if (env.is_error === true || r.code !== 0) {
-        const detail = extractText(env) || r.stderr.trim() || `exit code ${String(r.code)}`;
-        throw new NoModelAccessError(`The Claude CLI reported an error: ${detail}`);
       }
 
       const text = extractText(env);
