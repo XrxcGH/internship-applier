@@ -418,18 +418,44 @@ describe('term_overlap', () => {
   });
 
   it('computes overlap in weeks', () => {
+    // June 1 to August 20, bounded by the availability end. The term end '2027-08' means
+    // "through August", so it does not cut the window short.
     expect(
       overlapWeeks(
         { start: '2027-06', end: '2027-08' },
         { start: '2027-06-01', end: '2027-08-20' },
       ),
-    ).toBeCloseTo(8.7, 0);
+    ).toBeCloseTo(11.4, 0);
+
     expect(
       overlapWeeks(
         { start: '2027-09', end: '2027-12' },
         { start: '2027-06-01', end: '2027-08-20' },
       ),
     ).toBe(0);
+  });
+
+  it('reads a month-only term end as the END of that month', () => {
+    // This was a real false-ineligible. Reading '2027-08' as August 1st threw away up to
+    // a month of overlap and could push a genuinely eligible posting under the six-week
+    // minimum. A July-to-September student against a June-to-August internship overlaps
+    // by about seven and a half weeks, not three.
+    const weeks = overlapWeeks(
+      { start: '2027-06', end: '2027-08' },
+      { start: '2027-07-10', end: '2027-09-30' },
+    );
+    expect(weeks).toBeGreaterThan(7);
+    expect(weeks).toBeLessThan(8);
+  });
+
+  it('does not widen a day-precision date', () => {
+    // Only month-only bounds are ambiguous; an exact date is already exact.
+    expect(
+      overlapWeeks(
+        { start: '2027-06-01', end: '2027-06-15' },
+        { start: '2027-06-01', end: '2027-12-31' },
+      ),
+    ).toBeCloseTo(2, 0);
   });
 });
 

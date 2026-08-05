@@ -402,10 +402,12 @@ export function overlapWeeks(
 ): number | null {
   if (!term.start || !term.end || !avail.start || !avail.end) return null;
 
-  const ts = Date.parse(pad(term.start));
-  const te = Date.parse(pad(term.end));
-  const as = Date.parse(avail.start);
-  const ae = Date.parse(avail.end);
+  // Starts open at the first of the month, ends close at the end of it. Treating both as
+  // the first was the bug: it shortened every month-precision term by up to 30 days.
+  const ts = Date.parse(monthStart(term.start));
+  const te = endBound(term.end);
+  const as = Date.parse(monthStart(avail.start));
+  const ae = endBound(avail.end);
   if ([ts, te, as, ae].some(Number.isNaN)) return null;
 
   const start = Math.max(ts, as);
@@ -413,9 +415,26 @@ export function overlapWeeks(
   return end <= start ? 0 : (end - start) / (1000 * 60 * 60 * 24 * 7);
 }
 
-/** `YYYY-MM` → `YYYY-MM-01` so Date.parse accepts it. */
-function pad(d: string): string {
+/**
+ * A month-only bound has to be widened at the END, not just parsed.
+ *
+ * `2027-08` as a term end means "through August", but reading it as 2027-08-01 threw away
+ * up to a month of overlap — and always in the direction of a hard fail. A June-to-August
+ * internship against a July-to-September availability computed three weeks of overlap
+ * instead of seven and came back `ineligible`.
+ *
+ * A day-precision date is already exact and is left alone.
+ */
+function monthStart(d: string): string {
   return /^\d{4}-\d{2}$/.test(d) ? `${d}-01` : d;
+}
+
+/** The instant a bound stops covering: the first of the next month, exclusive. */
+function endBound(d: string): number {
+  if (!/^\d{4}-\d{2}$/.test(d)) return Date.parse(d);
+  const [y, m] = d.split('-').map(Number);
+  // Month is 1-based here and 0-based in Date.UTC, so this is already "the next month".
+  return Date.UTC(y!, m!, 1);
 }
 
 const MIN_OVERLAP_WEEKS = 6;

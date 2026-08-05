@@ -4,8 +4,31 @@ A local-first desktop tool that reads your resume, finds summer internships you'
 actually eligible for, and — once **you** approve each one — drafts application answers
 in your own writing voice and pre-fills the application form for your review.
 
-**Status: design phase. No code written yet.** This repo currently contains the system
-design only. See [`docs/`](docs/) for the full plan.
+**Status: built through M8.** Resume ingestion, discovery, matching, the review queue, the
+writing engine, form filling, the tracker, and packaging are all implemented, with 505
+tests. See [`docs/11-roadmap.md`](docs/11-roadmap.md) for what each milestone covers and,
+more usefully, what is still untested.
+
+Two gaps worth knowing before you rely on it: the per-vendor ATS adapters (Greenhouse,
+Lever, Ashby, Workday) have never been run against a real posting, and answer drafting has
+not been exercised against a live model.
+
+## Running it
+
+```bash
+npm install
+npm start          # builds the interface and serves everything from one URL
+```
+
+Then open the address it prints. `npm run dev` runs the API and the Vite dev server
+separately while you are working on it.
+
+Drafting answers needs a model. It will use the [Claude Code
+CLI](https://code.claude.com/docs) if you have one installed and signed in, against a
+subscription you already pay for, or an `ANTHROPIC_API_KEY` if you set one. **Everything
+else works without either**: discovery, matching, eligibility, fact-checking, and the
+writing checks all run on your machine. See
+[`docs/14-model-access.md`](docs/14-model-access.md).
 
 ---
 

@@ -64,9 +64,15 @@ sessions are Playwright storage-state files created by the user logging in thems
 
 - All outbound traffic is HTTPS with certificate validation on; there is no
   `rejectUnauthorized: false` anywhere and a test asserts it.
-- The local API binds `127.0.0.1` only, never `0.0.0.0`. CORS restricted to the local origin.
-  An `X-App-Token` header (random per run) gates every route so other local processes and
-  stray pages can't drive it.
+- The local API binds `127.0.0.1` only, never `0.0.0.0`. CORS is restricted to the local
+  origin, and an `X-App-Token` header (random per run) gates every API route.
+
+  **What that actually buys, stated precisely.** It stops a stray page in another browser
+  tab from driving the API, because CORS keeps that page from reading `/api/session`. It
+  does **not** stop another local process: a script can fetch the token from
+  `/api/session` and then call anything. That is less a hole than a boundary that was
+  never there — a process running as this user can read `data/app.db` directly. This bullet
+  used to claim the stronger version; see the threat model below for the honest one.
 - No telemetry, no crash reporting, no analytics. Nothing leaves the machine except calls
   the user initiated to job sources, the Anthropic API, and application sites.
 

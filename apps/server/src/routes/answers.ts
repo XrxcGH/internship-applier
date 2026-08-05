@@ -449,6 +449,8 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
       .set({
         finalText: text,
         editDistance: wordEditDistance(row.draftText, text),
+        // Editing is allowed without a confirmed profile; approving is not. An
+        // unverified edit stores no flags rather than stale ones.
         evidence: v?.evidence ?? [],
         flags: v?.flags ?? [],
         approvedAt: null,
@@ -492,15 +494,27 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
     // Re-verify at approval time rather than trusting stored flags. Cheap, and it closes
     // the window where a profile edit invalidates an answer nobody re-checked.
     const profile = confirmedProfile();
-    const ctx = loadContext(row.applicationId);
-    const v = profile
-      ? verify(text, row.questionText, profile, loadStyle(), ctx?.description ?? '')
-      : null;
+    // Without a confirmed profile there is nothing to check a claim against, and a
+    // verification that cannot run must not read as a verification that passed. Refusing
+    // is the only safe reading: `v` being null once meant "zero blocking flags", which
+    // let any text through the gate.
+    if (!profile) {
+      return reply.code(400).send({
+        error: {
+          code: 'PROFILE_INCOMPLETE',
+          message:
+            'Confirm your profile first (gate G1). Until then there is nothing to check this ' +
+            'answer against, and approving it would mean approving something unverified.',
+        },
+      });
+    }
 
-    const blocking = v ? v.guard.blocking : [];
+    const ctx = loadContext(row.applicationId);
+    const v = verify(text, row.questionText, profile, loadStyle(), ctx?.description ?? '');
+    const blocking = v.guard.blocking;
     if (blocking.length > 0) {
       db.update(schema.applicationAnswer)
-        .set({ evidence: v!.evidence, flags: v!.flags })
+        .set({ evidence: v.evidence, flags: v.flags })
         .where(eq(schema.applicationAnswer.id, row.id))
         .run();
 
@@ -522,8 +536,8 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
     db.update(schema.applicationAnswer)
       .set({
         approvedAt: now,
-        evidence: v?.evidence ?? [],
-        flags: v?.flags ?? [],
+        evidence: v.evidence,
+        flags: v.flags,
         editDistance: wordEditDistance(row.draftText, text),
       })
       .where(eq(schema.applicationAnswer.id, row.id))

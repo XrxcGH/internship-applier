@@ -99,7 +99,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <TextField
                 label="Phone"
                 value={profile.phone ?? ''}
-                onChange={(e) => patch((p) => ({ ...p, phone: e.target.value }))}
+                onChange={(e) => patch((p) => ({ ...p, phone: e.target.value }), 'phone')}
               />
             </div>
 
@@ -110,8 +110,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <Summary label="Skills" n={profile.skills.length} />
             </dl>
             <p className="text-faint mt-4 text-[0.9375rem] italic">
-              Full section-by-section editing arrives with the review queue in M4. For now, correct
-              the identity fields here and the eligibility facts below.
+              Editing individual jobs, projects and courses is not built yet. Correct the identity
+              fields here and the eligibility facts below; those are the ones matching depends on.
             </p>
           </Section>
 
@@ -240,11 +240,36 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <Notice tone="caution">
                 {remaining} field{remaining === 1 ? '' : 's'} still flagged. Confirmation is blocked
                 until each one has been looked at. That is the whole point of this gate.
-                <ul className="u-data mt-3 space-y-0.5">
+                {/* Every flag needs a way to be cleared here. The extractor can flag a
+                    field this wizard has no input for — anything nested in education or
+                    experience — and without a control those flags could never be cleared,
+                    which locked G1 shut with no way forward. */}
+                <ul className="mt-3 space-y-1.5">
                   {profile.needsReview.slice(0, 12).map((f) => (
-                    <li key={f}>{f}</li>
+                    <li key={f} className="flex flex-wrap items-center justify-between gap-3">
+                      <span className="u-data">{f}</span>
+                      <Button
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() =>
+                          void api
+                            .clearReviewFlag(f)
+                            .then(setProfile)
+                            .catch((e: unknown) =>
+                              setError(e instanceof Error ? e.message : String(e)),
+                            )
+                        }
+                      >
+                        I have checked this
+                      </Button>
+                    </li>
                   ))}
                 </ul>
+                {profile.needsReview.length > 12 && (
+                  <p className="text-faint mt-2 text-[0.9375rem]">
+                    and {profile.needsReview.length - 12} more
+                  </p>
+                )}
               </Notice>
             ) : (
               <Notice tone="verified">

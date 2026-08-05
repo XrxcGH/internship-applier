@@ -179,7 +179,11 @@ const COMMON_CAPITALS = new Set(
     'monday tuesday wednesday thursday friday saturday sunday ' +
     'summer spring fall autumn winter today yesterday tomorrow ' +
     'instead rather besides meanwhile later once twice often sometimes always never ' +
-    'perhaps maybe within without between among across over under'
+    'perhaps maybe within without between among across over under ' +
+    // Contraction stems: what "Don't" or "Wasn't" reduces to once its tail is removed by
+    // `withoutTail`. Without these a negated sentence opener reads as a company name.
+    'do does did don doesn didn won couldn shouldn wouldn isn aren wasn weren haven ' +
+    'hasn hadn let'
   ).split(' '),
 );
 
@@ -191,6 +195,21 @@ const NAME_RUN = /\b[A-Z][\w&.'-]*(?:\s+(?:of\s+)?[A-Z][\w&.'-]*){0,3}/g;
  * looks exactly like a fabrication.
  */
 const trimEdges = (w: string): string => w.replace(/^[.'&-]+/, '').replace(/[.'&-]+$/, '');
+
+/**
+ * The word without its contraction or possessive tail.
+ *
+ * Two bugs lived here, and the first was severe. `normalize` turns an apostrophe into a
+ * space, so "I've" became "i ve" — which is not in COMMON_CAPITALS, so it was treated as
+ * a proper noun, found nowhere on the profile, and marked `unsupported`. That is a
+ * BLOCKING verdict: any answer that opened "I've been writing Python since..." could not
+ * be approved at G3. Naturally written prose was the failure case.
+ *
+ * The second is quieter but wrong in the other direction: "Google's search team" gave
+ * "google s", which matches no employer, so a genuine fabrication about a real company
+ * could be reported against the wrong name. Taking the head of the word fixes both.
+ */
+const withoutTail = (w: string): string => w.replace(/[’'](s|ve|m|re|ll|d|t)?$/i, '');
 
 /**
  * Names in the shape of an employer, school, product, or technology.
@@ -209,6 +228,10 @@ export function extractProperNouns(text: string): string[] {
     // position 0 — accepted, because the alternative flags a stock English opener in
     // every other draft, and the same name is still caught anywhere else in the sentence.
     if (m.index === 0 && words.length === 1 && /ly$/i.test(trimEdges(words[0]!))) continue;
+
+    // Contraction and possessive tails come off before the ordinary-word check, or
+    // "I've" survives it as a name. See `withoutTail`.
+    words = words.map(withoutTail);
 
     while (words.length > 0 && COMMON_CAPITALS.has(normalize(words[0]!))) words = words.slice(1);
     while (words.length > 0 && COMMON_CAPITALS.has(normalize(words[words.length - 1]!))) {

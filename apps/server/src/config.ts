@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { z } from 'zod';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -12,6 +13,8 @@ const Env = z.object({
   SERVER_PORT: z.coerce.number().int().positive().default(8787),
   WEB_PORT: z.coerce.number().int().positive().default(5173),
   DATABASE_PATH: z.string().default('./data/app.db'),
+  /** The single root for everything this app writes. Tests point it at a temp directory. */
+  DATA_DIR: z.string().default('./data'),
 
   /**
    * Where model calls go. See docs/14-model-access.md.
@@ -31,6 +34,27 @@ const Env = z.object({
   CLAUDE_CLI_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
 });
 
+/**
+ * Load .env before reading the environment.
+ *
+ * Without this, every variable documented in .env.example was silently ignored: the file
+ * existed, the docs described it, and nothing read it. A setting that appears to work and
+ * does not is worse than one that is missing.
+ *
+ * Real environment variables still win, which is what makes CI and one-off overrides work.
+ */
+const ENV_FILE = path.join(REPO_ROOT, '.env');
+// Never in tests. `loadEnvFile` does not override variables already set, so the suite's
+// isolation would survive anyway, but a hermetic run should not depend on that or on
+// what a particular developer happens to keep in their .env.
+if (process.env['NODE_ENV'] !== 'test' && existsSync(ENV_FILE)) {
+  try {
+    process.loadEnvFile(ENV_FILE);
+  } catch {
+    console.warn('Found a .env file but could not read it; using the environment as-is.');
+  }
+}
+
 const parsed = Env.safeParse(process.env);
 if (!parsed.success) {
   console.error('Invalid environment configuration:', z.treeifyError(parsed.error));
@@ -38,6 +62,12 @@ if (!parsed.success) {
 }
 
 const env = parsed.data;
+
+/**
+ * The one directory everything is written under. A guard rather than a convenience: see
+ * the comment on `paths` below for what a half-isolated version of this cost.
+ */
+const DATA_DIR = path.resolve(REPO_ROOT, env.DATA_DIR);
 
 export const config = {
   env: env.NODE_ENV,
@@ -61,13 +91,23 @@ export const config = {
     cliTimeoutMs: env.CLAUDE_CLI_TIMEOUT_MS,
   },
 
+  /**
+   * Everything the app writes lives under ONE root, and every path below derives from it.
+   *
+   * This was not always true, and the consequence was severe: the test suite pointed
+   * DATABASE_PATH at a temp file while `resumes`, `artifacts`, `browser-profile` and the
+   * master key stayed hardcoded to the repository, so `npm test` deleted the real ones
+   * through the privacy tests. One root means isolating the tests is a single variable
+   * and cannot be half-done.
+   */
   paths: {
     root: REPO_ROOT,
-    data: path.resolve(REPO_ROOT, 'data'),
+    data: DATA_DIR,
     database: path.resolve(REPO_ROOT, env.DATABASE_PATH),
-    resumes: path.resolve(REPO_ROOT, 'data/resumes'),
-    artifacts: path.resolve(REPO_ROOT, 'data/artifacts'),
-    browserProfile: path.resolve(REPO_ROOT, 'data/browser-profile'),
+    resumes: path.resolve(DATA_DIR, 'resumes'),
+    artifacts: path.resolve(DATA_DIR, 'artifacts'),
+    browserProfile: path.resolve(DATA_DIR, 'browser-profile'),
+    masterKey: path.resolve(DATA_DIR, '.master.key'),
     migrations: path.resolve(REPO_ROOT, 'apps/server/drizzle'),
   },
 
