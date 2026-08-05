@@ -20,6 +20,14 @@ const REDACTED_PATHS = [
   '*.email',
   '*.phone',
   '*.dateOfBirth',
+  // Was missing while every other PII field had a wildcard, so a nested address slipped
+  // through the one mechanism meant to make call sites safe by default.
+  '*.address',
+  // Some source URLs carry credentials in the query string (Adzuna app_id/app_key), and
+  // both the retry log and HttpError put the URL in the record.
+  'url',
+  '*.url',
+  'err.url',
   'req.headers["x-app-token"]',
   'req.headers.authorization',
   'req.headers.cookie',

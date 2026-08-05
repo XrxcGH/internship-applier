@@ -12,7 +12,9 @@ async function main(): Promise<void> {
   await app.listen({ host: config.server.host, port: config.server.port });
 
   const url = `http://${config.server.host}:${config.server.port}`;
-  logger.info({ url, token: config.appToken }, 'server listening (loopback only)');
+  // The token is deliberately absent. Logging it defeats the redaction rule that strips
+  // it from request headers, and it ends up in whatever collects stdout.
+  logger.info({ url }, 'server listening (loopback only)');
 
   // Through the logger everything is one structured line among many, and the address is
   // the thing a person actually needs. Printed plainly, once, on the way up.

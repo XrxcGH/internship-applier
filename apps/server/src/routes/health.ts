@@ -28,10 +28,15 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
     });
   });
   /**
-   * Hands the local UI the per-run token it needs for every other route. Safe to expose
-   * here because the response is readable only from the app's own origin (CORS) and only
-   * over loopback — the token exists to stop other local processes, not to authenticate
-   * a user.
+   * Hands the local UI the per-run token it needs for every other route.
+   *
+   * BE HONEST ABOUT WHAT THIS COSTS. CORS constrains browsers; it does nothing to a curl
+   * or a script, either of which can fetch this and then call any route. So the token is
+   * not a boundary against local processes in general — it stops a stray PAGE in another
+   * browser tab from driving the API, and it stops accidental cross-talk. A process
+   * running as this user was never going to be kept out by it: it can read the database
+   * file directly. docs/10 states the same limit rather than the stronger claim it used
+   * to make.
    */
   app.get('/api/session', async () => ({ token: config.appToken }));
 }

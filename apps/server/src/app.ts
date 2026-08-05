@@ -59,8 +59,13 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     if (!req.url.startsWith('/api/')) return;
 
     // Exempt: the liveness probe and the bootstrap that hands the UI its token.
-    // Both are still loopback-only and CORS-locked to the app's own origin, so a stray
-    // page in another tab cannot read either response.
+    //
+    // What this exemption is and is not worth. CORS keeps a stray page in another browser
+    // tab from reading /api/session, which is the case the token was added for. It does
+    // nothing to a local script: curl can fetch the token here and then call every guarded
+    // route. That is not a hole this exemption opened — a process running as this user can
+    // read data/app.db and the keyfile directly, so the token was never a boundary against
+    // it. docs/10 says the same thing rather than the stronger claim it used to make.
     if (req.url === '/api/health' || req.url === '/api/session') return;
     if (req.headers['x-app-token'] !== config.appToken) {
       return reply.code(401).send({

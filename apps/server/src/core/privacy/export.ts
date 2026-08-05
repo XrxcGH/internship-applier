@@ -15,7 +15,7 @@
  * is a typed phrase rather than a button.
  */
 import { rm } from 'node:fs/promises';
-import { db, schema } from '../../infra/db/client';
+import { db, schema, sqlite } from '../../infra/db/client';
 import { decryptField, isEncrypted } from '../../infra/crypto/fieldCrypto';
 import { deleteMasterKey } from '../../infra/crypto/keychain';
 import { logger } from '../../infra/logger';
@@ -138,6 +138,22 @@ export async function deleteEverything(): Promise<DeleteResult> {
     const before = db.select().from(table).all().length;
     db.delete(table).run();
     deletedRows[name] = before;
+  }
+
+  /**
+   * Deleting rows is not the same as removing the data.
+   *
+   * SQLite marks freed pages reusable rather than zeroing them, and the write-ahead log
+   * still holds the pre-delete images. A hex editor on app.db would have found the resume
+   * text this function claims to have destroyed. Checkpointing folds the WAL back in and
+   * truncates it; VACUUM rewrites the file from live content only, dropping the free
+   * pages entirely.
+   */
+  try {
+    sqlite.pragma('wal_checkpoint(TRUNCATE)');
+    sqlite.exec('VACUUM');
+  } catch (err) {
+    logger.warn({ err }, 'could not compact the database after deleting; rows are gone regardless');
   }
 
   const deletedPaths: string[] = [];
