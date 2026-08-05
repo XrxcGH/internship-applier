@@ -7,9 +7,9 @@
  * the user's own machine. The CLI authenticates itself. This process never reads
  * ~/.claude, never handles a token, and never talks to api.anthropic.com.
  *
- * WHAT THIS IS NOT FOR. A personal tool, run locally, by the person whose subscription it
- * is. Not a way to ship software that borrows other people's subscriptions. docs/14 says
- * so next to the policy text.
+ * WHAT THIS IS FOR: a personal tool, run locally, by the person whose subscription it is.
+ * WHAT IT IS NOT: a way to ship software that borrows other people's subscriptions.
+ * docs/14 says so next to the policy text.
  *
  * THREE CONSTRAINTS SHAPE THE INVOCATION, and they are not obvious:
  *

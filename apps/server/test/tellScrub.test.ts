@@ -114,7 +114,15 @@ describe('structural tells', () => {
     expect(kinds(dashes, { baselineEmDashPer100: 10 })).not.toContain('em_dash_density');
   });
 
+  /**
+   * "Short answer here." reaches none of the structural gates on its own, so the old
+   * version of this test passed whether the word-count guard existed or not. This input
+   * is four flat sentences of identical length — squarely inside uniform_rhythm's reach —
+   * and still under the word floor, so it fails if the guard is removed.
+   */
   it('skips structural checks on text too short to judge', () => {
+    const fourFlatSentences = 'I like it. I want it. I need it. I use it.';
+    expect(findTells(fourFlatSentences).map((t) => t.kind)).not.toContain('uniform_rhythm');
     expect(findTells('Short answer here.')).toEqual([]);
   });
 });

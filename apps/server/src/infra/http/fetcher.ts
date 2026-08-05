@@ -39,14 +39,39 @@ export interface FetchOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Strips credential-shaped query parameters out of a URL.
+ *
+ * Adzuna requires its app id and key in the query string, and there is no way around
+ * that. What there is a way around is carrying them onward: the assembled URL was logged
+ * verbatim on every retry and stored on the error, which pino's default serializer then
+ * copies out of `err.url` when the discovery run logs the failure. Live API credentials
+ * in a log file, in an app whose stated posture is that logs are redacted.
+ */
+export function scrubUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    for (const key of [...u.searchParams.keys()]) {
+      if (/key|secret|token|password|app_id|apikey/i.test(key))
+        u.searchParams.set(key, '[redacted]');
+    }
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
 export class HttpError extends Error {
+  readonly url: string;
+
   constructor(
     message: string,
     readonly status: number,
-    readonly url: string,
+    url: string,
   ) {
     super(message);
     this.name = 'HttpError';
+    this.url = scrubUrl(url);
   }
 }
 
@@ -212,7 +237,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
           Number.isFinite(seconds) && seconds > 0
             ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
             : backoffMs(attempt);
-        logger.debug({ url, status: res.status, waitMs }, 'retrying after backoff');
+        logger.debug({ url: scrubUrl(url), status: res.status, waitMs }, 'retrying after backoff');
         await sleep(waitMs);
         continue;
       }

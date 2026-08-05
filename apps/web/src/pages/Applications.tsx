@@ -66,7 +66,9 @@ export function Applications({ onBack }: { onBack: () => void }) {
 
       {error && <Notice tone="redline">{error}</Notice>}
 
-      {list === null && <p className="text-dim a-pulse text-sm">Loading…</p>}
+      {/* Yields to the error, as Tracker already does. Keyed only on 'list === null',
+          a failed load pulsed "Loading…" under the red banner forever. */}
+      {list === null && !error && <p className="text-dim a-pulse text-sm">Loading…</p>}
 
       {list?.length === 0 && (
         <Empty title="No applications yet.">
@@ -92,8 +94,13 @@ export function Applications({ onBack }: { onBack: () => void }) {
                       <p className="u-eyebrow truncate">{a.company}</p>
                       <p className="mt-1.5 text-[1.125rem] leading-snug">{a.title}</p>
                     </div>
+                    {/* A brand-new application has nothing to review, and saying "in
+                        review" directly above "no questions yet" reads as a bug. The
+                        detail header already distinguishes this case. */}
                     {a.blockedCount > 0 ? (
                       <Badge tone="redline">{a.blockedCount} flagged</Badge>
+                    ) : a.answerCount === 0 ? (
+                      <Badge>no questions yet</Badge>
                     ) : ready ? (
                       <Badge tone="verified">ready</Badge>
                     ) : (

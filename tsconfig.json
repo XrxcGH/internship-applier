@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  // The three files that belonged to no workspace and were therefore checked by nothing.
+  // `audit-copy.ts` runs under tsx and `vitest.setup.ts` under vitest, both of which strip
+  // types without checking them, so a type error in either was invisible — in a script
+  // that gates the build and a setup file that decides where the test database goes.
+  "include": ["scripts/**/*.ts", "vitest.config.ts", "vitest.setup.ts"]
+}

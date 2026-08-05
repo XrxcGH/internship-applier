@@ -44,6 +44,16 @@ export interface StyleReport {
   match: number;
   /** True when the draft is too short to measure honestly. */
   tooShort: boolean;
+  /**
+   * True when there is nothing to measure AGAINST — no writing samples on file.
+   *
+   * Distinct from tooShort, and it has to be, because the report could not previously
+   * tell a perfect match apart from a comparison that never happened: both produced
+   * drift: [] and match: 1, and the G3 header cheerfully said "Reads like your other
+   * writing" to a user who had supplied no other writing. In the gate where someone
+   * decides whether to trust a draft, that is the one claim that must not be invented.
+   */
+  noBaseline: boolean;
 }
 
 /** Below this, sentence statistics are noise and reporting them would be dishonest. */
@@ -67,7 +77,7 @@ export function critiqueStyle(draft: string, yours: StyleProfile | undefined): S
   const tooShort = sentenceCount < MIN_SENTENCES || words(draft).length < 40;
 
   if (!yours || tooShort) {
-    return { measured, drift: [], match: 1, tooShort };
+    return { measured, drift: [], match: 1, tooShort, noBaseline: !yours };
   }
 
   const drift: Drift[] = [];
@@ -187,11 +197,15 @@ export function critiqueStyle(draft: string, yours: StyleProfile | undefined): S
     drift,
     match: round(1 - (worst * 0.6 + mean * 0.4)),
     tooShort: false,
+    noBaseline: false,
   };
 }
 
 /** One line for the G3 header. */
 export function describeMatch(report: StyleReport): string {
+  if (report.noBaseline) {
+    return 'No writing samples yet, so voice was not measured. Add a few under Voice.';
+  }
   if (report.tooShort) return 'Too short to measure against your voice.';
   if (report.drift.length === 0) return 'Reads like your other writing.';
   const worst = report.drift[0]!;

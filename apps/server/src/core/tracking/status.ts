@@ -176,7 +176,9 @@ export function derive(app: TrackedApplication, now = new Date()): Derived {
     return {
       effectiveStatus,
       attention: 'deadline_passed',
-      nudge: `This closed ${String(Math.abs(daysUntilDeadline))} days ago and was never submitted.`,
+      nudge:
+        `This closed ${String(Math.abs(daysUntilDeadline))} ` +
+        `day${Math.abs(daysUntilDeadline) === 1 ? '' : 's'} ago and was never submitted.`,
       daysSinceSubmitted,
       daysUntilDeadline,
     };

@@ -143,8 +143,27 @@ export function payLabel(c: Record<string, unknown> | null): string {
   if (c['academicCreditOnly']) return 'Credit only';
   const min = c['min'];
   if (typeof min !== 'number') return 'Pay not disclosed';
-  const max = typeof c['max'] === 'number' ? `–${c['max']}` : '';
-  return `$${min}${max}/${String(c['period'] ?? 'hr')}`;
+
+  /**
+   * Thousands separators and one display form per period.
+   *
+   * A yearly salary used to render as "$110000–130000/year", and the fallback was 'hr'
+   * while every real value is one of the five schema tokens — so two hourly postings
+   * could show '/hour' and '/hr' depending on whether the field happened to be set. This
+   * string sits in the G2 detail pane, where someone is deciding whether to apply.
+   */
+  const money = (n: number): string => n.toLocaleString('en-US');
+  const PERIOD: Record<string, string> = {
+    hour: '/hr',
+    week: '/wk',
+    month: '/mo',
+    year: '/yr',
+    total: ' total',
+  };
+
+  const max = typeof c['max'] === 'number' ? `–$${money(c['max'])}` : '';
+  const period = PERIOD[String(c['period'] ?? 'hour')] ?? '/hr';
+  return `$${money(min)}${max}${period}`;
 }
 
 export function daysUntil(iso: string | null): number | null {

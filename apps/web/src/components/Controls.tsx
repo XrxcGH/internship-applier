@@ -9,7 +9,11 @@ type Variant = 'solid' | 'primary' | 'ghost' | 'danger';
 
 const VARIANTS: Record<Variant, string> = {
   // Reserved for the one action a screen is actually about.
-  solid: 'border-accent bg-accent/15 text-accent hover:bg-accent/25',
+  // The disabled:hover rule here restores this variant's own fill rather than letting the
+  // shared disabled:hover:bg-transparent win on specificity — a disabled button still
+  // receives :hover, so the flagged-claims Approve button used to blink its tint off under
+  // the cursor, which reads as a rendering fault rather than as "disabled".
+  solid: 'border-accent bg-accent/15 text-accent hover:bg-accent/25 disabled:hover:bg-accent/15',
   primary: 'border-accent/60 text-accent hover:bg-accent/10 hover:border-accent',
   ghost: 'border-rule text-dim hover:text-ink hover:border-rule-strong hover:bg-ink/[0.04]',
   danger: 'border-redline/60 text-redline hover:bg-redline/10 hover:border-redline',

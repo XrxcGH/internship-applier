@@ -83,6 +83,11 @@ describe('G4 — no auto-submit path exists', () => {
     [/submit[A-Za-z]*\s*\.\s*click\s*\(/i, 'clicks a submit locator'],
     [/\.\s*requestSubmit\s*\(/, 'calls requestSubmit()'],
     [/\bform[A-Za-z]*\s*\.\s*submit\s*\(/i, 'calls form.submit()'],
+    // Any receiver, not only an identifier starting with "form". The pattern above misses
+    // document.querySelector('form').submit() and page.evaluate((f) => f.submit()), both
+    // of which submit an application just as thoroughly.
+    [/\.\s*submit\s*\(\s*\)/, 'calls .submit() on something'],
+    [/new\s+SubmitEvent/, 'constructs a SubmitEvent'],
     [/\.press\s*\(\s*['"`]Enter/i, 'presses Enter, which submits a single-input form'],
     // Only a selector that SELECTS a submit control. The lookbehind is load-bearing:
     // `input:not([type=submit])` is the scanner deliberately excluding them, and a guard

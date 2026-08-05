@@ -76,8 +76,15 @@ export function buildRationale(input: RationaleInput): string {
   if (eligibility === 'ineligible') {
     const blockers = rules.filter((r) => r.status === 'fail');
     const first = blockers[0];
-    const rest = blockers.length > 1 ? ` (plus ${blockers.length - 1} more)` : '';
-    return `Filtered out: ${first?.because ?? 'a requirement was not met'}${rest} You can still open it and decide for yourself — nothing here is hidden.`;
+    // Its own sentence. Every `because` string already ends in a full stop, so the
+    // parenthetical used to float unpunctuated between two complete sentences — sloppy
+    // anywhere, and this is the drawer that exists so the user can catch the tool
+    // being wrong.
+    const rest =
+      blockers.length > 1
+        ? ` Plus ${String(blockers.length - 1)} other blocker${blockers.length === 2 ? '' : 's'}.`
+        : '';
+    return `Filtered out: ${first?.because ?? 'a requirement was not met.'}${rest} You can still open it and decide for yourself — nothing here is hidden.`;
   }
 
   const best = strongest(score);

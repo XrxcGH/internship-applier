@@ -57,6 +57,14 @@ export function FillReview({
   const [run, setRun] = useState<FillRunView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Remembered locally, because marking submitted clears the run.
+   *
+   * With the run gone and nothing on this screen carrying the application's status, the
+   * panel fell back to its opening card — inviting the user to open and fill the form
+   * they had just told it they submitted.
+   */
+  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
 
   const act = async (key: string, fn: () => Promise<FillRunView | null>): Promise<void> => {
     setBusy(key);
@@ -86,7 +94,19 @@ export function FillReview({
     <div className="space-y-5">
       {error && <Notice tone="redline">{error}</Notice>}
 
-      {!run && (
+      {!run && submittedAt !== null && (
+        <div className="u-tint-verified rounded px-5 py-5">
+          <p className="a-stamp u-data text-verified mb-2 text-lg tracking-widest uppercase">
+            submitted
+          </p>
+          <p className="text-dim">
+            Recorded on {submittedAt.slice(0, 10)}. It is on the tracker now — that is where
+            replies, follow-ups and deadlines live.
+          </p>
+        </div>
+      )}
+
+      {!run && submittedAt === null && (
         <div className="u-card-flat px-5 py-5">
           <p className="text-dim u-prose">
             This opens the application page in a browser you can watch, reads the form, and shows
@@ -126,6 +146,21 @@ export function FillReview({
               onClick={() => void act('continue', () => continueFill(applicationId))}
             >
               {busy === 'continue' ? 'Checking…' : 'I have done that, continue'}
+            </Button>
+            {/* A way out. Continuing re-runs the same detector, so someone who decides
+                not to sign in got the identical pause back every time, with the browser
+                still open and no control anywhere on screen to close it. */}
+            <Button
+              size="sm"
+              disabled={busy !== null}
+              onClick={() =>
+                void act('discard', async () => {
+                  await discardFill(applicationId);
+                  return null;
+                })
+              }
+            >
+              {busy === 'discard' ? 'Closing…' : 'Close the browser and stop'}
             </Button>
           </div>
         </Notice>
@@ -209,7 +244,11 @@ export function FillReview({
                 variant="primary"
                 disabled={busy !== null}
                 onClick={() =>
-                  void act('mark', () => markSubmitted(applicationId).then(() => null))
+                  void act('mark', async () => {
+                    const r = await markSubmitted(applicationId);
+                    setSubmittedAt(r.submittedAt ?? new Date().toISOString());
+                    return null;
+                  })
                 }
               >
                 {busy === 'mark' ? 'Recording…' : 'I submitted it'}

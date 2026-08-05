@@ -60,7 +60,7 @@ function locate(frame: Frame, field: FormField): Locator {
 /**
  * Above this many characters, keystroke pacing is dropped.
  *
- * An essay is the only thing that gets near it, and pacing an 600-character answer at
+ * An essay is the only thing that gets near it, and pacing a 600-character answer at
  * human speed costs a minute per field for no benefit — the key events still fire.
  */
 const LONG_TEXT = 120;
