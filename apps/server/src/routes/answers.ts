@@ -66,6 +66,7 @@ interface ApplicationContext {
   company: string;
   title: string;
   description: string;
+  applyUrl: string;
 }
 
 function loadContext(applicationId: string): ApplicationContext | null {
@@ -83,6 +84,7 @@ function loadContext(applicationId: string): ApplicationContext | null {
     company: row.job_posting.company,
     title: row.job_posting.title,
     description: row.job_posting.descriptionText,
+    applyUrl: row.application.applyUrl,
   };
 }
 

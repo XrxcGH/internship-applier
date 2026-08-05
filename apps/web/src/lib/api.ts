@@ -199,6 +199,7 @@ export interface ApplicationDetail {
   company: string;
   title: string;
   description: string;
+  applyUrl: string;
   answers: Answer[];
   canDraft: boolean;
   modelAccess: ModelAccess;
@@ -247,3 +248,48 @@ export const approveAnswer = (id: string) =>
 
 export const unapproveAnswer = (id: string) =>
   request<Answer>(`/api/answers/${id}/unapprove`, { method: 'POST' });
+
+// ───────────────────────────────────────────────────────────────── form filling
+
+export interface FillFieldResult {
+  label: string;
+  semantic: string;
+  redlineCategory: string | null;
+  status: 'ok' | 'mismatch' | 'failed' | 'skipped';
+  readBack: string | null;
+  note: string | null;
+}
+
+export interface FillRunView {
+  applicationId: string;
+  state: 'opening' | 'reading' | 'awaiting_user' | 'filling' | 'done' | 'failed';
+  url: string;
+  message: string;
+  startedAt: string;
+  intervention: { reason: 'login' | 'captcha' | 'unknown_field'; detail: string } | null;
+  summary: string | null;
+  fields?: FillFieldResult[];
+  counts: { filled: number; mismatched: number; failed: number; skipped: number } | null;
+}
+
+export const startFill = (id: string) =>
+  request<FillRunView>(`/api/applications/${id}/fill`, { method: 'POST' });
+
+export const continueFill = (id: string) =>
+  request<FillRunView>(`/api/applications/${id}/fill/continue`, { method: 'POST' });
+
+export const getFill = (id: string) =>
+  request<FillRunView>(`/api/applications/${id}/fill`).catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  });
+
+export const discardFill = (id: string) =>
+  request<null>(`/api/applications/${id}/fill`, { method: 'DELETE' });
+
+/** Gate G4. Records that YOU submitted it. Opens nothing, clicks nothing. */
+export const markSubmitted = (id: string) =>
+  request<{ id: string; status: string; submittedAt: string }>(
+    `/api/applications/${id}/mark-submitted`,
+    { method: 'POST' },
+  );

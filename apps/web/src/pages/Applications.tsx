@@ -15,6 +15,7 @@ import {
 import { Field, Page, RunningHead, Section } from '../components/Chrome';
 import { Badge, Button, Empty, Notice, TextArea } from '../components/Controls';
 import { AnswerReview } from '../components/AnswerReview';
+import { FillReview } from '../components/FillReview';
 
 /** Questions worth having on hand — most applications ask some version of these. */
 const COMMON_QUESTIONS = [
@@ -207,8 +208,8 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
       <Section n="01" title="Questions from the form" step={3}>
         {app.answers.length === 0 ? (
           <Empty title="No questions added yet.">
-            Open the application page and paste each free-text question below. Until form reading
-            lands, this is how questions get in.
+            Paste each free-text question from the application below. Reading them off the page
+            directly is not something this tool does yet.
           </Empty>
         ) : (
           <div className="space-y-6">
@@ -270,27 +271,23 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
       </Section>
 
-      <Section n="03" title="What happens next" step={5}>
-        <div className="u-card-flat px-5 py-5">
-          <p className="text-dim text-[1rem]">
-            Once every answer is approved, this tool can fill the form for you. It stops at the
-            submit button, <em>every time</em>. You read the filled page and click Submit{' '}
-            <em>yourself</em>.
-          </p>
-          <p className="text-faint mt-3 text-[1rem]">
-            Sensitive fields are <em>never</em> auto-filled: government IDs, bank details,
-            passwords, demographic questions, and anything you have to attest to.
-          </p>
-          <div className="mt-4">
-            <Button
-              variant="primary"
-              disabled
-              title="Form filling arrives in M6. Nothing is submitted for you, ever."
-            >
-              Fill the form (M6)
-            </Button>
-          </div>
-        </div>
+      <Section n="03" title="Fill the form" step={5}>
+        <p className="text-faint u-prose mb-5 text-[1rem]">
+          Sensitive fields are <em>never</em> auto-filled: government IDs, bank details, passwords,
+          demographic questions, and anything you have to attest to. Each one gets listed for you
+          with the reason.
+        </p>
+        <FillReview
+          applicationId={app.id}
+          applyUrl={app.applyUrl}
+          canFill={app.answers.length > 0 && ready}
+          blockedReason={
+            app.answers.length === 0
+              ? 'Add the form’s questions above and approve an answer for each one first.'
+              : `${app.answers.length - approved} of ${app.answers.length} answers still need your approval (gate G3).`
+          }
+          onChanged={refresh}
+        />
       </Section>
     </Page>
   );

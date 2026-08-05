@@ -10,8 +10,9 @@
 | M3 Matching | **done** | Deterministic + LLM requirement extraction with quote verification, 12 pure eligibility rules, scoring, rationale. Verified live: 816 postings → 420 eligible / 244 unknown / 152 ineligible, 203 requirements, 0 dropped, 0 errors. |
 | M4 Review queue | **done** | Keyboard-first triage, requirement checklist with verbatim quotes, score breakdown, reject reasons, G2 approval creating an application. Verified live against 123 real matches. |
 | M5 Writing engine | **done** | Bounded evidence retrieval, drafting with the measured voice, two-layer FactGuard, StyleCritic, answer library, G3 workspace. The adversarial suite passes: every planted fabrication caught, and the false-positive half passes too. G3 enforced server-side with no override. |
-| M6 Form automation | next | The long pole. Nothing here may click Submit. |
-| M7–M8 | not started | |
+| M6 Form automation | **done** | Playwright with a persistent context, FormMap over six label-resolution strategies, redline enforcement, fill with read-back verification, pause/resume for login walls, pre-submit review, G4. The fixture counts POSTs, so "nothing was submitted" is asserted as an outcome rather than inferred from the source. |
+| M7 Tracker | next | Status model, board, reminders, outcome stats. |
+| M8 | not started | |
 
 All M1 and M2 deferrals are now complete: query planner, Adzuna/USAJOBS adapters, the SimplifyJobs community list, manual paste-a-URL, freshness/refresh, SSE progress, source management, writing-sample capture with StyleProfile, and resume set-primary/delete.
 
@@ -100,6 +101,31 @@ Pre-submit review + G4. The fixture site and its Playwright suite.
 
 **Done when:** the fixture site's nastiest form fills correctly, every redlined field is
 skipped, and there is no code path that clicks Submit.
+
+**Built.** The fixture grew into something worth testing against: aria-labelledby-only
+labels, placeholder-only fields, a label in a preceding sibling div, a div-based combobox,
+shadow DOM, a mislabeled redline, a nested iframe, and a wizard whose fields do not exist
+until you advance.
+
+Three findings worth keeping:
+
+- **The G4 guard had to change shape.** Its first version banned every `.click()` in
+  `core/filling`, which was correct until the filler needed to focus a text input and pick
+  a combobox option. A guard that forbids something legitimate gets deleted or worked
+  around. It is now narrower (only submit-shaped targets) and wider (`requestSubmit()`,
+  `form.submit()`, and pressing Enter, which submits a single-input form). The behavioural
+  check is stronger than any of it: the fixture counts POSTs.
+- **The redline table was US-centric.** Testing it against 447 researched real-world labels
+  found 269 misses, overwhelmingly non-US: Aadhaar, NRIC, Codice Fiscale, CPF, BSB, IFSC.
+  A table that is safe for a US applicant and porous for everyone else is not finished.
+- **Broadening a blocklist causes its own damage.** Probing after the fix found three
+  false positives it had just introduced — "GitHub username", "Professional
+  certifications", "Declaration of major". All three now have tests keeping them fillable.
+
+**Not done:** the per-vendor ATS adapters (Greenhouse, Lever, Ashby, Workday). The generic
+mapper handles all four in principle, since it works from labels and roles rather than
+vendor markup, but that is untested against a real posting from any of them. Research on
+their DOM structure was gathered and is in the run journal.
 
 ### M7 — Tracker (2 days)
 
