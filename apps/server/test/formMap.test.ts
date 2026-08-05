@@ -161,6 +161,48 @@ describe('redlines are caught while reading, before anything is typed', () => {
   }, 60_000);
 });
 
+describe('radio groups', () => {
+  /**
+   * The fixture's radios are labelled by the legend, which is what real ATS forms do and
+   * what the highest-priority label strategy finds first. Ungrouped, that gave two fields
+   * with the same question, the same semantic, and no idea which was Yes and which was No.
+   */
+  it('collapses a group into one question with its buttons as options', async () => {
+    const m = await mapOf('/nasty');
+    const group = m.fields.filter((f) => f.control === 'radio');
+    expect(group).toHaveLength(1);
+    expect(group[0]!.label).toMatch(/legally authorized to work/i);
+    expect(group[0]!.options?.map((o) => o.label)).toEqual(['Yes', 'No']);
+  }, 60_000);
+
+  it('gives each option its own locator, since the group selector matches them all', async () => {
+    const m = await mapOf('/nasty');
+    const group = m.fields.find((f) => f.control === 'radio')!;
+    const locators = group.options?.map((o) => o.locator) ?? [];
+    expect(new Set(locators).size).toBe(2);
+    for (const l of locators) expect(l).toBeTruthy();
+  }, 60_000);
+
+  it('classifies the group by its question', async () => {
+    const m = await mapOf('/nasty');
+    expect(m.fields.find((f) => f.control === 'radio')?.semantic).toBe('work_auth');
+  }, 60_000);
+});
+
+describe('long-form fields the scanner has to recognize by shape', () => {
+  /**
+   * A contenteditable box has no `type` attribute, so shape detection could not see it
+   * and every rich-text essay landed as `unknown` — the fill engine's richtext branch was
+   * unreachable for the one thing it was written for.
+   */
+  it('recognizes a contenteditable essay with a short question', async () => {
+    const m = await mapOf('/nasty');
+    const why = byLabel(m, /why do you want this internship/i);
+    expect(why?.control).toBe('richtext');
+    expect(why?.semantic).toBe('essay');
+  }, 60_000);
+});
+
 describe('summary', () => {
   it('counts what the user needs to know', async () => {
     const m = await mapOf('/redlines');

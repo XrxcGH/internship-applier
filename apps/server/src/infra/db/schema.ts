@@ -121,6 +121,15 @@ export const jobPosting = sqliteTable(
     embedding: blob('embedding'),
     firstSeenAt: text('first_seen_at').notNull().default(now),
     lastSeenAt: text('last_seen_at').notNull().default(now),
+    /**
+     * When requirements were last extracted from this posting, whatever the outcome.
+     *
+     * The cache used to be keyed on "are there any requirement rows", which cannot tell
+     * "never looked" from "looked, found none" — a result the extractor itself calls
+     * valid and common. Every posting in the second category paid for a fresh model call
+     * on every recompute, contradicting the promise that extraction happens once.
+     */
+    requirementsExtractedAt: text('requirements_extracted_at'),
   },
   (t) => [
     uniqueIndex('job_posting_canonical_url_idx').on(t.canonicalUrl),

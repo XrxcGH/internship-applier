@@ -47,9 +47,23 @@ const lastName = (full: string): string => {
   return parts.length > 1 ? parts[parts.length - 1]! : '';
 };
 
-/** Most recent education entry, which is what an application means by "school". */
+/**
+ * Most recent education entry, which is what an application means by "school".
+ *
+ * A missing end date means "Present", not "the beginning of time". Coalescing it to ''
+ * and sorting descending put the degree the user is actually enrolled in LAST, so an
+ * application asking for school, degree, major, GPA and graduation date was filled from
+ * whatever they finished before it — usually their high school. Ongoing entries sort
+ * first; ties between two ongoing entries fall back to which started later.
+ */
 function currentEducation(p: ConfirmedProfile) {
-  return [...p.education].sort((a, b) => (b.endDate ?? '').localeCompare(a.endDate ?? ''))[0];
+  return [...p.education].sort((a, b) => {
+    const aOngoing = !a.endDate;
+    const bOngoing = !b.endDate;
+    if (aOngoing !== bOngoing) return aOngoing ? -1 : 1;
+    if (aOngoing && bOngoing) return (b.startDate ?? '').localeCompare(a.startDate ?? '');
+    return (b.endDate ?? '').localeCompare(a.endDate ?? '');
+  })[0];
 }
 
 const DEGREE_LABEL: Record<string, string> = {
@@ -138,7 +152,21 @@ export function valueFor(field: FormField, p: ConfirmedProfile): string | null {
   }
 }
 
-/** Loose match between a form's question and an approved answer's question. */
+/**
+ * Loose match between a form's question and an approved answer's question.
+ *
+ * SYMMETRIC ON PURPOSE, and strict. An answer is approved at G3 as the answer to one
+ * specific question. The old one-way score — what fraction of the answer's words appear
+ * anywhere in the field's label — let a neighbouring question's answer clear the bar
+ * whenever the two shared vocabulary, so "Why do you want to work here?" could be filled
+ * with the text approved for "Why do you want to work in this field?". That is the user's
+ * name on words they never vouched for in that context.
+ *
+ * Requiring coverage in BOTH directions means a near-miss now falls through to "no
+ * approved answer for this question", which is a prompt, not a mistake.
+ */
+const MATCH_FLOOR = 0.7;
+
 function matchAnswer(field: FormField, answers: ApplicationAnswer[]): ApplicationAnswer | null {
   const norm = (s: string) =>
     s
@@ -146,19 +174,23 @@ function matchAnswer(field: FormField, answers: ApplicationAnswer[]): Applicatio
       .replace(/[^a-z\s]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  const significant = (s: string) => new Set(s.split(' ').filter((w) => w.length > 3));
+
   const target = norm(field.label);
   if (!target) return null;
+  const targetWords = significant(target);
+  if (targetWords.size === 0) return null;
 
   let best: { a: ApplicationAnswer; score: number } | null = null;
   for (const a of answers) {
-    const q = norm(a.questionText);
-    const words = new Set(q.split(' ').filter((w) => w.length > 3));
+    const words = significant(norm(a.questionText));
     if (words.size === 0) continue;
-    const hits = [...words].filter((w) => target.includes(w)).length;
-    const score = hits / words.size;
+    const shared = [...words].filter((w) => targetWords.has(w)).length;
+    // The weaker of the two directions, so neither question can carry the match alone.
+    const score = Math.min(shared / words.size, shared / targetWords.size);
     if (!best || score > best.score) best = { a, score };
   }
-  return best && best.score >= 0.6 ? best.a : null;
+  return best && best.score >= MATCH_FLOOR ? best.a : null;
 }
 
 export function buildFillPlan(input: PlanInput): FillPlan {

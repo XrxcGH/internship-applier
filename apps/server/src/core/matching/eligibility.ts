@@ -343,13 +343,29 @@ export function location({ profile, posting }: RuleInput): RuleResult {
   const arrangement = posting.workArrangement;
   const prefs = profile.locationPrefs;
 
-  if (arrangement === 'remote' || posting.locations.some((l) => l.remote)) {
+  // "Remote" and "offers remote" are different postings, and only the first one can be
+  // failed on a remote preference. Greenhouse writes "New York, NY or Remote" as ONE
+  // location, which parseLocation turns into {city:'New York', remote:true} — so a
+  // `.some(l => l.remote)` test used to hard-fail a user living in New York who simply
+  // prefers to go in. A remote flag is disqualifying only when nowhere else is offered.
+  const remoteOnly =
+    arrangement === 'remote' ||
+    (posting.locations.length > 0 &&
+      posting.locations.every((l) => l.remote && !l.city && !l.region));
+
+  if (remoteOnly) {
     return prefs.remoteOk
       ? pass('location', 'Remote, which you accept.', { profileRef: 'locationPrefs.remoteOk' })
       : fail('location', 'This posting is remote and you have remote turned off.', {
           evidence: `workArrangement=${arrangement ?? 'remote'}`,
           profileRef: 'locationPrefs.remoteOk',
         });
+  }
+
+  if (prefs.remoteOk && posting.locations.some((l) => l.remote)) {
+    return pass('location', 'Offered remote, which you accept.', {
+      profileRef: 'locationPrefs.remoteOk',
+    });
   }
 
   if (arrangement === 'hybrid' && !prefs.hybridOk) {
@@ -363,14 +379,18 @@ export function location({ profile, posting }: RuleInput): RuleResult {
     return unknown('location', 'The posting does not say where the role is based.');
   }
 
+  // Empty strings are the enemy of `includes`. The home city starts as '' and the wizard
+  // lets a user fill in the state alone, which made label.includes('') true and passed
+  // EVERY posting on earth with "within your commute area" — a confident sentence about a
+  // comparison that never happened. Same hole in an empty relocation target.
+  const city = prefs.base.city.trim().toLowerCase();
   const base = `${prefs.base.city} ${prefs.base.region}`.toLowerCase().trim();
-  const targets = prefs.relocateTo.map((t) => t.toLowerCase());
+  const targets = prefs.relocateTo.map((t) => t.trim().toLowerCase()).filter(Boolean);
 
   const matches = posting.locations.some((l) => {
     const label = [l.city, l.region].filter(Boolean).join(' ').toLowerCase();
     if (!label) return false;
-    if (base && (label.includes(prefs.base.city.toLowerCase()) || base.includes(label)))
-      return true;
+    if (city && (label.includes(city) || base.includes(label))) return true;
     return targets.some((t) => label.includes(t) || t.includes(label));
   });
 
@@ -540,7 +560,14 @@ export function termOverlap({ profile, posting }: RuleInput): RuleResult {
 export function deadline({ posting, now }: RuleInput): RuleResult {
   if (!posting.closesAt) return na('deadline', 'No closing date stated.');
 
-  const closes = Date.parse(posting.closesAt);
+  // A date with no time means the whole of that day, not its first instant. USAJOBS and
+  // JSON-LD both hand over bare dates, and Date.parse puts those at midnight UTC — which
+  // closed the posting a full day early and reported "Closed on <today>" to a user who
+  // still had hours to apply. Close of business, generously: end of that day.
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(posting.closesAt.trim());
+  const closes = dateOnly
+    ? Date.parse(`${posting.closesAt.trim()}T23:59:59Z`)
+    : Date.parse(posting.closesAt);
   if (Number.isNaN(closes)) return unknown('deadline', 'The closing date could not be read.');
 
   return closes >= now.getTime()

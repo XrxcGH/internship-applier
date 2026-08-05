@@ -47,6 +47,15 @@ export interface ScoreOutcome {
   breakdown: ScoreBreakdown;
   /** Per-dimension notes, so the UI can explain each bar. */
   notes: Record<keyof ScoreBreakdown, string>;
+  /**
+   * Which dimensions were scored against something real.
+   *
+   * A dimension with no data is scored neutrally, and a neutral score is not a finding.
+   * The rationale used to lead with "the required skills line up — no required skills
+   * listed", a sentence that argues with itself, because an empty list scored a perfect
+   * 1.0 and won. Anything false here is excluded from best/worst reasoning.
+   */
+  evidence: Record<keyof ScoreBreakdown, boolean>;
 }
 
 function normalizeSkill(s: string): string {
@@ -74,8 +83,17 @@ function skillMatches(mine: Set<string>, wanted: string): boolean {
   return false;
 }
 
+/**
+ * Coverage of a wanted-skill list, neutral when the list is empty.
+ *
+ * Empty used to score 1.0, which is a claim — "you match everything asked for" — made
+ * about a posting nobody extracted skills from. Required coverage carries the heaviest
+ * weight, so that ranked un-annotated postings above genuinely well-matched ones and fed
+ * a rationale congratulating the user on matching nothing. Undisclosed pay is already
+ * treated this way a few lines below; this is the same principle.
+ */
 function coverage(mine: Set<string>, wanted: string[]): number {
-  if (wanted.length === 0) return 1;
+  if (wanted.length === 0) return 0.5;
   return wanted.filter((w) => skillMatches(mine, w)).length / wanted.length;
 }
 
@@ -140,11 +158,16 @@ export function scoreMatch(input: ScoreInput): ScoreOutcome {
 
   const prefs = profile.locationPrefs;
   const isRemote = posting.workArrangement === 'remote' || posting.locations.some((l) => l.remote);
-  const inHome = posting.locations.some((l) =>
-    (l.city ?? '').toLowerCase().includes(prefs.base.city.toLowerCase()),
-  );
+  // An empty home city makes includes('') true for every posting, which scored every
+  // location a perfect 1.0 and told the user it was "in your home city". Same guard as
+  // the location rule in eligibility.ts.
+  const homeCity = prefs.base.city.trim().toLowerCase();
+  const relocations = prefs.relocateTo.map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const inHome =
+    homeCity !== '' &&
+    posting.locations.some((l) => (l.city ?? '').toLowerCase().includes(homeCity));
   const inTarget = posting.locations.some((l) =>
-    prefs.relocateTo.some((t) => (l.city ?? '').toLowerCase().includes(t.toLowerCase())),
+    relocations.some((t) => (l.city ?? '').toLowerCase().includes(t)),
   );
   const locationDesirability = inHome ? 1 : isRemote ? 0.9 : inTarget ? 0.8 : 0.4;
 
@@ -187,6 +210,16 @@ export function scoreMatch(input: ScoreInput): ScoreOutcome {
   return {
     score: Math.round(Math.max(0, Math.min(100, (total / maxTotal) * 100))),
     breakdown,
+    evidence: {
+      requiredSkillCoverage: required.length > 0,
+      preferredSkillCoverage: preferred.length > 0,
+      roleAlignment: posting.title.trim() !== '' && myVocab.size > 0,
+      domainMatch: industries.length > 0,
+      seniorityFit: posting.positionType !== null,
+      locationDesirability: posting.locations.length > 0 || posting.workArrangement !== null,
+      compensation: comp !== null,
+      applyEffort: effort !== null,
+    },
     notes: {
       requiredSkillCoverage: required.length
         ? `${required.filter((r) => skillMatches(mine, r)).length}/${required.length} required skills matched`

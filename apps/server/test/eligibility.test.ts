@@ -348,6 +348,74 @@ describe('location', () => {
   });
 
   /**
+   * "New York, NY or Remote" is ONE Greenhouse location string, and parseLocation turns
+   * it into a city with the remote flag set. Reading that as remote-only hard-failed a
+   * user who lives in New York and simply prefers to go into an office.
+   */
+  it('does not fail a posting that offers remote alongside a city the user lives in', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ locationPrefs: { ...profile().locationPrefs, remoteOk: false } }),
+        posting: posting({
+          workArrangement: null,
+          locations: [{ city: 'Boston', region: 'MA', country: 'US', remote: true }],
+        }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('pass');
+  });
+
+  it('still fails a posting that is only remote', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ locationPrefs: { ...profile().locationPrefs, remoteOk: false } }),
+        posting: posting({ workArrangement: null, locations: [{ remote: true }] }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('fail');
+  });
+
+  /**
+   * The wizard lets someone fill in the state and leave the city blank, and the home city
+   * starts as ''. `label.includes('')` is true, so every posting on earth came back
+   * "within your commute area" — a confident sentence about a comparison that never ran.
+   */
+  it('does not claim a commute match when the home city is blank', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({
+          locationPrefs: {
+            ...profile().locationPrefs,
+            base: { city: '', region: 'MA', country: 'US' },
+          },
+        }),
+        posting: posting({
+          locations: [{ city: 'Austin', region: 'TX', country: 'US', remote: false }],
+        }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('unknown');
+  });
+
+  it('ignores an empty relocation target', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({
+          locationPrefs: {
+            ...profile().locationPrefs,
+            base: { city: '', region: '', country: 'US' },
+            relocateTo: [''],
+          },
+        }),
+        posting: posting({
+          locations: [{ city: 'Austin', region: 'TX', country: 'US', remote: false }],
+        }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('unknown');
+  });
+
+  /**
    * Without coordinates we cannot measure a radius. Guessing would hide a posting one
    * town over, so an unfamiliar city is `unknown` and the user decides.
    */
@@ -477,6 +545,21 @@ describe('deadline and open state', () => {
       input({ posting: posting({ closesAt: '2027-01-01T00:00:00Z' }) }),
     );
     expect(statusOf(o, 'deadline')).toBe('pass');
+  });
+
+  /**
+   * USAJOBS and JSON-LD both hand over bare dates. Date.parse puts those at midnight UTC,
+   * which closed the posting for the whole of its final day and told the user "Closed on
+   * <today>" while the employer was still accepting applications.
+   */
+  it('treats a date-only deadline as the end of that day, not its first instant', () => {
+    const o = evaluateEligibility(input({ posting: posting({ closesAt: '2026-08-03' }) }));
+    expect(statusOf(o, 'deadline')).toBe('pass');
+  });
+
+  it('still fails the day after a date-only deadline', () => {
+    const o = evaluateEligibility(input({ posting: posting({ closesAt: '2026-08-02' }) }));
+    expect(statusOf(o, 'deadline')).toBe('fail');
   });
 });
 

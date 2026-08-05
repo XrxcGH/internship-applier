@@ -141,7 +141,27 @@ const NASTY = page(
          semantic classification. Caught by the keyword blocklist instead. -->
     <label for="f-tax">Taxpayer identification number</label><input id="f-tax" name="q_7781">
 
-    <!-- 10. Nested iframe carrying more of the form. -->
+    <!-- 10. A radio group whose inputs are labelled by the LEGEND, not by their own
+         choice text. This is the shape that made every radio in a group resolve to the
+         same question, classify identically, and get ticked in turn — the last one
+         quietly unticking the rest, so which answer was submitted came down to document
+         order. A rich-text essay follows, because a contenteditable box has no type
+         attribute for shape detection to read. -->
+    <fieldset id="auth-group">
+      <legend id="lbl-auth">Are you legally authorized to work in the United States?</legend>
+      <label for="f-auth-yes">Yes</label>
+      <input type="radio" id="f-auth-yes" name="work_auth_radio" value="yes"
+             aria-labelledby="lbl-auth">
+      <label for="f-auth-no">No</label>
+      <input type="radio" id="f-auth-no" name="work_auth_radio" value="no"
+             aria-labelledby="lbl-auth">
+    </fieldset>
+
+    <!-- 11. A contenteditable essay field, the way several ATS vendors ship them. -->
+    <label id="lbl-why">Why do you want this internship?</label>
+    <div id="f-why" contenteditable="true" role="textbox" aria-labelledby="lbl-why"></div>
+
+    <!-- 12. Nested iframe carrying more of the form. -->
     <iframe id="extra" src="/framed" title="Additional questions" width="400" height="200"></iframe>
 
     <button type="submit" id="submit-application">Submit application</button>

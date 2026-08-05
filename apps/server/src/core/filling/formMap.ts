@@ -32,8 +32,14 @@ interface RawField extends FieldDescriptor {
   control: FormField['control'];
   required: boolean;
   maxLength?: number;
-  options?: Array<{ value: string; label: string }>;
+  options?: Array<{ value: string; label: string; locator?: string }>;
   visible: boolean;
+  /** Radio only: this input's own choice text, as distinct from the group's question. */
+  optionLabel?: string;
+  /** Radio only: the question the whole group answers, from its fieldset legend. */
+  groupLabel?: string;
+  /** Radio only: the value attribute, which is what distinguishes it within its group. */
+  optionValue?: string;
 }
 
 /**
@@ -103,12 +109,59 @@ const SCAN = (): unknown => {
     return (el.getAttribute('placeholder') ?? '').trim();
   };
 
+  /**
+   * A radio's OWN choice text — "Yes", not "Are you authorized to work?".
+   *
+   * Deliberately narrower than labelFor, which starts at aria-labelledby and so returns
+   * the group's legend for every radio in the group. Ticking a radio on the strength of
+   * that label means ticking one without knowing which choice it is.
+   */
+  const optionLabelFor = (el: HTMLElement): string => {
+    if (el.id) {
+      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (l) return text(l);
+    }
+    const wrapping = el.closest('label');
+    if (wrapping) return text(wrapping);
+    const aria = (el.getAttribute('aria-label') ?? '').trim();
+    if (aria) return aria;
+    const sib = el.nextElementSibling;
+    if (sib && !sib.matches('input, select, textarea')) return text(sib);
+    return (el.getAttribute('value') ?? '').trim();
+  };
+
+  /** The question a radio group answers, which lives on the fieldset, not the input. */
+  const groupLabelFor = (el: HTMLElement): string => {
+    const group = el.closest('fieldset, [role=radiogroup]');
+    if (!group) return '';
+    const legend = group.querySelector('legend');
+    if (legend) return text(legend);
+    const aria = (group.getAttribute('aria-label') ?? '').trim();
+    if (aria) return aria;
+    const by = group.getAttribute('aria-labelledby');
+    if (by) {
+      const parts = by
+        .split(/\s+/)
+        .map((id) => text(document.getElementById(id)))
+        .filter(Boolean);
+      if (parts.length) return parts.join(' ');
+    }
+    return '';
+  };
+
   /** A selector that will still find this element later. */
   const locatorFor = (el: HTMLElement, index: number): string => {
     if (el.id) return `#${CSS.escape(el.id)}`;
     const name = el.getAttribute('name');
     if (name && document.querySelectorAll(`[name="${CSS.escape(name)}"]`).length === 1) {
       return `[name="${CSS.escape(name)}"]`;
+    }
+    // Radios in a group share a name and are told apart by value, so the name alone can
+    // never address one of them.
+    const value = el.getAttribute('value');
+    if (name && value) {
+      const pair = `[name="${CSS.escape(name)}"][value="${CSS.escape(value)}"]`;
+      if (document.querySelectorAll(pair).length === 1) return pair;
     }
     // Fall back to position among all controls. Verified by label read-back at fill time,
     // so a shifted index is caught rather than silently filling the wrong box.
@@ -158,6 +211,9 @@ const SCAN = (): unknown => {
     return {
       locator: locatorFor(el, index),
       label,
+      optionLabel: control === 'radio' ? optionLabelFor(el) : undefined,
+      groupLabel: control === 'radio' ? groupLabelFor(el) : undefined,
+      optionValue: control === 'radio' ? (el.getAttribute('value') ?? '') : undefined,
       name: el.getAttribute('name') ?? undefined,
       id: el.id || undefined,
       autocomplete: el.getAttribute('autocomplete') ?? undefined,
@@ -205,14 +261,67 @@ async function scanFrame(frame: Frame): Promise<RawField[]> {
  * Invisible controls are dropped: forms routinely carry hidden inputs for CSRF tokens and
  * for the branches of a conditional the user has not reached, and neither is ours to fill.
  */
+/**
+ * Collapses each radio group into one field whose options are its buttons.
+ *
+ * A radio group is one question with several answers, but the scanner sees N independent
+ * inputs — and when the label resolver reaches the fieldset's legend, all N carry the
+ * same question as their label. That produced N fields with identical semantics, each
+ * ticked in turn, the last one silently unticking the rest, and read-backs recorded for
+ * choices that were no longer selected. Whether the tool had ticked "Yes" or "No" was
+ * decided by document order.
+ *
+ * Grouped, the question is the field and the buttons are its options, so choosing means
+ * matching the intended value against each button's own text.
+ */
+function groupRadios(raw: RawField[]): RawField[] {
+  const out: RawField[] = [];
+  const groups = new Map<string, number>();
+
+  for (const r of raw) {
+    if (r.control !== 'radio' || !r.name) {
+      out.push(r);
+      continue;
+    }
+
+    const resolved = r.label ?? '';
+    const option = {
+      value: r.optionValue || r.optionLabel || resolved,
+      label: r.optionLabel || r.optionValue || resolved,
+      locator: r.locator,
+    };
+
+    const at = groups.get(r.name);
+    if (at === undefined) {
+      groups.set(r.name, out.length);
+      out.push({
+        ...r,
+        // The group's question, when the page states one. Falling back to this radio's
+        // resolved label keeps the old behaviour for an ungrouped stray.
+        label: r.groupLabel || r.label,
+        options: [option],
+        // A group with no visible member is not fillable; visible if any member is.
+        visible: r.visible,
+      });
+    } else {
+      const existing = out[at]!;
+      existing.options = [...(existing.options ?? []), option];
+      existing.visible ||= r.visible;
+      existing.required ||= r.required;
+    }
+  }
+
+  return out;
+}
+
 export async function buildFormMap(page: Page): Promise<FormMap> {
   const fields: FormField[] = [];
 
   for (const frame of page.frames()) {
-    const raw = await scanFrame(frame);
+    const raw = groupRadios(await scanFrame(frame));
     const isMain = frame === page.mainFrame();
 
-    raw.forEach((r, i) => {
+    raw.forEach((r) => {
       if (!r.visible) return;
 
       const classification = classifyField(r);
@@ -220,8 +329,11 @@ export async function buildFormMap(page: Page): Promise<FormMap> {
 
       fields.push({
         id: ulid(),
-        // Index locators are resolved against this frame's own ordering.
-        locator: r.locator.startsWith('__index__') ? `${r.locator}:${String(i)}` : r.locator,
+        // The scanner's own position within this frame, carried through untouched. It
+        // used to be re-derived from this loop's index as well, which happened to agree
+        // — until grouping radios made the two disagree and every index locator after
+        // the first radio group pointed at the wrong element.
+        locator: r.locator,
         label: r.label || '(no label found)',
         control: r.control,
         required: r.required,

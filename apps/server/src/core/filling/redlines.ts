@@ -239,13 +239,20 @@ export function normalizeField(parts: {
   id?: string;
   autocomplete?: string;
 }): string {
-  return [parts.label, parts.name, parts.id, parts.autocomplete]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
-    .replace(/[_\-.]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    [parts.label, parts.name, parts.id, parts.autocomplete]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+      // Diacritics are folded away, because "é" is not a word character and every \b in
+      // every pattern here fails around it. A field labelled "Résumé" matched nothing at
+      // all and was handed back to the user to attach by hand.
+      .normalize('NFD')
+      .replace(/\p{M}+/gu, '')
+      .replace(/[_\-.]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 /**

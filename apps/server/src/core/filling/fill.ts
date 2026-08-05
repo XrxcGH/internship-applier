@@ -50,9 +50,9 @@ function frameFor(page: Page, field: FormField): Frame {
  * be stale. Resolving them here keeps that fragility in one place.
  */
 function locate(frame: Frame, field: FormField): Locator {
-  const m = /^__index__(\d+):(\d+)$/.exec(field.locator);
+  const m = /^__index__(\d+)(?::\d+)?$/.exec(field.locator);
   if (m) {
-    return frame.locator(FILLABLE_CONTROLS).nth(Number(m[2]));
+    return frame.locator(FILLABLE_CONTROLS).nth(Number(m[1]));
   }
   return frame.locator(field.locator);
 }
@@ -99,10 +99,26 @@ async function readValue(loc: Locator, field: FormField): Promise<string> {
   }
 }
 
+/** Turns a value into a literal for RegExp, so "C++" is a string and not a syntax error. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
   const { field, value } = action;
   const frame = frameFor(page, field);
   const loc = locate(frame, field);
+
+  /**
+   * What the read-back should say, which is not always what we set.
+   *
+   * A ticked checkbox reads back as "checked", never as "Yes"; a select reads back its
+   * option's VALUE attribute, which on most real ATS forms is a code rather than the
+   * prose we matched on. Comparing either against the plan's value reported a mismatch
+   * on every field the tool got right — and a verification step that cries wolf is how
+   * you teach someone to click past the one that matters.
+   */
+  let expected = value;
 
   try {
     await loc.waitFor({ state: 'visible', timeout: 5000 });
@@ -145,15 +161,48 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
           };
         }
         await loc.selectOption(wanted.value);
+        // Read-back is the option's value attribute, not the prose we matched on.
+        expected = wanted.value;
         break;
       }
 
-      case 'checkbox':
       case 'radio': {
+        // A grouped radio is a question with options, and the choice is made by matching
+        // the intended value against each button's OWN text — never by ticking whichever
+        // button happened to carry the group's question as its label.
+        const options = field.options ?? [];
+        if (options.length > 0) {
+          const chosen =
+            options.find((o) => comparable(o.label) === comparable(value)) ??
+            options.find((o) => comparable(o.value) === comparable(value)) ??
+            options.find((o) => comparable(o.label).startsWith(comparable(value)));
+          if (!chosen?.locator) {
+            return {
+              field,
+              status: 'skipped',
+              note: `No option matching "${value}". Choose it yourself.`,
+            };
+          }
+          const target = locate(frame, { ...field, locator: chosen.locator });
+          await target.check();
+          return (await target.isChecked())
+            ? { field, status: 'ok', readBack: chosen.label }
+            : { field, status: 'mismatch', note: 'The page did not keep this choice.' };
+        }
+
+        // An ungrouped stray: no options, so there is nothing to choose between.
+        if (/^(yes|true|on|checked)$/i.test(value)) await loc.check();
+        else return { field, status: 'skipped', note: 'Left for you to decide.' };
+        expected = 'checked';
+        break;
+      }
+
+      case 'checkbox': {
         // Only ever ticks, never unticks, and only for an affirmative value. A checkbox
         // this tool does not understand is left exactly as the page had it.
         if (/^(yes|true|on|checked)$/i.test(value)) await loc.check();
         else return { field, status: 'skipped', note: 'Left for you to decide.' };
+        expected = 'checked';
         break;
       }
 
@@ -161,9 +210,11 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
         // A div-based combobox has no value to set: it has to be opened and an option
         // clicked, the same way a person would.
         await loc.click();
+        // The value is a person's data, not a pattern. Unescaped, "C++" threw
+        // "Nothing to repeat" and "Washington (State)" quietly matched nothing.
         const option = frame
           .locator('[role=option]')
-          .filter({ hasText: new RegExp(value.slice(0, 24), 'i') })
+          .filter({ hasText: new RegExp(escapeRegExp(value.slice(0, 24)), 'i') })
           .first();
         if ((await option.count()) === 0) {
           return { field, status: 'skipped', note: `No option matching "${value}".` };
@@ -202,7 +253,11 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
     }
 
     const readBack = await readValue(loc, field);
-    if (accepted(value, readBack)) return { field, status: 'ok', readBack };
+    if (accepted(expected, readBack)) {
+      // The report shows what a person would see on the page, not the option code we
+      // compared against.
+      return { field, status: 'ok', readBack: expected === value ? readBack : value };
+    }
 
     return {
       field,

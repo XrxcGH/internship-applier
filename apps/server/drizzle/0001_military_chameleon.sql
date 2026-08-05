@@ -1,0 +1,1 @@
+ALTER TABLE `job_posting` ADD `requirements_extracted_at` text;
