@@ -62,8 +62,10 @@ export async function openSession(opts: SessionOptions = {}): Promise<BrowserSes
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: opts.headless ?? false,
     viewport: { width: 1280, height: 900 },
-    // A visible window the user can take over at any moment.
-    args: ['--disable-blink-features=AutomationControlled'],
+    // No `--disable-blink-features=AutomationControlled`. That flag's only purpose is to
+    // hide `navigator.webdriver` from bot detection, which is exactly the evasion this
+    // file's header and docs/07 promise not to do. It was here, and it made those
+    // promises false. The browser identifies as automated because it is.
   });
 
   const page = context.pages()[0] ?? (await context.newPage());

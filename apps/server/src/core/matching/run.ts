@@ -24,6 +24,8 @@ export interface MatchRunSummary {
   ineligible: number;
   requirementsExtracted: number;
   requirementsDropped: number;
+  /** Postings that exist but were not matched this run, because a limit was set. */
+  postingsSkipped: number;
   usedModel: boolean;
   errors: string[];
 }
@@ -92,15 +94,24 @@ export async function runMatching(
   const confirmed = profile as ConfirmedProfile;
   const now = opts.now ?? new Date();
 
-  const postings = db
-    .select()
-    .from(schema.jobPosting)
-    .limit(opts.limit ?? 500)
-    .all();
+  /**
+   * Every posting, unless a caller explicitly asks for fewer.
+   *
+   * This used to cap at 500 with no way to raise it from the UI, which meant that with
+   * more postings than the cap the surplus got no `match` row at all — invisible in the
+   * queue AND in the filtered drawer, with nothing in the summary to say so. A silent
+   * drop is precisely what the tri-state eligible/unknown/ineligible model exists to
+   * prevent, so the default is now "all of them" and any shortfall is reported.
+   */
+  const total = db.select({ id: schema.jobPosting.id }).from(schema.jobPosting).all().length;
+  const postings = opts.limit
+    ? db.select().from(schema.jobPosting).limit(opts.limit).all()
+    : db.select().from(schema.jobPosting).all();
 
   const summary: MatchRunSummary = {
     runId: ulid(),
     postingsConsidered: postings.length,
+    postingsSkipped: Math.max(0, total - postings.length),
     matched: 0,
     eligible: 0,
     unknown: 0,

@@ -129,9 +129,14 @@ const SCAN = (): unknown => {
     return 'text';
   };
 
+  // Must stay identical to FILLABLE_CONTROLS in ./selectors.ts. It cannot import it:
+  // this function is serialized into the page and closes over nothing. A test asserts
+  // the two match, because a drift here makes an index locator resolve to the wrong
+  // element, and dropping the image/reset exclusions would let a click submit the form.
   const SELECTOR =
-    'input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select, ' +
-    '[role=combobox], [contenteditable=true]';
+    'input:not([type=hidden]):not([type=submit]):not([type=button])' +
+    ':not([type=image]):not([type=reset]), ' +
+    'textarea, select, [role=combobox], [contenteditable=true]';
 
   // Includes shadow roots, which Playwright can reach but querySelectorAll cannot.
   const collect = (root: Document | ShadowRoot, out: HTMLElement[]): void => {

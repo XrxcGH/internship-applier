@@ -25,6 +25,7 @@ let cached: Buffer | null = null;
 interface Entry {
   getPassword(): string | null;
   setPassword(v: string): void;
+  deletePassword?(): boolean;
 }
 
 function openEntry(): Entry | null {
@@ -99,4 +100,39 @@ export function getMasterKey(): Buffer {
 /** Test-only: drop the cached key so a fresh one is read. */
 export function resetMasterKeyCache(): void {
   cached = null;
+}
+
+/**
+ * Destroys the master key everywhere it lives.
+ *
+ * "Delete everything" removed the keyfile but left the OS credential store untouched, so
+ * on a machine where the keychain was available — the normal case — the key survived a
+ * wipe that promised to take it. Everything encrypted with it stayed decryptable by the
+ * next install.
+ *
+ * Best effort by design: a keychain that refuses is reported, not thrown, because the rest
+ * of the deletion still needs to finish.
+ */
+export function deleteMasterKey(): { keychain: boolean; keyfile: boolean } {
+  let keychain = false;
+  try {
+    const entry = openEntry();
+    if (entry?.deletePassword) keychain = entry.deletePassword();
+  } catch {
+    keychain = false;
+  }
+
+  let keyfile = false;
+  try {
+    const file = keyfilePath();
+    if (fs.existsSync(file)) {
+      fs.rmSync(file, { force: true });
+      keyfile = true;
+    }
+  } catch {
+    keyfile = false;
+  }
+
+  cached = null;
+  return { keychain, keyfile };
 }

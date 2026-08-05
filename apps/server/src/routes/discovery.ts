@@ -162,7 +162,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     if (!row) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such posting.' } });
     }
-    const summary = await refreshPostings({ checkUrls: true, limit: 1 });
+    const summary = await refreshPostings({ checkUrls: true, postingId: req.params.id });
     const after = db
       .select({ isOpen: schema.jobPosting.isOpen })
       .from(schema.jobPosting)

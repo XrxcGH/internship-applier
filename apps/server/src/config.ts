@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { z } from 'zod';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,27 @@ const Env = z.object({
   /** Per-call ceiling. A hung CLI must not wedge a request forever. */
   CLAUDE_CLI_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
 });
+
+/**
+ * Load .env before reading the environment.
+ *
+ * Without this, every variable documented in .env.example was silently ignored: the file
+ * existed, the docs described it, and nothing read it. A setting that appears to work and
+ * does not is worse than one that is missing.
+ *
+ * Real environment variables still win, which is what makes CI and one-off overrides work.
+ */
+const ENV_FILE = path.join(REPO_ROOT, '.env');
+// Never in tests. `loadEnvFile` does not override variables already set, so the suite's
+// isolation would survive anyway, but a hermetic run should not depend on that or on
+// what a particular developer happens to keep in their .env.
+if (process.env['NODE_ENV'] !== 'test' && existsSync(ENV_FILE)) {
+  try {
+    process.loadEnvFile(ENV_FILE);
+  } catch {
+    console.warn('Found a .env file but could not read it; using the environment as-is.');
+  }
+}
 
 const parsed = Env.safeParse(process.env);
 if (!parsed.success) {

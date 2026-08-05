@@ -129,10 +129,22 @@ export function deterministicRequirements(description: string): Candidate[] {
     );
   }
 
-  // US citizenship
+  // US citizenship.
+  //
+  // The negation check is the whole point. "U.S. citizenship is not required" contains
+  // the phrase, and without this it produced a REQUIRED citizenship requirement, which
+  // hard-fails every applicant who is not a US citizen. docs/11 calls a false
+  // `ineligible` the worst bug this app can have, and this was one, triggered by a
+  // sentence the employer wrote to be welcoming.
   for (const m of description.matchAll(
     /\b(?:must be a |requires? )?(?:U\.?S\.?|United States) citizen(?:ship)?\b(?:\s+is\s+required)?/gi,
   )) {
+    const sentence = sentenceAround(description, m.index ?? 0, m[0].length);
+    if (
+      /\b(not|no|without|need not|regardless|any nationality|all nationalities)\b/i.test(sentence)
+    ) {
+      continue;
+    }
     push(
       {
         kind: 'citizenship',

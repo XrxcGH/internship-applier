@@ -21,6 +21,7 @@ import type { Frame, Locator, Page } from 'playwright';
 import type { FormField } from '@ia/shared';
 import { logger } from '../../infra/logger';
 import { keyDelay } from './browser';
+import { FILLABLE_CONTROLS } from './selectors';
 import type { FillAction, FillPlan } from './plan';
 
 export interface FieldResult {
@@ -51,10 +52,7 @@ function frameFor(page: Page, field: FormField): Frame {
 function locate(frame: Frame, field: FormField): Locator {
   const m = /^__index__(\d+):(\d+)$/.exec(field.locator);
   if (m) {
-    const selector =
-      'input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select, ' +
-      '[role=combobox], [contenteditable=true]';
-    return frame.locator(selector).nth(Number(m[2]));
+    return frame.locator(FILLABLE_CONTROLS).nth(Number(m[2]));
   }
   return frame.locator(field.locator);
 }

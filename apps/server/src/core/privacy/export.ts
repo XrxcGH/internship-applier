@@ -17,6 +17,7 @@
 import { rm } from 'node:fs/promises';
 import { db, schema } from '../../infra/db/client';
 import { decryptField, isEncrypted } from '../../infra/crypto/fieldCrypto';
+import { deleteMasterKey } from '../../infra/crypto/keychain';
 import { logger } from '../../infra/logger';
 import { config } from '../../config';
 
@@ -142,13 +143,7 @@ export async function deleteEverything(): Promise<DeleteResult> {
   const deletedPaths: string[] = [];
   const failed: Array<{ path: string; reason: string }> = [];
 
-  const targets = [
-    config.paths.resumes,
-    config.paths.artifacts,
-    config.paths.browserProfile,
-    // The master key goes last. Without it nothing that survived is readable.
-    config.paths.masterKey,
-  ];
+  const targets = [config.paths.resumes, config.paths.artifacts, config.paths.browserProfile];
 
   for (const target of targets) {
     try {
@@ -157,6 +152,18 @@ export async function deleteEverything(): Promise<DeleteResult> {
     } catch (err) {
       failed.push({ path: target, reason: err instanceof Error ? err.message : String(err) });
     }
+  }
+
+  // The key goes last, and it goes from the OS credential store as well as from disk.
+  // Removing only the keyfile left the key intact in the keychain on every machine where
+  // one is available, which is most of them.
+  const key = deleteMasterKey();
+  if (key.keyfile) deletedPaths.push(config.paths.masterKey);
+  if (!key.keychain) {
+    failed.push({
+      path: 'OS credential store',
+      reason: 'The keychain entry could not be removed. Delete it by hand if it matters to you.',
+    });
   }
 
   logger.warn(
