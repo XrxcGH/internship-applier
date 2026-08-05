@@ -12,7 +12,7 @@
 | M5 Writing engine | **done** | Bounded evidence retrieval, drafting with the measured voice, two-layer FactGuard, StyleCritic, answer library, G3 workspace. The adversarial suite passes: every planted fabrication caught, and the false-positive half passes too. G3 enforced server-side with no override. |
 | M6 Form automation | **done** | Playwright with a persistent context, FormMap over six label-resolution strategies, redline enforcement, fill with read-back verification, pause/resume for login walls, pre-submit review, G4. The fixture counts POSTs, so "nothing was submitted" is asserted as an outcome rather than inferred from the source. |
 | M7 Tracker | **done** | Status model where the tool cannot claim a submission, ghosting derived from silence rather than asked for, reminders as drafts, CSV export that cannot become a spreadsheet formula, and outcome rates that refuse to appear below ten observations. |
-| M8 Hardening and packaging | next | Privacy export and delete, cost panel, error taxonomy, single-command packaging. |
+| M8 Hardening and packaging | **done** | Export everything decrypted, delete everything for real behind a typed phrase, a cost panel that reads the ledger, and the built interface served from Fastify so the whole app is one command. Guardian mode remains deferred by the locked decision in docs/10. |
 
 All M1 and M2 deferrals are now complete: query planner, Adzuna/USAJOBS adapters, the SimplifyJobs community list, manual paste-a-URL, freshness/refresh, SSE progress, source management, writing-sample capture with StyleProfile, and resume set-primary/delete.
 

@@ -13,10 +13,14 @@ import { writingRoutes } from './routes/writing';
 import { answerRoutes } from './routes/answers';
 import { fillingRoutes } from './routes/filling';
 import { trackerRoutes } from './routes/tracker';
+import { privacyRoutes } from './routes/privacy';
+import { registerUiStatic } from './ui';
 
 export interface BuildOptions {
   /** Disable the X-App-Token check. Test-only. */
   skipAuth?: boolean;
+  /** Do not serve the built interface, even if one exists. */
+  skipUi?: boolean;
 }
 
 export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance> {
@@ -29,7 +33,10 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   });
 
   await app.register(cors, {
-    origin: [config.web.origin],
+    // The Vite dev server, plus this server's own address for when it serves the built
+    // interface itself. Same-origin requests skip CORS entirely, but naming it keeps the
+    // two modes from behaving differently for no visible reason.
+    origin: [config.web.origin, `http://${config.server.host}:${String(config.server.port)}`],
     credentials: true,
   });
 
@@ -44,6 +51,13 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
       });
     }
     if (opts.skipAuth || config.isTest) return;
+
+    // The token guards the API, not the interface. When this server also serves the built
+    // UI, requiring a token for `/index.html` would mean the browser could never load the
+    // page that fetches the token. The bundle carries no user data; everything that does
+    // goes through /api, which stays protected.
+    if (!req.url.startsWith('/api/')) return;
+
     // Exempt: the liveness probe and the bootstrap that hands the UI its token.
     // Both are still loopback-only and CORS-locked to the app's own origin, so a stray
     // page in another tab cannot read either response.
@@ -62,10 +76,6 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     });
   });
 
-  app.setNotFoundHandler((_req, reply) => {
-    void reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such route.' } });
-  });
-
   await app.register(healthRoutes);
   await app.register(profileRoutes);
   await app.register(resumeRoutes);
@@ -76,6 +86,24 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(answerRoutes);
   await app.register(fillingRoutes);
   await app.register(trackerRoutes);
+  await app.register(privacyRoutes);
+
+  // After the routes, so the static plugin cannot shadow one. Skipped in tests: they
+  // assert the JSON 404, and a built UI sitting on disk would change it.
+  const servingUi = !opts.skipUi && !config.isTest && (await registerUiStatic(app));
+
+  /**
+   * Exactly one not-found handler, because Fastify permits exactly one and throws at boot
+   * on a second. An unknown UI path gets the app shell so the single-page router can
+   * handle it; `/api/*` always keeps its JSON 404, or a mistyped endpoint would return
+   * HTML and the client's `res.json()` would throw something incomprehensible.
+   */
+  app.setNotFoundHandler((req, reply) => {
+    if (servingUi && !req.url.startsWith('/api/')) {
+      return reply.sendFile('index.html');
+    }
+    return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No such route.' } });
+  });
 
   return app;
 }

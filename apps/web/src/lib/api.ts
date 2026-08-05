@@ -376,3 +376,67 @@ export const getDraftMessage = (id: string, kind: 'follow_up' | 'withdrawal' = '
   request<{ kind: string; text: string; note: string }>(
     `/api/applications/${id}/draft-message?kind=${kind}`,
   );
+
+// ───────────────────────────────────────────────────────── privacy and costs
+
+export interface CostSummary {
+  totalUsd: number;
+  totalCalls: number;
+  byPurpose: Array<{
+    purpose: string;
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    usd: number;
+  }>;
+  byModel: Array<{ model: string; calls: number; usd: number }>;
+  recent: Array<{ purpose: string; model: string; usd: number; latencyMs: number; at: string }>;
+  note: string;
+}
+
+export const getCosts = () => request<CostSummary>('/api/costs');
+
+export interface DeletePreview {
+  items: Array<{ label: string; count: number }>;
+  confirmationPhrase: string;
+  warning: string;
+}
+
+export const getDeletePreview = () => request<DeletePreview>('/api/privacy/delete-preview');
+
+export const deleteEverything = (confirm: string) =>
+  request<{ message: string; deletedPaths: string[] }>('/api/privacy/delete-all', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ confirm }),
+  });
+
+/**
+ * Downloads a protected endpoint as a file.
+ *
+ * A plain `<a href="/api/...">` cannot carry the X-App-Token header, so it would come
+ * back 401 and the browser would save the error body as the file. Fetching it here,
+ * with the header, and handing the browser a blob is the only way a download works
+ * against an authenticated route.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(path, { headers: { 'x-app-token': await appToken() } });
+  if (!res.ok) {
+    const body: unknown = await res.json().catch(() => null);
+    const e = body as { error?: { message?: string } } | null;
+    throw new ApiError(e?.error?.message ?? `Download failed (${res.status})`, res.status);
+  }
+
+  // The server names the file; fall back if the header is missing or unparseable.
+  const disposition = res.headers.get('content-disposition') ?? '';
+  const named = /filename="([^"]+)"/.exec(disposition)?.[1];
+
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = named ?? fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
