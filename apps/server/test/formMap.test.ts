@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startFixtureServer, submissions, type FixtureServer } from '@ia/fixtures';
 import { openSession, type BrowserSession } from '../src/core/filling/browser';
 import { buildFormMap, summarizeMap, type FormMap } from '../src/core/filling/formMap';
+import { FILLABLE_CONTROLS } from '../src/core/filling/selectors';
 
 let fixture: FixtureServer;
 let session: BrowserSession;
@@ -159,6 +160,92 @@ describe('redlines are caught while reading, before anything is typed', () => {
     expect(tax?.semantic).toBe('REDLINE');
     expect(tax?.redlineCategory).toBe('government_id');
   }, 60_000);
+});
+
+describe('radio groups', () => {
+  /**
+   * The fixture's radios are labelled by the legend, which is what real ATS forms do and
+   * what the highest-priority label strategy finds first. Ungrouped, that gave two fields
+   * with the same question, the same semantic, and no idea which was Yes and which was No.
+   */
+  it('collapses a group into one question with its buttons as options', async () => {
+    const m = await mapOf('/nasty');
+    const group = m.fields.filter((f) => f.control === 'radio');
+    expect(group).toHaveLength(1);
+    expect(group[0]!.label).toMatch(/legally authorized to work/i);
+    expect(group[0]!.options?.map((o) => o.label)).toEqual(['Yes', 'No']);
+  }, 60_000);
+
+  it('gives each option its own locator, since the group selector matches them all', async () => {
+    const m = await mapOf('/nasty');
+    const group = m.fields.find((f) => f.control === 'radio')!;
+    const locators = group.options?.map((o) => o.locator) ?? [];
+    expect(new Set(locators).size).toBe(2);
+    for (const l of locators) expect(l).toBeTruthy();
+  }, 60_000);
+
+  it('classifies the group by its question', async () => {
+    const m = await mapOf('/nasty');
+    expect(m.fields.find((f) => f.control === 'radio')?.semantic).toBe('work_auth');
+  }, 60_000);
+});
+
+describe('long-form fields the scanner has to recognize by shape', () => {
+  /**
+   * A contenteditable box has no `type` attribute, so shape detection could not see it
+   * and every rich-text essay landed as `unknown` — the fill engine's richtext branch was
+   * unreachable for the one thing it was written for.
+   */
+  it('recognizes a contenteditable essay with a short question', async () => {
+    const m = await mapOf('/nasty');
+    const why = byLabel(m, /why do you want this internship/i);
+    expect(why?.control).toBe('richtext');
+    expect(why?.semantic).toBe('essay');
+  }, 60_000);
+});
+
+describe('what is really on the page', () => {
+  /**
+   * A honeypot is an off-screen field with an attractive name, put there so that anything
+   * filling it identifies itself as a bot. It has a perfectly good bounding box, and
+   * Playwright considers it visible, so a rect-only check let the tool type into it.
+   */
+  it('does not offer a honeypot field to fill', async () => {
+    const m = await mapOf('/nasty');
+    expect(m.fields.find((f) => f.locator === '#f-website')).toBeUndefined();
+  });
+
+  /**
+   * The other direction costs less but corrodes the report: visibility:hidden and
+   * opacity:0 fields also keep a rect, so each one was attempted and spent the full
+   * five-second timeout before landing as "failed" — noise in a report whose whole value
+   * is that its warnings mean something.
+   */
+  it('drops fields that are hidden by computed style rather than by size', async () => {
+    const m = await mapOf('/nasty');
+    expect(m.fields.find((f) => f.locator === '#f-hidden')).toBeUndefined();
+    expect(m.fields.find((f) => f.locator === '#f-clear')).toBeUndefined();
+  });
+
+  /**
+   * The scanner collected light-DOM matches before descending into shadow roots, while
+   * Playwright's selector engine pierces them in tree order — so on any frame with a
+   * shadow-DOM control, every index locator was off by one or more. There is no label
+   * read-back at fill time to catch that, so a wrong element that accepted the value was
+   * reported "ok".
+   */
+  it('numbers index locators in the order Playwright resolves them', async () => {
+    const m = await mapOf('/nasty');
+    const indexed = m.fields.filter((f) => f.locator.startsWith('__index__'));
+    for (const f of indexed) {
+      const n = Number(/^__index__(\d+)/.exec(f.locator)![1]);
+      const resolved = session.page.locator(FILLABLE_CONTROLS).nth(n);
+      expect(await resolved.count(), f.label).toBe(1);
+      // The element Playwright lands on must be the one the scanner described.
+      const name = await resolved.getAttribute('name');
+      expect(name ?? '', f.label).not.toBe('');
+    }
+  });
 });
 
 describe('summary', () => {

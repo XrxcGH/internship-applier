@@ -47,13 +47,13 @@ Playwright-controlled browser window. Nothing is hosted; there is no multi-tenan
 | DB | SQLite via `better-sqlite3` + Drizzle ORM | Single file, zero-ops, synchronous, good enough for one user. Drizzle gives typed queries + migrations without a heavy runtime. |
 | Browser | Playwright (`playwright` npm) | Best-in-class selector engine, `getByLabel`/`getByRole` map directly onto form-field semantics, persistent contexts, tracing for debugging. |
 | Frontend | React 19 + Vite + TypeScript | Fast dev loop; the UI is form- and list-heavy, which React handles well. |
-| Styling | Tailwind + shadcn/ui (Radix) | Accessible primitives (dialog, combobox, toast) matter for a keyboard-driven review queue. |
-| Data fetching | TanStack Query | Cache/invalidate around a local API; handles the polling and SSE-invalidations cleanly. |
-| Client state | Zustand | Small amount of genuinely global state (active review item, keyboard mode). |
+| Styling | Tailwind 4, no component library | shadcn/ui and Radix were planned and not adopted: the interface turned out to need five components, all of them plain HTML controls, and a dependency that exists to supply a dialog and a combobox we never built is a dependency that only carries risk. |
+| Data fetching | `fetch` in `lib/api.ts` | TanStack Query was planned and not adopted. The screens are few and each one owns a single `refresh()`; a cache layer would be more machinery than the thing it caches. |
+| Client state | React `useState` in `App.tsx` | Zustand was planned and not adopted. The only genuinely global state is which view is open, which is one `useState`. |
 | LLM | Anthropic TS SDK, `claude-opus-5` | Structured extraction, drafting, field classification. `claude-haiku-4-5` for high-volume cheap classification. |
 | Validation | Zod | One schema per boundary: API bodies, LLM structured outputs, config. |
 | Testing | Vitest + Playwright test | Unit/integration in Vitest; form-filling tested against a local fixture site. |
-| Logging | Pino | Structured JSON logs to `logs/app.jsonl`, pretty in dev. |
+| Logging | Pino | Structured JSON to **stdout**, pretty in dev, with PII redaction applied at the logger. There is no file destination and no rotation — see docs/10 § Logging. |
 
 ### ADR-001 — TypeScript over Python
 
@@ -139,47 +139,62 @@ internship-applier/
 ├─ apps/
 │  ├─ server/
 │  │  └─ src/
-│  │     ├─ index.ts                 # Fastify bootstrap, route registration
+│  │     ├─ index.ts                 # Fastify bootstrap, loopback listener
+│  │     ├─ app.ts                   # route registration, loopback + token guard
 │  │     ├─ routes/                  # thin HTTP layer, Zod-validated → calls core/
-│  │     │  ├─ profile.ts  discovery.ts  matches.ts
-│  │     │  ├─ applications.ts  answers.ts  fill.ts  events.ts
+│  │     │  ├─ health.ts  profile.ts  resumes.ts  discovery.ts  matches.ts
+│  │     │  ├─ writing.ts  answers.ts  filling.ts  tracker.ts  privacy.ts
+│  │     │  └─ events.ts             # SSE
 │  │     ├─ core/
 │  │     │  ├─ ingestion/            # resume → CandidateProfile
 │  │     │  │  ├─ extractText.ts     # DOCX/TXT/MD; PDF passes through as bytes
 │  │     │  │  ├─ extractProfile.ts  # Claude structured output
+│  │     │  │  ├─ toProfile.ts       # extraction → draft profile + needsReview
 │  │     │  │  └─ deriveFields.ts    # age, academic level, YOE, seniority band
+│  │     │  ├─ profile/repository.ts # field-encrypted persistence, gate G1
 │  │     │  ├─ discovery/
-│  │     │  │  ├─ sources/           # one adapter per source (see doc 04)
-│  │     │  │  ├─ queryPlanner.ts    # profile → search queries
+│  │     │  │  ├─ sources/           # ats.ts, aggregators.ts, types.ts (doc 04)
+│  │     │  │  ├─ queryPlanner.ts    # profile → search targets
+│  │     │  │  ├─ resolveCompany.ts  # company name → board slug, by probing
+│  │     │  │  ├─ manualPosting.ts   # the paste-a-URL path
 │  │     │  │  ├─ normalize.ts       # source payload → JobPosting
-│  │     │  │  ├─ dedupe.ts          # URL → fuzzy key → embedding near-dup
-│  │     │  │  └─ refresh.ts         # re-check open/closed, deadlines
+│  │     │  │  ├─ dedupe.ts          # URL → fingerprint → title-token match
+│  │     │  │  ├─ refresh.ts         # re-check open/closed, deadlines
+│  │     │  │  └─ run.ts             # orchestration + per-source reporting
 │  │     │  ├─ matching/
-│  │     │  │  ├─ requirements.ts    # JD text → structured requirements (LLM)
+│  │     │  │  ├─ extractRequirements.ts  # JD text → structured requirements
+│  │     │  │  ├─ quoteGuard.ts      # every requirement must quote the JD
+│  │     │  │  ├─ requirementValues.ts    # per-kind value validation
 │  │     │  │  ├─ eligibility.ts     # hard rules — pure, deterministic, tested
 │  │     │  │  ├─ score.ts           # soft fit scoring + breakdown
-│  │     │  │  └─ rationale.ts       # short natural-language explanation
+│  │     │  │  ├─ rationale.ts       # short natural-language explanation
+│  │     │  │  └─ run.ts             # per-posting evaluation, cached extraction
 │  │     │  ├─ writing/
 │  │     │  │  ├─ styleProfile.ts    # writing samples → measured StyleProfile
 │  │     │  │  ├─ answerLibrary.ts   # reusable canonical answers
+│  │     │  │  ├─ retrieve.ts        # profile → the evidence set for a question
 │  │     │  │  ├─ draft.ts           # generate answer from question + profile
 │  │     │  │  ├─ factGuard.ts       # claim → profile evidence, or flag
+│  │     │  │  ├─ tellScrub.ts       # machine-sounding phrasing
 │  │     │  │  └─ styleCritic.ts     # measure draft vs StyleProfile, revise
 │  │     │  ├─ filling/
 │  │     │  │  ├─ browser.ts         # Playwright lifecycle, persistent context
 │  │     │  │  ├─ formMap.ts         # DOM → FormField[] semantic map
+│  │     │  │  ├─ selectors.ts       # the one fillable-control selector
 │  │     │  │  ├─ classify.ts        # deterministic matcher → LLM fallback
-│  │     │  │  ├─ fill.ts            # typing, selects, uploads, multi-step
+│  │     │  │  ├─ plan.ts            # FormMap + profile + answers → FillPlan
+│  │     │  │  ├─ fill.ts            # typing, selects, uploads, read-back
 │  │     │  │  ├─ redlines.ts        # fields that must never be auto-filled
-│  │     │  │  └─ adapters/          # greenhouse, lever, ashby, workday, generic
-│  │     │  └─ tracking/             # status transitions, reminders, stats
+│  │     │  │  └─ run.ts             # one fill run, up to gate G4
+│  │     │  ├─ tracking/             # status transitions, reminders, stats, CSV
+│  │     │  └─ privacy/              # export everything, delete everything, costs
 │  │     ├─ infra/
 │  │     │  ├─ db/                   # drizzle schema, migrations, client
-│  │     │  ├─ llm/                  # Anthropic client, retry, cost accounting
+│  │     │  ├─ llm/                  # provider seam: claude_cli | api | none
 │  │     │  ├─ http/                 # fetch wrapper: rate limit, cache, backoff
-│  │     │  ├─ queue/                # tasks table + worker pool
 │  │     │  ├─ crypto/               # AES-GCM field encryption, keychain
-│  │     │  └─ events.ts             # in-proc event bus → SSE
+│  │     │  ├─ events.ts             # in-proc event bus → SSE
+│  │     │  └─ logger.ts             # pino + PII redaction
 │  │     └─ config.ts                # env + settings, Zod-validated
 │  └─ web/
 │     └─ src/                        # see doc 08
@@ -211,14 +226,19 @@ internship-applier/
    evidence, and any unsupported-claim flags. User edits and approves each one.
 8. **Fill.** The visible browser fills the form field by field. Redlined fields
    (SSN/ID/attestations/EEO/consent) are skipped and listed for the user.
-9. **G4 · Submit.** Full-page screenshot + diff review, then the user clicks Submit in the
-   browser. The tool records the submission and archives the final answers.
+9. **G4 · Submit.** The pre-submit review lists every field the tool filled, every field it
+   refused, and every read-back that did not match, and then the user clicks Submit in the
+   browser themselves. The tool records the submission afterwards, when the user says so.
+   (No screenshot is captured; `application.screenshot_path` exists in the schema and is
+   never written. See docs/07 § G4.)
 10. **Track.** Application moves through the tracker; optional read-only email ingestion
     updates status; deadline and follow-up reminders surface as drafts only.
 
 ## Concurrency and rate limiting
 
-- Task worker: bounded pool, default 6 concurrent tasks, configurable.
+- Discovery runs a bounded worker pool, default 4 concurrent targets (`runDiscovery`).
+  There is no general task queue: `infra/queue/` was planned and never built, and the
+  `task` table is used to persist run summaries rather than to schedule work.
 - Per-domain token bucket in `infra/http` — default 1 request/sec/domain, honors
   `Retry-After`, exponential backoff with jitter on 429/5xx.
 - Response cache keyed by URL + ETag, 6h default TTL, so re-running discovery is cheap.
@@ -236,6 +256,6 @@ internship-applier/
 | Source API down | That source is marked degraded for the run; others continue; UI shows which sources ran. |
 | Resume extraction low-confidence | Profile fields marked `needs_review`; G1 cannot be completed until they're touched. |
 | Requirement text unparseable | Posting surfaces with `eligibility: unknown` and the raw text quoted — never silently filtered out. |
-| Form field unclassifiable | Left blank, listed in the "needs your input" panel with a screenshot crop. |
+| Form field unclassifiable | Left blank and listed in the pre-submit review, with its label and why it was skipped. (No screenshot crop — see § G4 above.) |
 | Login wall hit | Browser pauses, UI says "log in in the open window, then Continue." Tool never types credentials. |
 | LLM refusal / error | Surfaced verbatim to the user for that step; no silent retry loop, no fabricated fallback. |

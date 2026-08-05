@@ -17,11 +17,33 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     [profile],
   );
 
+  /** Reads a dotted path out of the profile, so `clears` can check its own field. */
+  function at(obj: unknown, path: string): unknown {
+    return path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], obj);
+  }
+
   const patch = useCallback((fn: (p: CandidateProfile) => CandidateProfile, clears?: string) => {
     setProfile((prev) => {
       if (!prev) return prev;
       const next = fn(prev);
-      return clears ? { ...next, needsReview: next.needsReview.filter((f) => f !== clears) } : next;
+      if (!clears) return next;
+
+      /**
+       * A flag clears only when the field now holds an answer.
+       *
+       * Any onChange used to clear it, including a change BACK to the unanswered value.
+       * The work-authorization select exposes its "Select…" placeholder as a real option,
+       * and home city and state accept an empty string, so a user could satisfy three of
+       * the six facts G1 exists to collect by touching a control and undoing it — and
+       * confirm a profile whose location and work authorization are still blank. G1 only
+       * means something if it checks the value rather than the interaction.
+       */
+      const value = at(next, clears);
+      const answered =
+        typeof value === 'string' ? value.trim() !== '' && value !== 'unknown' : true;
+      return answered
+        ? { ...next, needsReview: next.needsReview.filter((f) => f !== clears) }
+        : { ...next, needsReview: [...new Set([...next.needsReview, clears])] };
     });
   }, []);
 
@@ -349,7 +371,7 @@ function UploadStep({
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,.docx,.doc,.txt,.md"
+        accept=".pdf,.docx,.txt,.md"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];

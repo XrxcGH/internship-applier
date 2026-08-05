@@ -4,7 +4,7 @@
  * Nothing is ever hard-deleted. A closed posting stays in the database so the tracker,
  * the application history, and the stats all remain intact; it is only marked closed.
  */
-import { eq, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '../../infra/db/client';
 import { HttpError, politeFetch } from '../../infra/http/fetcher';
 import { logger } from '../../infra/logger';
@@ -73,6 +73,10 @@ export async function refreshPostings(
         ? eq(schema.jobPosting.id, opts.postingId)
         : eq(schema.jobPosting.isOpen, true),
     )
+    // Oldest first. Unordered, which rows got checked was down to whatever SQLite
+    // returned, so with more postings than the limit the same arbitrary subset could be
+    // rechecked run after run while others were never looked at again.
+    .orderBy(asc(schema.jobPosting.lastSeenAt))
     .limit(opts.postingId ? 1 : (opts.limit ?? 50))
     .all();
 

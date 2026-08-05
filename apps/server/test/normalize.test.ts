@@ -12,6 +12,7 @@ import {
   parseWorkArrangement,
   parseYear,
 } from '../src/core/discovery/normalize';
+import { decodeEntities, stripHtml } from '../src/core/discovery/sources/types';
 
 const NOW = new Date('2026-08-03T00:00:00Z');
 
@@ -148,5 +149,36 @@ describe('identity normalisation', () => {
   it('collapses company suffixes', () => {
     expect(normalizeCompany('Acme, Inc.')).toBe('acme');
     expect(normalizeCompany('ACME LLC')).toBe('acme');
+  });
+});
+
+describe('reading HTML out of a feed', () => {
+  /**
+   * Greenhouse returns its job content ESCAPED. Stripping tags first finds none to strip,
+   * and stripHtml's own decode step then puts the markup back as literal text — so every
+   * requirement parser and the model read "<p>" and "<li>" as part of the job
+   * description, and the UI rendered them on screen.
+   */
+  it('decodes an escaped document before the tags are stripped', () => {
+    const escaped =
+      '&lt;p&gt;About the role&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;/ul&gt;';
+    const text = stripHtml(decodeEntities(escaped));
+    expect(text).not.toMatch(/<[a-z]/i);
+    expect(text).toMatch(/About the role/);
+    expect(text).toMatch(/Python/);
+  });
+
+  it('leaves an already-plain document alone', () => {
+    expect(stripHtml(decodeEntities('<p>About the role</p>'))).toBe('About the role');
+  });
+
+  it('decodes the ampersand last, so an escaped entity does not become a tag', () => {
+    expect(decodeEntities('&amp;lt;script&amp;gt;')).toBe('&lt;script&gt;');
+  });
+
+  it('handles the quotes and apostrophes a job description is full of', () => {
+    expect(decodeEntities('We&#39;re hiring &quot;interns&quot; &amp; grads')).toBe(
+      'We\'re hiring "interns" & grads',
+    );
   });
 });

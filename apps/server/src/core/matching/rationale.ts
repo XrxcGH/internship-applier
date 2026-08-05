@@ -43,12 +43,31 @@ const DIMENSION_WEAK: Record<keyof ScoreBreakdown, string> = {
   applyEffort: 'the application is long',
 };
 
-function strongest(b: ScoreBreakdown): keyof ScoreBreakdown {
-  return (Object.keys(b) as Array<keyof ScoreBreakdown>).reduce((a, k) => (b[k] > b[a] ? k : a));
+/**
+ * Only dimensions with something behind them can be a reason.
+ *
+ * A dimension scored neutrally for lack of data is not evidence of anything, and saying
+ * so out loud produced "Worth a look because the required skills line up — no required
+ * skills listed". If nothing has evidence, there is no honest superlative to name.
+ */
+function scored(s: ScoreOutcome): Array<keyof ScoreBreakdown> {
+  return (Object.keys(s.breakdown) as Array<keyof ScoreBreakdown>).filter((k) => s.evidence[k]);
 }
 
-function weakest(b: ScoreBreakdown): keyof ScoreBreakdown {
-  return (Object.keys(b) as Array<keyof ScoreBreakdown>).reduce((a, k) => (b[k] < b[a] ? k : a));
+function strongest(s: ScoreOutcome): keyof ScoreBreakdown | null {
+  const keys = scored(s);
+  return keys.reduce<keyof ScoreBreakdown | null>(
+    (a, k) => (a === null || s.breakdown[k] > s.breakdown[a] ? k : a),
+    null,
+  );
+}
+
+function weakest(s: ScoreOutcome): keyof ScoreBreakdown | null {
+  const keys = scored(s);
+  return keys.reduce<keyof ScoreBreakdown | null>(
+    (a, k) => (a === null || s.breakdown[k] < s.breakdown[a] ? k : a),
+    null,
+  );
 }
 
 export function buildRationale(input: RationaleInput): string {
@@ -61,11 +80,16 @@ export function buildRationale(input: RationaleInput): string {
     return `Filtered out: ${first?.because ?? 'a requirement was not met'}${rest} You can still open it and decide for yourself — nothing here is hidden.`;
   }
 
-  const best = strongest(score.breakdown);
-  const worst = weakest(score.breakdown);
+  const best = strongest(score);
+  const worst = weakest(score);
   const parts: string[] = [];
 
-  parts.push(`Worth a look because ${DIMENSION_LABEL[best]} — ${score.notes[best]}.`);
+  parts.push(
+    best
+      ? `Worth a look because ${DIMENSION_LABEL[best]} — ${score.notes[best]}.`
+      : 'Eligible, but the posting says too little to rank it on anything: no skills, ' +
+          'level, pay, or location to compare against. Open it and judge for yourself.',
+  );
 
   // The honest downside, always. Either an unresolved eligibility question or the
   // weakest scoring dimension.
@@ -80,11 +104,11 @@ export function buildRationale(input: RationaleInput): string {
     );
   }
 
-  if (score.breakdown[worst] < 0.6) {
+  if (worst && score.breakdown[worst] < 0.6) {
     parts.push(
       `Most likely reason you'd be passed over: ${DIMENSION_WEAK[worst]} (${score.notes[worst]}).`,
     );
-  } else if (unresolved.length === 0) {
+  } else if (unresolved.length === 0 && worst) {
     parts.push('Nothing stands out as a likely rejection reason, which is rarer than it sounds.');
   }
 

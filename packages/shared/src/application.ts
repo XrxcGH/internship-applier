@@ -82,7 +82,16 @@ export const FormField = z.object({
   ]),
   required: z.boolean(),
   maxLength: z.number().int().positive().optional(),
-  options: z.array(z.object({ value: z.string(), label: z.string() })).optional(),
+  /**
+   * The choices, for a control that has them.
+   *
+   * `locator` is set only for a radio group, where the options are separate elements
+   * rather than children of one control — the group's own locator matches all of them,
+   * so choosing an option means addressing that option's own input.
+   */
+  options: z
+    .array(z.object({ value: z.string(), label: z.string(), locator: z.string().optional() }))
+    .optional(),
   semantic: FieldSemantic,
   redlineCategory: RedlineCategory.optional(),
   confidence: z.number().min(0).max(1),

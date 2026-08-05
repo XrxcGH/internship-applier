@@ -14,7 +14,7 @@
  */
 import type { ApplicationStatus } from '@ia/shared';
 import type { TrackedApplication } from './status';
-import { derive } from './status';
+import { daysBetween, derive } from './status';
 
 /**
  * Below this many decided applications, a percentage is not worth showing.
@@ -49,7 +49,7 @@ function rate(numerator: number, denominator: number, what: string): Rate {
   return { value: Math.round((numerator / denominator) * 100) / 100, numerator, denominator };
 }
 
-const RESPONDED: ApplicationStatus[] = ['acknowledged', 'interview', 'offer', 'rejected'];
+export const RESPONDED: ApplicationStatus[] = ['acknowledged', 'interview', 'offer', 'rejected'];
 const ADVANCED: ApplicationStatus[] = ['interview', 'offer'];
 const DECIDED: ApplicationStatus[] = ['interview', 'offer', 'rejected', 'ghosted', 'acknowledged'];
 
@@ -136,10 +136,18 @@ export function computeStats(apps: TrackedApplication[], now = new Date()): Stat
     withdrawn: counted.filter((a) => a.status === 'withdrawn').length,
   };
 
-  // Response time is measured only where both ends are known.
-  const responseDays = derived
-    .filter((x) => RESPONDED.includes(effective(x.app)) && x.d.daysSinceSubmitted !== null)
-    .map((x) => x.d.daysSinceSubmitted!)
+  /**
+   * Response time, measured only where both ends are genuinely known.
+   *
+   * This used to read `daysSinceSubmitted`, which is submission-to-NOW — nothing about
+   * the response entered the calculation, so the number shown under "Typical reply time"
+   * climbed by one every day, forever, for applications that were answered in March. Both
+   * ends now come from timestamps: submission, and the first status change into a
+   * responded state.
+   */
+  const responseDays = apps
+    .filter((a) => a.submittedAt !== null && a.respondedAt !== null)
+    .map((a) => daysBetween(a.submittedAt!, a.respondedAt!))
     .filter((d) => d >= 0);
 
   const decidedCount = counted.filter((a) => DECIDED.includes(a.status)).length;

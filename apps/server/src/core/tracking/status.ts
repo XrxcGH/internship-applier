@@ -103,8 +103,9 @@ export const DEADLINE_SOON_DAYS = 7;
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function daysBetween(from: string, to: Date): number {
-  return Math.floor((to.getTime() - new Date(from).getTime()) / DAY_MS);
+export function daysBetween(from: string, to: Date | string): number {
+  const end = to instanceof Date ? to.getTime() : new Date(to).getTime();
+  return Math.floor((end - new Date(from).getTime()) / DAY_MS);
 }
 
 export interface TrackedApplication {
@@ -117,6 +118,14 @@ export interface TrackedApplication {
   createdAt: string;
   updatedAt: string;
   submittedAt: string | null;
+  /**
+   * When the employer first responded, from the status-change history.
+   *
+   * Needed because reply time was being measured from submission to NOW, which is not a
+   * reply time at all — it climbed by a day every day for applications answered months
+   * ago. Null when nothing has come back yet.
+   */
+  respondedAt: string | null;
   deadlineAt: string | null;
   answerCount: number;
   approvedCount: number;

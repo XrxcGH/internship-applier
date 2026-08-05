@@ -379,17 +379,27 @@ export const claudeCliBackend: Backend = {
         );
       }
 
-      // Both of these arrive inside a successful-looking JSON envelope with is_error set,
-      // so they are matched on the text before the generic error path flattens them into
-      // "the CLI reported an error: Not logged in".
-      const combined = `${r.stdout}\n${r.stderr}`;
-      const notSignedIn = notLoggedInMessage(combined);
-      if (notSignedIn) throw new NoModelAccessError(notSignedIn);
-
-      const limit = usageLimitMessage(combined);
-      if (limit) throw new NoModelAccessError(limit);
-
       const env = parseEnvelope(r.stdout);
+
+      /**
+       * Sign-in and usage-limit failures arrive inside a successful-looking JSON envelope
+       * with is_error set, so they are matched on the text before the generic error path
+       * flattens them into "the CLI reported an error: Not logged in".
+       *
+       * ONLY ON A FAILED RUN, though. This used to match against the whole of stdout,
+       * which on a SUCCESSFUL run is the envelope containing the model's own answer — so
+       * a perfectly good draft that happened to contain "rate limit", "quota" or
+       * "unauthorized" was thrown away and reported to the user as an exhausted
+       * subscription. An answer about a rate-limiting project is not a rate-limit error.
+       */
+      if (env?.is_error !== false) {
+        const combined = `${env ? extractText(env) : r.stdout}\n${r.stderr}`;
+        const notSignedIn = notLoggedInMessage(combined);
+        if (notSignedIn) throw new NoModelAccessError(notSignedIn);
+
+        const limit = usageLimitMessage(combined);
+        if (limit) throw new NoModelAccessError(limit);
+      }
 
       // A crash is diagnosed before a parse failure, because a crashed process produces
       // no output and "the output format must have changed" is then exactly the wrong

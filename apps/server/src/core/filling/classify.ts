@@ -30,6 +30,15 @@ export interface FieldDescriptor {
   autocomplete?: string;
   placeholder?: string;
   type?: string;
+  /**
+   * The kind of control, when the scanner knows it.
+   *
+   * Needed because a contenteditable rich-text editor has no `type` attribute at all, so
+   * shape-based essay detection could not see one — and every ATS that ships a rich-text
+   * essay box got "could not tell what this field is asking for" instead of the answer
+   * the user approved for exactly that question.
+   */
+  control?: string;
   /** Nearby text, used only by the model fallback. */
   context?: string;
 }
@@ -132,6 +141,15 @@ const RULES: Rule[] = [
     test: /\b(school|university|college|institution|alma mater)\b/i,
     confidence: 0.9,
   },
+  // graduation_date sits ABOVE degree deliberately. Matching is first-wins, and the
+  // broad /\bdegree\b/ swallowed "Degree date" and "Degree completion date" — typing a
+  // degree level into a date field and making this rule's own \bdegree date\b branch
+  // unreachable.
+  {
+    semantic: 'graduation_date',
+    test: /\bgraduation\b|\bgraduat(e|ing|ion)\b|\bdegree (date|completion)\b|\bcompletion date\b/i,
+    confidence: 0.93,
+  },
   {
     semantic: 'degree',
     test: /\bdegree\b|\bqualification\b|\b(bachelor|master|doctora|phd)\b/i,
@@ -143,11 +161,6 @@ const RULES: Rule[] = [
     confidence: 0.92,
   },
   { semantic: 'gpa', test: /\bgpa\b|\bgrade point average\b/i, confidence: 0.97 },
-  {
-    semantic: 'graduation_date',
-    test: /\bgraduation\b|\bgraduat(e|ing|ion)\b|\bdegree date\b|\bcompletion date\b/i,
-    confidence: 0.93,
-  },
   {
     semantic: 'enrollment_status',
     test: /\b(currently )?enrolled\b|\benrollment status\b|\bclass (standing|year)\b|\byear in school\b|\bacademic year\b/i,
@@ -210,7 +223,11 @@ const RULES: Rule[] = [
  * never keep up with what companies invent.
  */
 function looksLikeEssay(d: FieldDescriptor, normalized: string): boolean {
-  const longForm = d.type === 'textarea' || (d.label?.length ?? 0) > 60;
+  const longForm =
+    d.type === 'textarea' ||
+    d.control === 'textarea' ||
+    d.control === 'richtext' ||
+    (d.label?.length ?? 0) > 60;
   const asks =
     /\?/.test(d.label ?? '') ||
     /\b(tell us|describe|explain|why|what|how|share|walk us through|in your own words)\b/i.test(

@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { ApplicationStatus } from '@ia/shared';
 import {
   canTransition,
+  BOARD_COLUMNS,
   columnFor,
   derive,
   GHOST_AFTER_DAYS,
@@ -38,6 +39,7 @@ function app(over: Partial<TrackedApplication> = {}): TrackedApplication {
     createdAt: daysAgo(30),
     updatedAt: daysAgo(1),
     submittedAt: null,
+    respondedAt: null,
     deadlineAt: null,
     answerCount: 0,
     approvedCount: 0,
@@ -162,7 +164,16 @@ describe('what needs the user, one thing at a time', () => {
       'withdrawn',
       'ghosted',
     ];
-    for (const s of all) expect(columnFor(s), s).toBeTruthy();
+    // `toBeTruthy` asserted nothing here: columnFor ends in `?? 'closed'`, a non-empty
+    // string, so it passed for any input whether BOARD_COLUMNS contained it or not. The
+    // question is membership, so that is what this asks.
+    for (const s of all) {
+      expect(
+        BOARD_COLUMNS.some((c) => c.statuses.includes(s)),
+        `${s} is not in any board column, so it would silently land in "closed"`,
+      ).toBe(true);
+      expect(columnFor(s), s).toBe(BOARD_COLUMNS.find((c) => c.statuses.includes(s))!.key);
+    }
   });
 });
 
@@ -262,6 +273,58 @@ describe('reminders are drafts, never sends', () => {
     expect(text).not.toMatch(/reach out|circle back|touch base|synerg|leverage|delve/i);
     expect(text).not.toContain('—');
     expect(text.split('\n').length).toBeLessThan(14);
+  });
+
+  /**
+   * The timing phrase was "two weeks ago" for anything under 21 days, so a follow-up
+   * drafted the day after applying opened with a plain untruth. In a tool that checks
+   * every drafted sentence against the profile before it goes near an employer, outgoing
+   * correspondence does not get an exemption.
+   */
+  it('does not claim two weeks have passed when they have not', () => {
+    const yesterday = draftFollowUp(app({ status: 'submitted', submittedAt: daysAgo(1) }), NOW);
+    expect(yesterday).not.toMatch(/two weeks ago/);
+    expect(yesterday).toMatch(/yesterday/);
+
+    const threeDays = draftFollowUp(app({ status: 'submitted', submittedAt: daysAgo(3) }), NOW);
+    expect(threeDays).toMatch(/3 days ago/);
+
+    const lastWeek = draftFollowUp(app({ status: 'submitted', submittedAt: daysAgo(9) }), NOW);
+    expect(lastWeek).toMatch(/last week/);
+  });
+
+  it('says something honest when there is no submission date at all', () => {
+    expect(draftFollowUp(app({ status: 'submitted', submittedAt: null }), NOW)).toMatch(/recently/);
+  });
+});
+
+describe('reply time', () => {
+  /**
+   * This was measured from submission to NOW, so the figure under "Typical reply time"
+   * climbed by one every day, forever, for applications answered months ago.
+   */
+  it('measures to the response, not to the present', () => {
+    const apps = Array.from({ length: 3 }, (_, i) =>
+      app({
+        id: `r${String(i)}`,
+        status: 'rejected',
+        submittedAt: daysAgo(100),
+        respondedAt: daysAgo(90),
+      }),
+    );
+    expect(computeStats(apps, NOW).medianDaysToResponse).toBe(10);
+
+    // A year later, the same applications still took ten days.
+    const later = new Date(NOW.getTime() + 365 * 86_400_000);
+    expect(computeStats(apps, later).medianDaysToResponse).toBe(10);
+  });
+
+  it('ignores applications that have not heard back', () => {
+    const apps = [
+      app({ id: 'x1', status: 'submitted', submittedAt: daysAgo(30) }),
+      app({ id: 'x2', status: 'submitted', submittedAt: daysAgo(10) }),
+    ];
+    expect(computeStats(apps, NOW).medianDaysToResponse).toBeNull();
   });
 });
 

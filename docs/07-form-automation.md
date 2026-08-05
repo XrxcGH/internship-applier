@@ -175,20 +175,30 @@ Every write is verified by read-back. A field that didn't take is reported, not 
 
 The strongest structural guarantee in the system.
 
-1. Filling completes. A full-page screenshot is captured to `application.screenshot_path`.
-2. The UI shows a **pre-submit review**: field-by-field what was filled, the full text of
-   every essay answer, the list of skipped/redlined fields still needing the user, and the
-   screenshot.
-3. The submit button is **located but not clicked**. The tool scrolls it into view and
-   highlights it in the visible browser.
-4. The user clicks Submit themselves, in the browser.
-5. The user confirms in the app that they submitted. Only that endpoint writes
-   `application.submitted_at`.
+1. Filling completes. The browser stays open, on the form, with the values in place.
+2. The UI shows a **pre-submit review**: field by field what was filled, the full text of
+   every essay answer, every read-back that did not match what was typed, and the list of
+   skipped and redlined fields still needing the user.
+3. The user finds the submit button and clicks it themselves, in the browser.
+4. The user confirms in the app that they submitted.
 
 There is no `autoSubmit` setting, no `--yes` flag, and no code path in `filling/` that can
-click a submit control. `locateSubmit` returns a `Locator`; nothing in the module calls
-`.click()` on it. This is asserted by a test that greps the module for submit-click patterns
-and by a runtime guard that throws if a submit-like element is clicked during a fill run.
+click a submit control.
+
+**How that is actually enforced**, because a promise is worth what its enforcement is worth:
+
+- an ESLint `no-restricted-syntax` rule that fails the build on a submit-shaped click,
+  `requestSubmit()`, `form.submit()`, or an Enter keypress inside the filling module;
+- a test that scans the module's own source for the same patterns, so the rule cannot be
+  silenced with a disable comment without the test noticing;
+- a fixture test asserting the mock ATS recorded **zero** POSTs across the entire suite;
+- and a CI grep for any endpoint that could write `submitted_at` without the user.
+
+Two things this section used to claim were never built, said plainly rather than quietly
+dropped. **No screenshot is captured** — `application.screenshot_path` exists in the schema
+and nothing writes it. **The submit button is not located or highlighted** — there is no
+`locateSubmit`, and the tool never touches that control at all. The enforcement above is
+static and behavioural; there is no runtime guard.
 
 ## Testing
 
@@ -199,5 +209,11 @@ and by a runtime guard that throws if a submit-like element is clicked during a 
 - **Recorded page snapshots** — saved HTML from real ATS pages (scrubbed of PII) as
   regression fixtures for `formMap` + `classify`. No network, no real submissions.
 - **Redline test** — asserts that no redlined field is ever written, on every fixture.
-- **Dry-run mode** — `--dry-run` maps and plans the fill, prints what it *would* enter, and
-  touches nothing. Available in the UI as "Preview fill."
+- **The plan step** — `buildFillPlan` produces the complete list of intended values, with a
+  reason attached to every skip, before anything is typed. It is a pure function over the
+  form map, the profile and the approved answers, so most of what a dry run would tell you
+  is assertable in a unit test with no browser at all.
+
+> **Not built:** a `--dry-run` flag or a "Preview fill" control. docs/08 and docs/09
+> described both; neither exists. The plan above is the closest real thing, and it is not
+> currently surfaced on its own before a run.

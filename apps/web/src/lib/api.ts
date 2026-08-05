@@ -61,8 +61,17 @@ export async function uploadResume(file: File): Promise<{ documentId: string }> 
   });
   const body: unknown = await res.json().catch(() => null);
   if (!res.ok) {
-    const e = body as { error?: { message?: string } } | null;
-    throw new ApiError(e?.error?.message ?? `Upload failed (${res.status})`, res.status);
+    // Same recovery `request()` does. This path bypasses it, so a token that died with a
+    // server restart stayed cached and every retry of the upload sent it again — healing
+    // only when the user happened to do something else, or reloaded the page.
+    if (res.status === 401) clearToken();
+    const e = body as { error?: { message?: string; code?: string; details?: unknown } } | null;
+    throw new ApiError(
+      e?.error?.message ?? `Upload failed (${res.status})`,
+      res.status,
+      e?.error?.code,
+      e?.error?.details,
+    );
   }
   return body as { documentId: string };
 }
@@ -422,9 +431,15 @@ export const deleteEverything = (confirm: string) =>
 export async function downloadFile(path: string, fallbackName: string): Promise<void> {
   const res = await fetch(path, { headers: { 'x-app-token': await appToken() } });
   if (!res.ok) {
+    // As in uploadResume: a raw fetch has to clear a dead token itself.
+    if (res.status === 401) clearToken();
     const body: unknown = await res.json().catch(() => null);
-    const e = body as { error?: { message?: string } } | null;
-    throw new ApiError(e?.error?.message ?? `Download failed (${res.status})`, res.status);
+    const e = body as { error?: { message?: string; code?: string } } | null;
+    throw new ApiError(
+      e?.error?.message ?? `Download failed (${res.status})`,
+      res.status,
+      e?.error?.code,
+    );
   }
 
   // The server names the file; fall back if the header is missing or unparseable.

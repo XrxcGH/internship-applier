@@ -205,6 +205,36 @@ describe('the hostile form', () => {
     expect(await frame.locator('#f-auth').inputValue()).toBe('Yes');
   }, 90_000);
 
+  /**
+   * The profile is authorized to work, so the answer is Yes. What makes this test worth
+   * having is the No: the radios are labelled by the legend, so before grouping, both
+   * classified as the same question and both were ticked in turn — the last one winning.
+   * A tool that answers a work-authorization question by document order is worse than one
+   * that leaves it blank.
+   */
+  it('ticks the radio that matches the answer, and leaves the other alone', async () => {
+    await run('/nasty', []);
+    expect(await session.page.locator('#f-auth-yes').isChecked()).toBe(true);
+    expect(await session.page.locator('#f-auth-no').isChecked()).toBe(false);
+  }, 90_000);
+
+  it('reports the radio group once, with the choice it made', async () => {
+    const { result } = await run('/nasty', []);
+    const radios = result.results.filter((r) => r.field.control === 'radio');
+    expect(radios).toHaveLength(1);
+    expect(radios[0]!.status).toBe('ok');
+    expect(radios[0]!.readBack).toBe('Yes');
+  }, 90_000);
+
+  it('types an approved answer into a contenteditable essay box', async () => {
+    const why = {
+      ...WHY_ANSWER,
+      questionText: 'Why do you want this internship?',
+    } as ApplicationAnswer;
+    await run('/nasty', [why]);
+    expect(await session.page.locator('#f-why').innerText()).toContain('developer tooling');
+  }, 90_000);
+
   it('respects a maxlength budget rather than letting the form truncate silently', async () => {
     const long = {
       ...APPROVED_ANSWER,

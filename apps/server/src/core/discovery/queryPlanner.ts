@@ -11,6 +11,7 @@
  */
 import type { ConfirmedProfile, SearchFilters } from '@ia/shared';
 import type { AtsSourceName } from './sources/ats';
+import { slugCandidates } from './resolveCompany';
 
 export interface PlannedTarget {
   source: AtsSourceName | 'adzuna' | 'usajobs' | 'github_list';
@@ -68,6 +69,26 @@ const ROLE_TAXONOMY: Record<string, string[]> = {
   research: ['research', 'publication', 'thesis', 'laboratory'],
 };
 
+/**
+ * Does a taxonomy term actually appear in the corpus?
+ *
+ * A bare `corpus.includes(t)` is what this used to be, and the short terms made a mockery
+ * of the curated list that is supposed to stop a bad inference from sending forty queries
+ * for a role the user has no evidence for: "ml" is inside "html", "ai" inside "email",
+ * "training" and "detail", "ui" inside "building", "lab" inside "collaborate", "pm"
+ * inside "rpm". A resume mentioning HTML and email got machine-learning queries.
+ *
+ * Short terms (three characters or fewer) must be whole words — they are acronyms, and an
+ * acronym embedded in a longer word is a different word. Longer terms need only start at
+ * a word boundary, because several entries are deliberate stems: "biolog" is meant to
+ * catch "biological", "prototyp" to catch "prototyping".
+ */
+function termAppears(corpus: string, term: string): boolean {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = term.length <= 3 ? `\\b${escaped}\\b` : `\\b${escaped}`;
+  return new RegExp(pattern, 'i').test(corpus);
+}
+
 export function inferRoleFamilies(profile: ConfirmedProfile): string[] {
   const corpus = [
     ...profile.skills.map((s) => s.name),
@@ -81,7 +102,7 @@ export function inferRoleFamilies(profile: ConfirmedProfile): string[] {
   const scored = Object.entries(ROLE_TAXONOMY)
     .map(([family, terms]) => ({
       family,
-      hits: terms.filter((t) => corpus.includes(t)).length,
+      hits: terms.filter((t) => termAppears(corpus, t)).length,
     }))
     .filter((s) => s.hits > 0)
     .sort((a, b) => b.hits - a.hits);
@@ -135,20 +156,50 @@ export function planQueries(
     ...filters.role.titleIncludes,
   ].filter(Boolean);
 
-  // Company targets the user pinned always come first and are never truncated away.
-  const pinned: PlannedTarget[] = filters.company.onlyCompanies.map((c) => ({
-    source: 'greenhouse',
-    board: c.toLowerCase().replace(/[^a-z0-9]/g, ''),
-    reason: 'company you pinned',
-  }));
-
-  const max = opts.maxTargets ?? 40;
-  const combined = [...pinned, ...knownBoards];
-  const targets = combined.slice(0, max);
-
-  if (combined.length > max) {
+  /**
+   * Company targets the user pinned.
+   *
+   * A pinned name used to become exactly one Greenhouse target whose board was the name
+   * with every non-alphanumeric character deleted. A company on Lever or Ashby, or one
+   * whose Greenhouse token is hyphenated, produced a target that 404s — and the user, who
+   * had explicitly asked for that company, got nothing back and no explanation.
+   *
+   * A board already resolved for that company is used as-is; otherwise every slug
+   * candidate is tried across the three keyless vendors, and a note says the guess was
+   * unverified so the resolve endpoint can be pointed at it.
+   */
+  const pinned: PlannedTarget[] = [];
+  const promoted = new Set<PlannedTarget>();
+  for (const c of filters.company.onlyCompanies) {
+    const slugs = slugCandidates(c);
+    const already = knownBoards.filter((b) => slugs.includes(b.board.toLowerCase()));
+    if (already.length > 0) {
+      for (const b of already) promoted.add(b);
+      pinned.push(...already.map((b) => ({ ...b, reason: 'company you pinned' })));
+      continue;
+    }
+    for (const source of ['greenhouse', 'lever', 'ashby'] as const) {
+      pinned.push({ source, board: slugs[0]!, reason: 'company you pinned (board unverified)' });
+    }
     notes.push(
-      `Plan truncated to ${max} targets (${combined.length - max} dropped). Raise the cap or narrow the filters.`,
+      `"${c}" has no resolved board yet, so its name was guessed as "${slugs[0]!}" on ` +
+        'Greenhouse, Lever and Ashby. Resolve it in Discover to search the right one.',
+    );
+  }
+
+  // Pinned targets survive truncation, because the comment above is a promise: the user
+  // asked for those by name. Slicing the concatenated list dropped them silently once the
+  // pinned list alone exceeded the cap.
+  const max = opts.maxTargets ?? 40;
+  // A board promoted into the pinned list is not searched twice.
+  const rest = knownBoards.filter((b) => !promoted.has(b));
+  const room = Math.max(0, max - pinned.length);
+  const targets = [...pinned, ...rest.slice(0, room)];
+  const dropped = rest.length - room;
+
+  if (dropped > 0) {
+    notes.push(
+      `Plan truncated to ${targets.length} targets (${dropped} dropped). Raise the cap or narrow the filters.`,
     );
   }
   if (targets.length === 0) {

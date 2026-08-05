@@ -8,8 +8,15 @@ caused it, every generated sentence points at the profile fact behind it, every 
 signature you supply. The interface should feel like a **case file you are building and
 signing**, not a SaaS dashboard.
 
-So: archival ink on warm paper. Editorial type. Rules and marginalia. Stamps for state
-changes. Dark mode is the same document under a reading lamp, not an inverted app.
+So: editorial type, rules and marginalia, stamps for state changes, and a surface that reads
+as a working surface rather than a canvas. Dark is the primary theme and light is a real
+alternative, not an inversion.
+
+> The palette below is the **drafting table** — cool graphite with one azure accent. It
+> replaced an earlier warm scheme ("archival ink on warm paper", a brass accent), and this
+> document described that older one long after it was gone: every hex value and every
+> contrast ratio in it was stale. The values here were re-measured against
+> `apps/web/src/index.css` as it ships.
 
 What this deliberately isn't: a purple gradient on white, a grid of rounded cards with
 drop shadows, Inter at three weights, an emoji in every heading.
@@ -34,36 +41,41 @@ Scale is a modular 1.2 ratio off a 16px base, with display sizes set tighter
 
 ## Color
 
-Dominant warm ink, one brass accent, and three signal colors that each mean exactly one
-thing. Defined as CSS custom properties in `apps/web/src/index.css`; both themes ship.
+A cool graphite base, one azure accent that reads like a technical pen, and three signal
+colours that each mean exactly one thing. Defined as CSS custom properties in
+`apps/web/src/index.css`; both themes ship.
 
 ```
                      dark (default)      light
---paper              #14110E             #EDE6D8      warm near-black / oatmeal
---paper-raised       #1D1915             #E4DBC9
---ink                #E9E2D4             #221E18
---ink-dim            #9A9184             #6B6459
---rule               #2E2823             #CFC4AE      hairlines, ledger rules
---brass              #C8963E             #9A6E1E      THE accent. Used sparingly.
---verified           #7A9471             #4E6B47      claim supported, rule passed
---caution            #C08A4A             #8A5A18      unknown / needs your input
---redline            #A6483F             #8C3328      redlined field, unsupported claim
+--paper              #0f1418             #eaeef3      the page
+--paper-raised       #161d23             #f6f8fb      cards, panels
+--paper-sunk         #0a0e11             #dde3ea      wells, tracks
+--ink                #e7ecf1             #121820      body
+--ink-dim            #a8b3bf             #48545f      secondary
+--ink-faint          #8b97a4             #525e6b      eyebrows, small print
+--rule               #2f3a45             #b7c2cf      hairlines
+--rule-strong        #556575             #748498      structural dividers
+--accent             #6ba7f5             #15529e      THE accent. Used sparingly.
+--verified           #5cba8a             #226644      claim supported, rule passed
+--caution            #dda44a             #8a5610      unknown / needs your input
+--redline            #ec7d72             #ad3628      redlined field, unsupported claim
 ```
 
-Discipline: **brass is the only decorative color.** Green, amber, and oxblood are reserved
-for the verification states in docs/05 and docs/06 — if something is green it means a claim
-was verified, not that it's a nice button. A UI where color is load-bearing can't also use
-color for flair.
+Discipline: **azure is the only decorative colour.** Green, amber and coral are reserved for
+the verification states in docs/05 and docs/06 — if something is green it means a claim was
+verified, not that it is a nice button. A UI where colour is load-bearing cannot also use
+colour for flair.
 
 ## Background and depth
 
-Not flat fills. Three layers, all CSS, no images:
+Not flat fills, and no images:
 
-1. A **paper grain** — a very low-opacity repeating radial gradient, ~2% alpha.
-2. **Ledger rules** — a repeating linear gradient of hairlines at the baseline rhythm, ~3%
-   alpha, so surfaces read as ruled paper rather than as `<div>`s.
-3. A soft **lamp vignette** — an off-center radial gradient, warm, which is what makes the
-   dark theme read as "document under a light" instead of "dark mode."
+1. A **drafting grid** — a repeating linear gradient at low alpha (`--grid-alpha`), so
+   surfaces read as a working surface rather than as `<div>`s.
+2. A soft **glow** — an off-centre radial gradient (`--glow-alpha`), which is what keeps the
+   dark theme from reading as a black rectangle.
+
+Both alphas are tokens, so the depth can be tuned in one place per theme.
 
 ## Motion
 
@@ -94,37 +106,42 @@ Editorial, not dashboard:
 
 | Element | Treatment |
 | --- | --- |
-| Verbatim JD quote | Plex Mono, `--ink-dim`, left brass hairline border, slight indent — a pull quote from a source |
+| Verbatim JD quote | Plex Mono, `--ink-dim`, left accent hairline border, slight indent — a pull quote from a source |
 | Requirement pass/fail | Icon + text + color; never color alone |
 | Claim highlight | Underline in the verdict color, not a background fill — the text stays readable |
 | Redlined field | Oxblood hatch pattern (repeating-linear-gradient), not a plain red box — reads as "struck out," not "error" |
 | Gate | Numbered `G1`–`G4` in mono, with the stamp animation on completion |
-| Score bar | Thin ruled bar with a brass fill, breakdown shown as stacked hairlines |
+| Score bar | Thin ruled bar with an accent fill, breakdown shown as stacked hairlines |
 
 ## Accessibility, which the aesthetic must not cost
 
 ### Measured contrast
 
-Not asserted — computed against the actual tokens. Every value is a ratio against
-`--paper` in that theme. Target: body ≥ 7:1, every other text color ≥ 4.5:1.
+Not asserted — computed against the tokens as they ship. Every value is a ratio against
+`--paper` in that theme. Target: every text colour ≥ 4.5:1 against all three surfaces.
 
 | Token | Dark | Light |
 | --- | --- | --- |
-| `--ink` (body) | 14.60 | 13.35 |
-| `--ink-dim` | 7.04 | 7.09 |
-| `--ink-faint` (11px eyebrows) | 4.95 | 4.51 |
-| `--brass` | 7.07 | 5.14 |
-| `--verified` | 5.65 | 4.81 |
-| `--caution` | 6.25 | 4.76 |
-| `--redline` | 5.09 | 6.46 |
+| `--ink` (body) | 15.58 | 15.31 |
+| `--ink-dim` | 8.70 | 6.65 |
+| `--ink-faint` (eyebrows, small print) | 6.23 | 5.68 |
+| `--accent` | 7.47 | 6.60 |
+| `--verified` | 7.80 | 5.91 |
+| `--caution` | 8.37 | 5.27 |
+| `--redline` | 6.83 | 5.40 |
 
-The first pass of this palette failed twice and was corrected: `--ink-faint` came in at
-3.17 (it sets the 11px section eyebrows, which are real UI text, not decoration) and dark
-`--redline` at 3.24. Light-mode brass then failed at 3.66 because it labels the 13px gate
-IDs, so it deepened from `#9a6e1e` to a bronze `#7e5810`. Re-measure after any palette
-edit; the ratios are cheap to compute and the claim is worthless unchecked.
+`--rule` sits at about 1.6 in both themes and is decorative by design — a hairline, never
+a carrier of meaning. `--rule-strong` is the structural divider. The lowest text ratio
+anywhere, across all three surfaces in both themes, is 4.75 (`--caution` on light
+`--paper-sunk`).
+
+Light mode failed three of these on its first pass and the tokens were deepened until it
+did not. Re-measure after any palette edit: the ratios are cheap to compute and the claim
+is worthless unchecked. The numbers above were re-measured when this document was corrected,
+because for a while it described a palette the app no longer had — which is the failure mode
+this instruction exists to prevent.
 - Color is never the only signal — every state has an icon and a text label.
-- Focus rings are a 2px brass outline with a 2px offset, visible on every interactive
+- Focus rings are a 2px accent outline with a 2px offset, visible on every interactive
   element, never removed.
 - `prefers-reduced-motion` and `prefers-color-scheme` both honored; theme is also
   manually overridable.

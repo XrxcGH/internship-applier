@@ -126,11 +126,18 @@ export async function runMatching(
     try {
       let requirements = loadRequirements(row.id);
 
-      if (requirements.length === 0 || opts.reextract) {
+      // Keyed on "has this been extracted", not "did it produce anything". A posting
+      // whose description states no requirements is a correct, common outcome; treating
+      // the empty result as a cache miss re-ran a model call against it on every recompute.
+      if (row.requirementsExtractedAt === null || opts.reextract) {
         const extracted = await extractRequirements(row.id, row.descriptionText, {
           useModel: opts.useModel,
         });
         saveRequirements(row.id, extracted.requirements);
+        db.update(schema.jobPosting)
+          .set({ requirementsExtractedAt: new Date().toISOString() })
+          .where(eq(schema.jobPosting.id, row.id))
+          .run();
         requirements = extracted.requirements;
         summary.requirementsExtracted += extracted.requirements.length;
         summary.requirementsDropped += extracted.dropped.length;

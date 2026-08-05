@@ -39,7 +39,15 @@ export const ExperienceEntry = z.object({
   organization: z.string().min(1),
   title: z.string().min(1),
   type: ExperienceType,
-  startDate: YearMonth,
+  /**
+   * Absent means the resume did not say when this started.
+   *
+   * Optional rather than filled with a sentinel. Ingestion used to substitute '1970-01',
+   * which arithmetic treats as a real date: a single undated job derived fifty-six years
+   * of professional experience, moved the user into the wrong seniority band, and made
+   * every "requires N years" requirement pass. A missing date has to stay missing.
+   */
+  startDate: YearMonth.optional(),
   /** Absent means current. */
   endDate: YearMonth.optional(),
   location: z.string().optional(),
@@ -134,7 +142,16 @@ export const DerivedProfile = z.object({
 export const CandidateProfile = z.object({
   id: z.string(),
   fullName: z.string(),
-  email: z.string().email(),
+  /**
+   * Empty is a legal state, and a deliberate one.
+   *
+   * A resume without a readable email address produces '', which `needsReview` flags so
+   * G1 cannot be passed until the user supplies it. A bare `.email()` rejected that on
+   * the way back OUT of the database — the write path is typed but unvalidated, so the
+   * empty string stored fine and then failed to parse on every read, locking the user out
+   * of the very screen where they would have filled it in.
+   */
+  email: z.union([z.string().email(), z.literal('')]),
   phone: z.string().optional(),
   /**
    * User-entered only — never extracted from a resume. Used for local eligibility

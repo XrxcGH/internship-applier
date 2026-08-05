@@ -96,8 +96,30 @@ export function buildReminders(apps: TrackedApplication[], now = new Date()): Re
  */
 export function draftFollowUp(app: TrackedApplication, now = new Date()): string {
   const d = derive(app, now);
-  const days = d.daysSinceSubmitted ?? 0;
-  const when = days >= 21 ? 'a few weeks ago' : 'two weeks ago';
+  const days = d.daysSinceSubmitted;
+
+  /**
+   * The timing phrase comes from the actual number of days.
+   *
+   * It used to be "two weeks ago" for anything under 21 days, so a follow-up drafted the
+   * day after applying opened with a claim that was simply untrue. In a tool that checks
+   * every drafted sentence against the profile before letting it near an employer, a
+   * hardcoded false statement in outgoing correspondence is the wrong kind of exception.
+   */
+  const when =
+    days === null
+      ? 'recently'
+      : days <= 1
+        ? 'yesterday'
+        : days < 7
+          ? `${String(days)} days ago`
+          : days < 14
+            ? 'last week'
+            : days < 21
+              ? 'two weeks ago'
+              : days < 45
+                ? 'a few weeks ago'
+                : 'some time ago';
 
   return [
     `Subject: Following up on my ${app.title} application`,

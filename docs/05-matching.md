@@ -131,7 +131,18 @@ type EligibilityRule = (p: ConfirmedProfile, j: JobPosting, r: JobRequirement[])
 
 ## Stage 2 — Fit scoring
 
-Weighted sum over normalized dimensions. Weights live in `settings` and are user-adjustable.
+Weighted sum over normalized dimensions.
+
+> **Not built:** user-adjustable weights. `DEFAULT_WEIGHTS` in `score.ts` is the only set
+> that ever applies — `scoreMatch` takes an optional `weights` argument and no caller
+> passes one, and there is no settings API to store an alternative. The defaults below are
+> therefore the real behaviour, not a starting point.
+
+A dimension with no data behind it scores a neutral 0.5 and is marked as having no
+evidence, which keeps it out of the rationale. An empty required-skill list used to score a
+perfect 1.0, so a posting nobody had extracted skills from outranked one the user genuinely
+matched, and the rationale led with "the required skills line up — no required skills
+listed".
 
 | Dimension | Default weight | Computation |
 | --- | --- | --- |
@@ -152,16 +163,23 @@ reason to apply and the most likely reason you'd be rejected," both grounded in 
 breakdown and the requirement quotes. A ranking tool that only tells you why things are
 good is a ranking tool you stop believing.
 
-## Preference learning
+## Preference learning — NOT BUILT
 
-Rejections carry structured `reason_tags` (`wrong_role`, `wrong_location`, `company`,
-`too_senior`, `low_pay`, `effort`, `not_interested`). These adjust dimension weights *within
-a bounded range* and only after enough signal (default: 5 rejections sharing a tag).
+Rejections do carry structured `reason_tags` (`wrong_role`, `wrong_location`, `company`,
+`too_senior`, `low_pay`, `effort`, `not_interested`), and they are persisted to
+`decision.reason_tags`. **Nothing reads them.** There is no weight adjustment, no
+five-rejection threshold, no bounded range, and no Settings panel showing learned weights
+or offering a reset — Settings has four sections and none of them is this.
 
-Two guardrails:
+The tags are being collected against the day this is built. Until then the ranking is the
+same for the first posting as for the five hundredth, which is worth knowing if you are
+wondering why the queue never seems to learn.
 
-- Learned weights are shown in Settings with a "why" and a one-click reset.
-- Learning only ever reorders. It never converts an `eligible` posting into a hidden one.
+The guardrails below are the design, not the current behaviour:
+
+- Learned weights would be shown in Settings with a "why" and a one-click reset.
+- Learning would only ever reorder. It would never convert an `eligible` posting into a
+  hidden one.
 
 ## Testing
 

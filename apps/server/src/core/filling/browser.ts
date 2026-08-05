@@ -94,12 +94,16 @@ export interface Intervention {
   detail: string;
 }
 
-const LOGIN_SIGNS = [
-  'input[type=password]',
-  'input[name*="password" i]',
-  'button:has-text("Sign in")',
-  'button:has-text("Log in")',
-];
+/**
+ * A login wall means a PASSWORD FIELD. Nothing else is sufficient on its own.
+ *
+ * Sign-in button text used to sit in this list and any one of the four was enough to
+ * trigger the verdict — and Playwright's has-text is a case-insensitive substring match,
+ * so the sign-in link in a career site's global header stopped the run. Because the same
+ * detector runs again on continue, that verdict could never be cleared: the run sat in
+ * awaiting_user permanently, on a page that had no login wall at all.
+ */
+const PASSWORD_FIELDS = ['input[type=password]', 'input[name*="password" i]'];
 
 const BOT_CHECK_SIGNS = [
   'iframe[src*="recaptcha"]',
@@ -128,15 +132,32 @@ export async function detectIntervention(page: Page): Promise<Intervention | nul
   }
 
   // A password field is only a login wall if there is no application form around it.
-  // Some application pages legitimately contain an account-creation section.
-  const hasPassword = await Promise.all(
-    LOGIN_SIGNS.map(async (s) => (await page.locator(s).count()) > 0),
+  // Plenty of application pages carry an optional account-creation section.
+  const passwords = await Promise.all(
+    PASSWORD_FIELDS.map(async (s) => (await page.locator(s).count()) > 0),
   );
-  if (hasPassword.some(Boolean)) {
-    const applicationish = await page
-      .locator('input[name*="resume" i], input[type=file], textarea')
-      .count();
-    if (applicationish === 0) {
+  if (passwords.some(Boolean)) {
+    /**
+     * What tells an application form apart from a sign-in box.
+     *
+     * Requiring a resume field or a textarea was too narrow — a first wizard step of
+     * plain name/email/phone inputs is an application form and was not rescued. But
+     * "any control at all" is too wide in the other direction, because a login box has an
+     * email field. A sign-in form is two controls; an application form asks for more than
+     * that even at its shortest.
+     */
+    const [uploads, essays, plain] = await Promise.all([
+      page.locator('input[type=file]').count(),
+      page.locator('textarea, [contenteditable=true]').count(),
+      page
+        .locator(
+          'input:not([type=password]):not([type=hidden]):not([type=submit])' +
+            ':not([type=button]):not([type=checkbox]), select',
+        )
+        .count(),
+    ]);
+    const applicationish = uploads > 0 || essays > 0 || plain >= 3;
+    if (!applicationish) {
       return {
         reason: 'login',
         detail:

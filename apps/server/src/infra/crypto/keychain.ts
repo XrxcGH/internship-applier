@@ -61,6 +61,24 @@ function readFallbackKey(): Buffer {
   return key;
 }
 
+/**
+ * The one error here that must never be swallowed.
+ *
+ * Distinct from "the credential store is unavailable", which is survivable and falls back
+ * to a keyfile. A key of the wrong length means something wrote over ours, and generating
+ * a replacement would abandon every field already encrypted under the real one.
+ */
+export class CorruptMasterKeyError extends Error {
+  constructor() {
+    super(
+      'The master key in the OS credential store is not a valid key. This tool will not ' +
+        'generate a replacement, because doing so would make everything already stored ' +
+        'unreadable. Restore the credential-store entry, or delete your data and start again.',
+    );
+    this.name = 'CorruptMasterKeyError';
+  }
+}
+
 export function getMasterKey(): Buffer {
   if (cached) return cached;
 
@@ -75,7 +93,7 @@ export function getMasterKey(): Buffer {
           return cached;
         }
         logger.error('master key in the OS keychain has the wrong length; refusing to use it');
-        throw new Error('corrupt master key in OS keychain');
+        throw new CorruptMasterKeyError();
       }
       const key = randomBytes(KEY_BYTES);
       entry.setPassword(key.toString('base64'));
@@ -83,6 +101,18 @@ export function getMasterKey(): Buffer {
       cached = key;
       return cached;
     } catch (err) {
+      /**
+       * A corrupt key is not an unavailable store, and it must not fall through.
+       *
+       * The throw above was inside this try, so "refusing to use it" was followed
+       * immediately by minting a fresh random key in a keyfile — silently re-keying the
+       * database. Every field written before that point (name, email, phone, date of
+       * birth, address, resume text) becomes undecryptable while new writes succeed, and
+       * nothing tells the user their data just became unreadable. Failing shut is the
+       * only honest option: the old key may still be recoverable, and a mixed-key
+       * database is not.
+       */
+      if (err instanceof CorruptMasterKeyError) throw err;
       logger.warn({ err }, 'OS credential store unavailable; falling back to a keyfile');
     }
   }

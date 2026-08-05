@@ -195,6 +195,22 @@ describe('failures a person can act on', () => {
     expect(msg).toMatch(/write the answer yourself/i);
   }, 60_000);
 
+  /**
+   * The failure text used to be matched against the whole of stdout, which on a
+   * successful run is the envelope holding the model's own answer. A draft that mentioned
+   * a rate limit — an entirely ordinary thing for a software intern to have worked on —
+   * was thrown away and reported as an exhausted subscription.
+   */
+  it('does not mistake a successful answer about rate limits for a rate-limit error', async () => {
+    writeFakeCli('ok');
+    const res = await claudeCliBackend.generate({
+      purpose: 'answer_draft',
+      system: 'be brief',
+      user: 'I built a rate limit for our API and handled quota exhaustion; try again later.',
+    });
+    expect(res.text).toContain('rate limit');
+  }, 60_000);
+
   it('says the output was unreadable rather than returning an empty draft', async () => {
     writeFakeCli('garbage');
     const msg = await fails();

@@ -113,9 +113,25 @@ export async function fetchManualPosting(url: string): Promise<ManualResult> {
   const dates = parseTermDates(hay);
   const duration = parseDurationWeeks(hay);
 
-  const remote =
-    ld?.jobLocationType === 'TELECOMMUTE' ||
-    /\bremote\b/i.test(`${title} ${description.slice(0, 500)}`);
+  /**
+   * Remoteness, from the structured signal first and the text through the shared parser.
+   *
+   * This used to be a bare /\bremote\b/ over the title and the first 500 characters,
+   * which fired on "no remote work" and "this role is not remote" as readily as on the
+   * real thing — and then threw away the structured jobLocation and the parsed
+   * arrangement to replace both with "remote". The manual path is the one the user
+   * invoked deliberately; it has no business being less careful than the automated one.
+   */
+  const arrangement = parseWorkArrangement(hay);
+  const remote = ld?.jobLocationType === 'TELECOMMUTE' || arrangement === 'remote';
+  // A posting can be remote AND name a city ("New York or Remote"). Keeping the stated
+  // locations is what lets the eligibility rule tell those two cases apart.
+  const stated = flattenLocations(ld?.jobLocation);
+  const locations = remote
+    ? stated.length > 0
+      ? stated.map((l) => ({ ...l, remote: true }))
+      : [{ remote: true }]
+    : stated;
 
   const salary = ld?.baseSalary?.value;
 
@@ -128,9 +144,9 @@ export async function fetchManualPosting(url: string): Promise<ManualResult> {
     title,
     descriptionText: description,
     descriptionHtml: ld?.description ?? null,
-    locations: remote ? [{ remote: true }] : flattenLocations(ld?.jobLocation),
+    locations,
     positionType: parsePositionType(title, description),
-    workArrangement: remote ? 'remote' : parseWorkArrangement(hay),
+    workArrangement: remote ? 'remote' : arrangement,
     hybridDaysOnsite: parseHybridDays(hay),
     remoteEligibleIn: [],
     programFlags: [],

@@ -14,7 +14,7 @@ import { ApplicationStatus } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
 import { csvFilename, toCsv } from '../core/tracking/exportCsv';
 import { buildReminders, draftFollowUp, draftWithdrawal } from '../core/tracking/reminders';
-import { computeStats } from '../core/tracking/stats';
+import { computeStats, RESPONDED as RESPONDED_STATUSES } from '../core/tracking/stats';
 import { canTransition, derive, type TrackedApplication } from '../core/tracking/status';
 
 /**
@@ -32,6 +32,26 @@ function loadAll(): TrackedApplication[] {
     .innerJoin(schema.jobPosting, eq(schema.match.postingId, schema.jobPosting.id))
     .orderBy(desc(schema.application.createdAt))
     .all();
+
+  /**
+   * The first moment each application heard back, out of the status-change history.
+   *
+   * Every transition already writes a `status_changed` event; nothing read them. Reply
+   * time was measured from submission to the present instead, so the figure under
+   * "Typical reply time" grew every day for applications that had been answered long ago.
+   */
+  const respondedAt = new Map<string, string>();
+  for (const e of db
+    .select()
+    .from(schema.applicationEvent)
+    .where(eq(schema.applicationEvent.type, 'status_changed'))
+    .orderBy(schema.applicationEvent.at)
+    .all()) {
+    const to = (e.payload as { to?: TrackedApplication['status'] } | null)?.to;
+    if (to && RESPONDED_STATUSES.includes(to) && !respondedAt.has(e.applicationId)) {
+      respondedAt.set(e.applicationId, e.at);
+    }
+  }
 
   const answers = db.select().from(schema.applicationAnswer).all();
   const byApp = new Map<string, { total: number; approved: number }>();
@@ -55,6 +75,7 @@ function loadAll(): TrackedApplication[] {
       createdAt: r.application.createdAt,
       updatedAt: r.application.updatedAt,
       submittedAt: r.application.submittedAt,
+      respondedAt: respondedAt.get(r.application.id) ?? null,
       deadlineAt: r.application.deadlineAt,
       answerCount: counts.total,
       approvedCount: counts.approved,

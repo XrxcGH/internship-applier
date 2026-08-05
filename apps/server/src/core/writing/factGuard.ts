@@ -14,9 +14,16 @@
  *      three months is a factual claim with a right answer, not a judgement call. No API
  *      key required and fully testable, so the adversarial suite runs on every commit.
  *
- *   2. MODEL (draft.ts, advisory). Semantic claims the regexes cannot reach — "I led the
- *      migration" when the evidence says "helped with the migration". Layered on top of
- *      the deterministic pass, never instead of it. See `mergeModelVerdicts`.
+ *   2. MODEL (advisory) — BUILT AND TESTED, BUT NOT WIRED IN. Semantic claims the regexes
+ *      cannot reach: "I led the migration" when the evidence says "helped with the
+ *      migration". `mergeModelVerdicts` below implements the merge policy — the model may
+ *      downgrade a verdict, never clear one — and the adversarial suite covers it, but no
+ *      production path calls it. Neither `draftAnswer` nor the G3 route produces model
+ *      verdicts today, so nothing at runtime ever emits a claim with decidedBy: 'model'.
+ *
+ *      Said plainly because the alternative is a comment that describes a check the user
+ *      is relying on and that does not run: semantic overstatement is caught by the human
+ *      at G3 and by nothing else. docs/06 and docs/11 say the same.
  *
  * TWO FAILURE DIRECTIONS, weighted deliberately. A missed fabrication is worse than a
  * spurious flag — but only just. A guard that lights up every other sentence trains the
@@ -368,7 +375,19 @@ export function checkClaimDeterministically(
         reason: 'The draft states a GPA, but there is no GPA on your profile to check it against.',
       };
     }
-    const wrong = gpas.find((g) => !known.some((k) => Math.abs(k.value - g) < 0.005));
+    /**
+     * The scale counts as a known number, not a second claimed GPA.
+     *
+     * "I graduated with a 3.8/4.0 GPA" extracts BOTH 3.8 and 4 — the third pattern reads
+     * the value correctly, and the number-leading pattern independently matches "4.0 GPA"
+     * on the far side of the slash. Comparing every extracted number against the value
+     * alone meant the scale could never be satisfied, so the most natural way of stating
+     * a GPA produced a blocking "the draft says GPA 4; your profile says 3.8" on a
+     * sentence that quotes the profile exactly. Another false red with no override at G3.
+     */
+    const wrong = gpas.find(
+      (g) => !known.some((k) => Math.abs(k.value - g) < 0.005 || Math.abs(k.scale - g) < 0.005),
+    );
     if (wrong !== undefined) {
       const k = known[0]!;
       return {

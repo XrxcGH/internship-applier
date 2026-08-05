@@ -103,7 +103,7 @@ export function retrieveEvidence(
     items.push({
       ref: `experience.${i}`,
       kind: 'experience',
-      text: `${e.title} at ${e.organization} (${e.startDate} to ${e.endDate ?? 'present'})`,
+      text: `${e.title} at ${e.organization} (${e.startDate ?? 'date not stated'} to ${e.endDate ?? 'present'})`,
       facts: {
         organization: e.organization,
         title: e.title,

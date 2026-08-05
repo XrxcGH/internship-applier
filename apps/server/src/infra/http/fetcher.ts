@@ -69,7 +69,43 @@ async function takeToken(host: string, rps: number): Promise<void> {
   buckets.set(host, b);
 }
 
-/** Conservative parse: collects Disallow paths that apply to `*` or to us. */
+/**
+ * Does a Disallow pattern match this path?
+ *
+ * The REP allows `*` as a wildcard and a trailing `$` as an end anchor, and a plain
+ * `startsWith` treated both as literal characters — so "/*?page=" and "/*\/apply$" could
+ * never match anything and were silently treated as permission to fetch. Every failure
+ * mode of this function has to err toward NOT fetching.
+ */
+function robotsMatches(pattern: string, pathname: string): boolean {
+  if (pattern === '/') return true;
+  if (!pattern.includes('*') && !pattern.endsWith('$')) return pathname.startsWith(pattern);
+
+  const anchored = pattern.endsWith('$');
+  const body = anchored ? pattern.slice(0, -1) : pattern;
+  const source = body
+    .split('*')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.*');
+  return new RegExp(`^${source}${anchored ? '$' : ''}`).test(pathname);
+}
+
+/**
+ * Conservative parse: collects Disallow paths that apply to `*` or to us.
+ *
+ * "Conservative" was aspirational. Consecutive User-agent lines form ONE group under the
+ * REP, but `applies` was reassigned by each line in turn, so
+ *
+ *     User-agent: *
+ *     User-agent: AdsBot
+ *     Disallow: /careers/
+ *
+ * left `applies` false and threw away a rule that binds us. Grouping is now accumulated
+ * until the first non-User-agent line, which is what the standard actually says.
+ *
+ * Missing `Allow:` support stays missing on purpose: ignoring an Allow can only make this
+ * refuse a fetch it could have made, and that is the direction to be wrong in.
+ */
 async function disallowedPaths(origin: string): Promise<Set<string>> {
   const cached = robots.get(origin);
   if (cached) return cached;
@@ -81,16 +117,33 @@ async function disallowedPaths(origin: string): Promise<Set<string>> {
       signal: AbortSignal.timeout(8000),
     });
     if (res.ok) {
+      // `group` collects the agents named since the last rule line; `applies` is whether
+      // any of them is us. A rule line ends the run of agent lines.
+      let group: string[] = [];
       let applies = false;
+      let inGroup = false;
+
       for (const raw of (await res.text()).split('\n')) {
         const line = raw.split('#')[0]!.trim();
+        if (!line) continue;
         const [k, ...rest] = line.split(':');
         const key = k?.toLowerCase().trim();
         const value = rest.join(':').trim();
+
         if (key === 'user-agent') {
-          applies = value === '*' || USER_AGENT.toLowerCase().startsWith(value.toLowerCase());
-        } else if (key === 'disallow' && applies && value) {
-          paths.add(value);
+          if (inGroup) {
+            group = [];
+            inGroup = false;
+          }
+          group.push(value);
+          applies = group.some(
+            (a) => a === '*' || USER_AGENT.toLowerCase().startsWith(a.toLowerCase()),
+          );
+        } else if (key === 'disallow') {
+          inGroup = true;
+          if (applies && value) paths.add(value);
+        } else if (key === 'allow' || key === 'crawl-delay') {
+          inGroup = true;
         }
       }
     }
@@ -109,7 +162,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
   if (!opts.isDocumentedApi) {
     const blocked = await disallowedPaths(u.origin);
     for (const p of blocked) {
-      if (p === '/' || u.pathname.startsWith(p)) {
+      if (robotsMatches(p, u.pathname)) {
         throw new HttpError(`robots.txt disallows ${u.pathname}`, 403, url);
       }
     }
@@ -143,8 +196,22 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
       }
 
       if (res.status === 429 || res.status >= 500) {
-        const retryAfter = Number(res.headers.get('retry-after'));
-        const waitMs = Number.isFinite(retryAfter) ? retryAfter * 1000 : backoffMs(attempt);
+        /**
+         * Two bugs lived in one line here.
+         *
+         * `Number(null)` is 0 and `Number.isFinite(0)` is true, so an ABSENT Retry-After —
+         * the common case on a 500 — produced a zero wait and the exponential backoff
+         * documented in docs/04 never ran at all. And when the header WAS present it was
+         * honoured uncapped, so a "Retry-After: 1800" parked a whole discovery run inside
+         * one fetch for half an hour. An HTTP-date value is NaN and falls through to
+         * backoff, which is the right outcome.
+         */
+        const header = res.headers.get('retry-after');
+        const seconds = header === null ? Number.NaN : Number(header);
+        const waitMs =
+          Number.isFinite(seconds) && seconds > 0
+            ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
+            : backoffMs(attempt);
         logger.debug({ url, status: res.status, waitMs }, 'retrying after backoff');
         await sleep(waitMs);
         continue;
@@ -175,6 +242,14 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
 export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
   return JSON.parse(await politeFetch(url, { isDocumentedApi: true, ...opts })) as T;
 }
+
+/**
+ * The longest a server's Retry-After is allowed to hold up a run.
+ *
+ * Deliberately close to the backoff ceiling. Waiting longer than this is not politeness,
+ * it is a run that appears to have hung.
+ */
+const MAX_RETRY_AFTER_MS = 60_000;
 
 /** Exponential backoff with full jitter. */
 function backoffMs(attempt: number): number {

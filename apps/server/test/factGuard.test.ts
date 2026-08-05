@@ -235,6 +235,23 @@ describe('honest drafts are not flagged', () => {
     expect(verdictOf('My GPA is 3.62 out of 4.0.')).toBeNull();
   });
 
+  /**
+   * "3.62/4.0 GPA" extracts BOTH numbers — the fraction pattern reads the value, and the
+   * number-leading pattern independently matches "4.0 GPA" on the far side of the slash.
+   * Comparing every extracted number against the value alone made the scale impossible to
+   * satisfy, so the most natural phrasing produced a blocking "the draft says GPA 4" on a
+   * sentence quoting the profile exactly.
+   */
+  it('does not read the scale in "3.62/4.0 GPA" as a second claimed GPA', () => {
+    expect(verdictOf('I graduated with a 3.62/4.0 GPA.')).toBeNull();
+    expect(verdictOf('I hold a 3.62 / 4.0 GPA in computer science.')).toBeNull();
+  });
+
+  it('still catches a wrong GPA written the same way', () => {
+    const r = checkClaimDeterministically('I graduated with a 3.95/4.0 GPA.', EVIDENCE);
+    expect(r?.verdict).toBe('unsupported');
+  });
+
   it('accepts skills the profile holds', () => {
     expect(
       verdictOf('I built Tidewater in React and shipped it to a handful of friends.'),

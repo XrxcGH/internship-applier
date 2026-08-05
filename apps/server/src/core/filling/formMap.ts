@@ -17,8 +17,8 @@
  *   6. `placeholder`                             (weakest; often an example, not a name)
  *
  * Extraction runs inside the page rather than over a serialized DOM, because resolving a
- * label means walking the tree and reading computed visibility, and shipping the whole
- * document back to Node to do that would be slower and lossier.
+ * label means walking the tree — through open shadow roots — and reading computed style,
+ * and shipping the whole document back to Node to do that would be slower and lossier.
  */
 import type { Frame, Page } from 'playwright';
 import type { FormField } from '@ia/shared';
@@ -32,8 +32,14 @@ interface RawField extends FieldDescriptor {
   control: FormField['control'];
   required: boolean;
   maxLength?: number;
-  options?: Array<{ value: string; label: string }>;
+  options?: Array<{ value: string; label: string; locator?: string }>;
   visible: boolean;
+  /** Radio only: this input's own choice text, as distinct from the group's question. */
+  optionLabel?: string;
+  /** Radio only: the question the whole group answers, from its fieldset legend. */
+  groupLabel?: string;
+  /** Radio only: the value attribute, which is what distinguishes it within its group. */
+  optionValue?: string;
 }
 
 /**
@@ -45,20 +51,34 @@ const SCAN = (): unknown => {
   const text = (el: Element | null): string =>
     (el?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
 
+  /**
+   * The tree an element's ids are scoped to: its shadow root, or the document.
+   *
+   * Strategies 1 and 2 used to query `document` directly, which is wrong in both
+   * directions for a control inside a shadow root. It cannot see the label sitting beside
+   * it in the same shadow root, so the two strongest strategies silently returned nothing
+   * — and ids are scoped per root, so a light-DOM element that happens to share the id
+   * could be returned instead, giving the field a completely unrelated label at the
+   * highest confidence the resolver has.
+   */
+  const rootOf = (el: HTMLElement): Document | ShadowRoot =>
+    el.getRootNode() as Document | ShadowRoot;
+
   const labelFor = (el: HTMLElement): string => {
+    const root = rootOf(el);
     // 1. aria-labelledby
     const by = el.getAttribute('aria-labelledby');
     if (by) {
       const joined = by
         .split(/\s+/)
-        .map((id) => text(document.getElementById(id)))
+        .map((id) => text(root.querySelector(`#${CSS.escape(id)}`)))
         .filter(Boolean)
         .join(' ');
       if (joined) return joined;
     }
     // 2. <label for> / wrapping label
     if (el.id) {
-      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      const l = root.querySelector(`label[for="${CSS.escape(el.id)}"]`);
       if (l && text(l)) return text(l);
     }
     const wrapping = el.closest('label');
@@ -103,6 +123,74 @@ const SCAN = (): unknown => {
     return (el.getAttribute('placeholder') ?? '').trim();
   };
 
+  /**
+   * A radio's OWN choice text — "Yes", not "Are you authorized to work?".
+   *
+   * Deliberately narrower than labelFor, which starts at aria-labelledby and so returns
+   * the group's legend for every radio in the group. Ticking a radio on the strength of
+   * that label means ticking one without knowing which choice it is.
+   */
+  const optionLabelFor = (el: HTMLElement): string => {
+    if (el.id) {
+      const l = rootOf(el).querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (l) return text(l);
+    }
+    const wrapping = el.closest('label');
+    if (wrapping) return text(wrapping);
+    const aria = (el.getAttribute('aria-label') ?? '').trim();
+    if (aria) return aria;
+    const sib = el.nextElementSibling;
+    if (sib && !sib.matches('input, select, textarea')) return text(sib);
+    return (el.getAttribute('value') ?? '').trim();
+  };
+
+  /** The question a radio group answers, which lives on the fieldset, not the input. */
+  const groupLabelFor = (el: HTMLElement): string => {
+    const group = el.closest('fieldset, [role=radiogroup]');
+    if (!group) return '';
+    const legend = group.querySelector('legend');
+    if (legend) return text(legend);
+    const aria = (group.getAttribute('aria-label') ?? '').trim();
+    if (aria) return aria;
+    const by = group.getAttribute('aria-labelledby');
+    if (by) {
+      const parts = by
+        .split(/\s+/)
+        .map((id) => text(rootOf(el).querySelector(`#${CSS.escape(id)}`)))
+        .filter(Boolean);
+      if (parts.length) return parts.join(' ');
+    }
+    return '';
+  };
+
+  /**
+   * Is this control really on screen?
+   *
+   * A bounding box alone was wrong in both directions, and each direction cost something
+   * different.
+   *
+   * `visibility: hidden` and `opacity: 0` keep a non-zero rect, so those fields were
+   * classified, planned, and then spent the full five-second wait before failing — noise
+   * in a report whose entire value is that its warnings mean something.
+   *
+   * The other direction is worse. A field parked off-screen at `left: -9999px` has a
+   * perfectly good rect and Playwright considers it visible, so the tool typed into it.
+   * That is the classic honeypot, and honeypots are deliberately given attractive names
+   * — "email", "website" — precisely so a classifier recognizes them. Filling one is how
+   * a form decides you are a bot.
+   */
+  const isVisible = (el: HTMLElement, rect: DOMRect): boolean => {
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+    if (style.display === 'none') return false;
+    if (Number(style.opacity) === 0) return false;
+    // Off to the left or above the document entirely. A generous margin, because a field
+    // in a horizontal carousel or a not-yet-opened accordion is legitimately off-viewport.
+    if (rect.right < -500 || rect.bottom < -500) return false;
+    return true;
+  };
+
   /** A selector that will still find this element later. */
   const locatorFor = (el: HTMLElement, index: number): string => {
     if (el.id) return `#${CSS.escape(el.id)}`;
@@ -110,8 +198,20 @@ const SCAN = (): unknown => {
     if (name && document.querySelectorAll(`[name="${CSS.escape(name)}"]`).length === 1) {
       return `[name="${CSS.escape(name)}"]`;
     }
-    // Fall back to position among all controls. Verified by label read-back at fill time,
-    // so a shifted index is caught rather than silently filling the wrong box.
+    // Radios in a group share a name and are told apart by value, so the name alone can
+    // never address one of them.
+    const value = el.getAttribute('value');
+    if (name && value) {
+      const pair = `[name="${CSS.escape(name)}"][value="${CSS.escape(value)}"]`;
+      if (document.querySelectorAll(pair).length === 1) return pair;
+    }
+    // Fall back to position among all controls, in the composed order `collect` walks —
+    // which is the order Playwright's `.nth()` resolves in.
+    //
+    // This is the weakest locator here and it has no safety net. The comment that used to
+    // sit on this line claimed a label read-back at fill time caught a shifted index;
+    // there is no such read-back anywhere in fill.ts, which reads the value only. A wrong
+    // element that accepts what was typed is reported as "ok".
     return `__index__${String(index)}`;
   };
 
@@ -138,11 +238,28 @@ const SCAN = (): unknown => {
     ':not([type=image]):not([type=reset]), ' +
     'textarea, select, [role=combobox], [contenteditable=true]';
 
-  // Includes shadow roots, which Playwright can reach but querySelectorAll cannot.
-  const collect = (root: Document | ShadowRoot, out: HTMLElement[]): void => {
-    out.push(...Array.from(root.querySelectorAll<HTMLElement>(SELECTOR)));
-    for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
+  /**
+   * Every fillable control, in COMPOSED ORDER — the order Playwright will see them in.
+   *
+   * This used to collect a root's light-DOM matches first and only then descend into its
+   * shadow roots, which produced a different ordering from the one Playwright's selector
+   * engine produces when it pierces open shadow roots in tree order. Measured on a page
+   * with one shadow-hosted input among three light-DOM controls, the scanner produced
+   * [light1, light2, image, shadowInput] and `.nth(0..3)` produced
+   * [shadowInput, light1, light2, image] — so on any frame containing a shadow-DOM
+   * control, every index locator in that frame addressed the wrong element.
+   *
+   * That mattered more than it sounds: there is no label re-verification at fill time (a
+   * comment below used to promise one), so a wrong element that accepts the typed value
+   * is reported "ok". Walking once, descending at each host's own position, keeps the two
+   * orderings in step.
+   */
+  const collect = (node: Document | ShadowRoot | Element, out: HTMLElement[]): void => {
+    for (const child of Array.from(node.children ?? [])) {
+      const el = child as HTMLElement;
+      if (el.matches(SELECTOR)) out.push(el);
       if (el.shadowRoot) collect(el.shadowRoot, out);
+      collect(el, out);
     }
   };
 
@@ -158,6 +275,9 @@ const SCAN = (): unknown => {
     return {
       locator: locatorFor(el, index),
       label,
+      optionLabel: control === 'radio' ? optionLabelFor(el) : undefined,
+      groupLabel: control === 'radio' ? groupLabelFor(el) : undefined,
+      optionValue: control === 'radio' ? (el.getAttribute('value') ?? '') : undefined,
       name: el.getAttribute('name') ?? undefined,
       id: el.id || undefined,
       autocomplete: el.getAttribute('autocomplete') ?? undefined,
@@ -175,7 +295,7 @@ const SCAN = (): unknown => {
         control === 'select' || control === 'multiselect'
           ? Array.from(input.options ?? []).map((o) => ({ value: o.value, label: o.text }))
           : undefined,
-      visible: rect.width > 0 && rect.height > 0,
+      visible: isVisible(el, rect),
     };
   });
 };
@@ -205,14 +325,67 @@ async function scanFrame(frame: Frame): Promise<RawField[]> {
  * Invisible controls are dropped: forms routinely carry hidden inputs for CSRF tokens and
  * for the branches of a conditional the user has not reached, and neither is ours to fill.
  */
+/**
+ * Collapses each radio group into one field whose options are its buttons.
+ *
+ * A radio group is one question with several answers, but the scanner sees N independent
+ * inputs — and when the label resolver reaches the fieldset's legend, all N carry the
+ * same question as their label. That produced N fields with identical semantics, each
+ * ticked in turn, the last one silently unticking the rest, and read-backs recorded for
+ * choices that were no longer selected. Whether the tool had ticked "Yes" or "No" was
+ * decided by document order.
+ *
+ * Grouped, the question is the field and the buttons are its options, so choosing means
+ * matching the intended value against each button's own text.
+ */
+function groupRadios(raw: RawField[]): RawField[] {
+  const out: RawField[] = [];
+  const groups = new Map<string, number>();
+
+  for (const r of raw) {
+    if (r.control !== 'radio' || !r.name) {
+      out.push(r);
+      continue;
+    }
+
+    const resolved = r.label ?? '';
+    const option = {
+      value: r.optionValue || r.optionLabel || resolved,
+      label: r.optionLabel || r.optionValue || resolved,
+      locator: r.locator,
+    };
+
+    const at = groups.get(r.name);
+    if (at === undefined) {
+      groups.set(r.name, out.length);
+      out.push({
+        ...r,
+        // The group's question, when the page states one. Falling back to this radio's
+        // resolved label keeps the old behaviour for an ungrouped stray.
+        label: r.groupLabel || r.label,
+        options: [option],
+        // A group with no visible member is not fillable; visible if any member is.
+        visible: r.visible,
+      });
+    } else {
+      const existing = out[at]!;
+      existing.options = [...(existing.options ?? []), option];
+      existing.visible ||= r.visible;
+      existing.required ||= r.required;
+    }
+  }
+
+  return out;
+}
+
 export async function buildFormMap(page: Page): Promise<FormMap> {
   const fields: FormField[] = [];
 
   for (const frame of page.frames()) {
-    const raw = await scanFrame(frame);
+    const raw = groupRadios(await scanFrame(frame));
     const isMain = frame === page.mainFrame();
 
-    raw.forEach((r, i) => {
+    raw.forEach((r) => {
       if (!r.visible) return;
 
       const classification = classifyField(r);
@@ -220,8 +393,11 @@ export async function buildFormMap(page: Page): Promise<FormMap> {
 
       fields.push({
         id: ulid(),
-        // Index locators are resolved against this frame's own ordering.
-        locator: r.locator.startsWith('__index__') ? `${r.locator}:${String(i)}` : r.locator,
+        // The scanner's own position within this frame, carried through untouched. It
+        // used to be re-derived from this loop's index as well, which happened to agree
+        // — until grouping radios made the two disagree and every index locator after
+        // the first radio group pointed at the wrong element.
+        locator: r.locator,
         label: r.label || '(no label found)',
         control: r.control,
         required: r.required,

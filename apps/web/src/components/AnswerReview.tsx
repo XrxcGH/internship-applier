@@ -92,7 +92,8 @@ export function AnswerReview({
   canDraft: boolean;
   busy: string | null;
   onDraft: () => void;
-  onSave: (text: string) => void;
+  /** May return a promise; Save waits for it, so a rejection keeps the editor open. */
+  onSave: (text: string) => void | Promise<boolean | void>;
   onApprove: () => void;
   onUnapprove: () => void;
   onDelete: () => void;
@@ -109,6 +110,19 @@ export function AnswerReview({
 
   const blocking = answer.evidence.filter(
     (e) => e.verdict === 'unsupported' || e.verdict === 'overstated',
+  );
+  /**
+   * The reasons, in the same order as the claims they belong to.
+   *
+   * The server builds its flags from guard.blocking and its evidence from guard.claims,
+   * in that order, so the two line up index for index. They used to be joined by a
+   * `find()` that referenced neither the claim nor its index — so with two or more
+   * flagged claims, every row after the first printed the FIRST claim's reason. On the
+   * one screen the G3 gate is built around, that tells the user the wrong thing about why
+   * their sentence is blocked.
+   */
+  const blockingNotes = answer.flags.filter(
+    (f) => f.type === 'unsupported' || f.type === 'overstated',
   );
   const tells = answer.flags.filter((f) => f.type === 'ai_tell');
   const drift = answer.flags.filter((f) => f.type === 'style_drift');
@@ -139,7 +153,11 @@ export function AnswerReview({
         )}
       </header>
 
-      {answer.text.trim().length === 0 ? (
+      {/* The editing check matters. Without it, the empty-state card stayed on screen
+          above the textarea during "Write it myself", and its own "Write it myself"
+          button reset the text to empty — wiping whatever had been typed below, with no
+          undo. "Remove question", one button along, deleted the answer outright. */}
+      {answer.text.trim().length === 0 && !editing ? (
         <div className="px-6 py-8">
           <Empty title="No answer yet.">
             {canDraft
@@ -208,8 +226,13 @@ export function AnswerReview({
                       variant="solid"
                       size="sm"
                       onClick={() => {
-                        onSave(text);
-                        setEditing(false);
+                        // Awaited, and only closed on success. Closing first meant a
+                        // failed save left the typed answer nowhere: the view falls back
+                        // to the stale stored text, and Edit overwrites the local copy on
+                        // the way back in.
+                        void Promise.resolve(onSave(text)).then((ok) => {
+                          if (ok !== false) setEditing(false);
+                        });
                       }}
                     >
                       Save
@@ -258,8 +281,7 @@ export function AnswerReview({
                     <li key={i} className="text-dim text-[1rem]">
                       <span className="text-ink">“{b.claim}”</span>
                       <br />
-                      {answer.flags.find((f) => f.type === 'unsupported' || f.type === 'overstated')
-                        ?.note ?? VERDICT_LABEL[b.verdict]}
+                      {blockingNotes[i]?.note ?? VERDICT_LABEL[b.verdict]}
                     </li>
                   ))}
                 </ul>

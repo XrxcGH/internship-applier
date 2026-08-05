@@ -137,19 +137,28 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
 
   useEffect(refresh, [refresh]);
 
-  /** Wraps an action so every failure surfaces as a sentence rather than a dead button. */
-  const run = async (key: string, fn: () => Promise<unknown>): Promise<void> => {
+  /**
+   * Wraps an action so every failure surfaces as a sentence rather than a dead button.
+   *
+   * Returns whether it worked, because some callers need to know. The editor in
+   * AnswerReview closes on save, and closing it after a FAILED save threw away whatever
+   * the user had typed — the view falls back to the stored text and there is no copy of
+   * the new one anywhere.
+   */
+  const run = async (key: string, fn: () => Promise<unknown>): Promise<boolean> => {
     setBusy(key);
     setError(null);
     try {
       await fn();
       refresh();
+      return true;
     } catch (err) {
       if (err instanceof ApiError && err.code === 'UNVERIFIED_CLAIMS') {
         // The server refused. Refresh so the flags it just recomputed are visible.
         refresh();
       }
       setError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -220,7 +229,7 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
                 canDraft={app.canDraft}
                 busy={busy === a.id ? 'draft' : busy === `approve:${a.id}` ? 'approve' : null}
                 onDraft={() => void run(a.id, () => draftAnswer(a.id))}
-                onSave={(text) => void run(`save:${a.id}`, () => saveAnswer(a.id, text))}
+                onSave={(text) => run(`save:${a.id}`, () => saveAnswer(a.id, text))}
                 onApprove={() => void run(`approve:${a.id}`, () => approveAnswer(a.id))}
                 onUnapprove={() => void run(`un:${a.id}`, () => unapproveAnswer(a.id))}
                 onDelete={() => void run(`del:${a.id}`, () => deleteAnswer(a.id))}

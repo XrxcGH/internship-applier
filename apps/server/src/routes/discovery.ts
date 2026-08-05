@@ -16,7 +16,7 @@ import {
 import { resolveCompany } from '../core/discovery/resolveCompany';
 import { fetchManualPosting } from '../core/discovery/manualPosting';
 import { refreshPostings } from '../core/discovery/refresh';
-import { planQueries } from '../core/discovery/queryPlanner';
+import { planQueries, type PlannedTarget } from '../core/discovery/queryPlanner';
 
 const SOURCE_NAMES = Object.keys(ALL_SOURCES) as [string, ...string[]];
 
@@ -98,9 +98,14 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       .from(schema.source)
       .where(eq(schema.source.enabled, true))
       .all()
-      .filter((s) => s.label.includes(':'))
+      // Filtered on the source kind the runner actually knows, not on "the label has a
+      // colon in it". Pasting a single job URL creates a `manual:pasted` source row, and
+      // that heuristic turned it into a permanent plan chip for a source that does not
+      // exist — which the run endpoint then rejected outright. The cast that used to sit
+      // on `source` hid exactly this mismatch from the type checker.
+      .filter((s) => s.label.includes(':') && s.kind in ALL_SOURCES)
       .map((s) => ({
-        source: s.kind as 'greenhouse',
+        source: s.kind as PlannedTarget['source'],
         board: s.label.split(':')[1] ?? '',
         reason: 'already resolved from a previous run',
       }));
