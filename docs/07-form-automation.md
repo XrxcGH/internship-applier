@@ -28,16 +28,32 @@ When a fill run hits a login wall:
 Same for CAPTCHAs and any bot-check challenge: pause, hand it to the user, resume. There is
 no solving, no bypass, no third-party solver integration.
 
-## Human-cadence typing — and why
+## Typing rather than assigning — and why
 
-Fills use `locator.pressSequentially()` with small randomized inter-key delays (40–120ms)
-rather than `fill()`, for a purely mechanical reason: React/Vue-controlled inputs,
-autocomplete comboboxes, and rich-text editors frequently ignore programmatic value
-assignment and only update on real key events. Instant `fill()` breaks them.
+Fills use `locator.pressSequentially()` rather than `fill()`, for a purely mechanical
+reason: React/Vue-controlled inputs, autocomplete comboboxes, and rich-text editors
+frequently ignore programmatic value assignment and only update on real key events.
+Instant `fill()` breaks them. The fixture's `/nasty` page reproduces this exactly, and
+`fill.test.ts` asserts both halves of it.
 
 That is the whole rationale. The design deliberately does **not** include canvas/WebGL
 fingerprint spoofing, proxy or IP rotation, user-agent randomization, or timing models
 tuned against bot-detection heuristics. The browser identifies as what it is.
+
+**On the delay between keystrokes.** This originally specified 40–120ms, described as
+"human cadence". That framing was wrong and the number was a guess. What makes hostile
+widgets work is that key events fire *at all*; the pacing only buys time for a debouncing
+widget to keep up. Measuring it showed the cost — the fill suite spent 76 seconds almost
+entirely asleep between keystrokes — so it is now **10–30ms**, and **0 for text over 120
+characters**, where an essay would otherwise cost a minute a field. The commit-on-key
+fixture still passes, which is the property that actually matters.
+
+Two control types opt out of typing entirely:
+
+- **`date`** holds a structured value, not text. Typing an ISO string into a segmented
+  date editor produces nothing; `fill()` is the only thing that sets it.
+- **`combobox`** (the div-based kind) has no value to set at all. It gets opened and an
+  option gets clicked, the same way a person would.
 
 ## Building a FormMap
 

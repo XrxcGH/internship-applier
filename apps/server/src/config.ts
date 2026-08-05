@@ -12,6 +12,23 @@ const Env = z.object({
   SERVER_PORT: z.coerce.number().int().positive().default(8787),
   WEB_PORT: z.coerce.number().int().positive().default(5173),
   DATABASE_PATH: z.string().default('./data/app.db'),
+
+  /**
+   * Where model calls go. See docs/14-model-access.md.
+   *
+   * `auto`      — use the Claude Code CLI if it is installed, else an API key, else
+   *               run with no model at all (everything except drafting and resume
+   *               extraction still works).
+   * `claude_cli` — spawn the user's own `claude` binary. Their subscription, their
+   *               credentials; this process never sees a token.
+   * `api`       — ANTHROPIC_API_KEY against the Anthropic API.
+   * `none`      — refuse model calls outright, with a clear message.
+   */
+  LLM_PROVIDER: z.enum(['auto', 'claude_cli', 'api', 'none']).default('auto'),
+  /** Override if the binary is not on PATH. */
+  CLAUDE_CLI_PATH: z.string().optional(),
+  /** Per-call ceiling. A hung CLI must not wedge a request forever. */
+  CLAUDE_CLI_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
 });
 
 const parsed = Env.safeParse(process.env);
@@ -36,6 +53,12 @@ export const config = {
 
   web: {
     origin: `http://127.0.0.1:${env.WEB_PORT}`,
+  },
+
+  llm: {
+    provider: env.LLM_PROVIDER,
+    cliPath: env.CLAUDE_CLI_PATH,
+    cliTimeoutMs: env.CLAUDE_CLI_TIMEOUT_MS,
   },
 
   paths: {

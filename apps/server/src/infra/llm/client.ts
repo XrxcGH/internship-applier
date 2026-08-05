@@ -39,7 +39,7 @@ export class MissingApiKeyError extends Error {
   constructor() {
     super(
       'No Anthropic API key configured. Add one in Settings, or set ANTHROPIC_API_KEY for ' +
-        'development. Resume extraction and answer drafting need it; everything else works without.',
+        'development. Resume extraction and answer drafting need it; everything else works without it.',
     );
     this.name = 'MissingApiKeyError';
   }

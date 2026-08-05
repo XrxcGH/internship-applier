@@ -37,6 +37,30 @@ export default tseslint.config(
     },
   },
   {
+    /**
+     * `formMap.ts` needs DOM types for the scanner it ships into the browser, and a
+     * `/// <reference lib="dom" />` makes those globals visible to the WHOLE server
+     * program — so TypeScript would no longer object to `document` in, say, a route
+     * handler, and the mistake would surface only as a runtime crash.
+     *
+     * This puts the guard back where the type system stopped providing one. The scanner
+     * itself is exempted below, since running in the page is its entire job.
+     */
+    files: ['apps/server/src/**/*.ts'],
+    ignores: ['apps/server/src/core/filling/formMap.ts'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        ...['document', 'window', 'navigator', 'localStorage', 'HTMLElement', 'CSS'].map(
+          (name) => ({
+            name,
+            message: `${name} does not exist on the server. Browser-side code belongs in a function passed to page.evaluate().`,
+          }),
+        ),
+      ],
+    },
+  },
+  {
     // G4 guard: nothing in the form-filling module may ever click a submit control.
     // See docs/07-form-automation.md. This rule is a release gate, not a style preference.
     files: ['apps/server/src/core/filling/**/*.ts'],

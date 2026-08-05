@@ -54,7 +54,9 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { path: string } }>('/api/profile/reviewed/:path', async (req, reply) => {
     const p = getProfile();
     if (!p) {
-      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'No profile.' } });
+      return reply
+        .code(404)
+        .send({ error: { code: 'NOT_FOUND', message: 'No profile yet. Upload a resume first.' } });
     }
     const target = decodeURIComponent(req.params.path);
     return saveProfile({ ...p, needsReview: p.needsReview.filter((f) => f !== target) });

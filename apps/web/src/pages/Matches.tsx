@@ -87,7 +87,7 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
   const act = useCallback(
     async (action: 'approved' | 'skipped' | 'saved', reason?: string, tags: string[] = []) => {
       if (!selected) return;
-      setBusy(action);
+      setBusy(action === 'approved' ? 'Approving' : action === 'saved' ? 'Saving' : 'Skipping');
       try {
         const r = await decide(selected, action, reason, tags);
         if (action === 'approved' && r.applicationId) setApproved((n) => n + 1);
@@ -110,7 +110,7 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
   const reject = useCallback(
     async (tag: string, label: string) => {
       if (!selected) return;
-      setBusy('rejected');
+      setBusy('Rejecting');
       try {
         await decide(selected, 'rejected', label, [tag]);
         setRows((prev) => {
@@ -204,7 +204,7 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
         <Button
           size="sm"
           onClick={() => {
-            setBusy('recompute');
+            setBusy('Recomputing');
             void recompute()
               .then(load)
               .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -221,7 +221,7 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
       {/* Approvals accumulate without interrupting triage — the link is there when wanted. */}
       {approved > 0 && (
         <div className="u-tint-verified mb-6 flex flex-wrap items-center justify-between gap-3 rounded px-4 py-3">
-          <span className="text-dim text-[0.9375rem]">
+          <span className="text-dim text-[1rem]">
             {approved === 1 ? '1 application created' : `${approved} applications created`}. Answers
             are waiting for your review.
           </span>
@@ -264,21 +264,21 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
                     />
                   )}
                   <div className="flex items-baseline justify-between gap-2">
-                    <span className="truncate text-[0.9375rem]">{m.title}</span>
+                    <span className="truncate text-[1rem]">{m.title}</span>
                     <span className="u-data text-faint shrink-0 text-[0.75rem]">{m.score}</span>
                   </div>
-                  <div className="text-dim mt-0.5 truncate text-[0.8125rem]">{m.company}</div>
+                  <div className="text-dim mt-0.5 truncate text-[0.9375rem]">{m.company}</div>
                   <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1">
                     <span
-                      className="u-data text-[0.625rem] tracking-widest uppercase"
+                      className="u-data text-[0.6875rem] tracking-widest uppercase"
                       style={{ color: badge.color }}
                     >
                       {badge.label}
                     </span>
-                    <span className="u-data text-faint text-[0.6875rem]">{locationLabel(m)}</span>
+                    <span className="u-data text-faint text-[0.75rem]">{locationLabel(m)}</span>
                     {days !== null && (
                       <span
-                        className="u-data text-[0.6875rem]"
+                        className="u-data text-[0.75rem]"
                         style={{ color: days < 7 ? 'var(--redline)' : 'var(--ink-faint)' }}
                       >
                         {days < 0 ? 'closed' : `${days}d left`}
@@ -306,7 +306,7 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
                     <span>{detail.posting.positionType ?? 'type not stated'}</span>
                     <span>{detail.posting.atsVendor}</span>
                   </dl>
-                  <p className="mt-5 max-w-[62ch] text-[0.9375rem] leading-relaxed">
+                  <p className="mt-5 u-prose text-[1rem] leading-relaxed">
                     {detail.match.rationale}
                   </p>
                 </div>
@@ -321,15 +321,15 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
 
               <Section n="03" title={`Fit — ${detail.match.score}/100`} step={5}>
                 <ScoreBreakdownBars breakdown={detail.match.breakdown} />
-                <p className="text-faint mt-4 max-w-[58ch] text-[0.8125rem] italic">
-                  This score only orders the queue. It never filters anything out.
+                <p className="text-faint mt-4 u-prose text-[0.9375rem] italic">
+                  This score only orders the queue. It <strong>never</strong> filters anything out.
                 </p>
               </Section>
 
               <Section n="04" title="Your call" step={6}>
                 {rejecting ? (
                   <div>
-                    <p className="text-dim mb-3 text-[0.9375rem]">Why not this one?</p>
+                    <p className="text-dim mb-3 text-[1rem]">Why not this one?</p>
                     <div className="flex flex-wrap gap-2">
                       {REJECT_REASONS.map((r) => (
                         <Button key={r.tag} onClick={() => void reject(r.tag, r.label)}>
@@ -359,9 +359,9 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
                         Open posting ↗
                       </a>
                     </div>
-                    <p className="text-faint mt-4 max-w-[60ch] text-[0.8125rem]">
+                    <p className="text-faint mt-4 u-prose text-[0.9375rem]">
                       Approving creates an application you review at gate G3. It does not submit
-                      anything — you do that yourself, on the real page.
+                      anything — you do that <em>yourself</em>, on the real page.
                     </p>
                   </>
                 )}
@@ -371,7 +371,7 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
                 <summary className="u-eyebrow hover:text-ink cursor-pointer transition-colors">
                   Full job description
                 </summary>
-                <div className="text-dim mt-4 max-w-[68ch] text-[0.875rem] leading-relaxed whitespace-pre-wrap">
+                <div className="text-dim mt-4 u-prose text-[0.9375rem] leading-relaxed whitespace-pre-wrap">
                   {detail.posting.descriptionText.slice(0, 8000)}
                 </div>
               </details>

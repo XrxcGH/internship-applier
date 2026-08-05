@@ -109,7 +109,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <Summary label="Projects" n={profile.projects.length} />
               <Summary label="Skills" n={profile.skills.length} />
             </dl>
-            <p className="text-faint mt-4 text-[0.8125rem] italic">
+            <p className="text-faint mt-4 text-[0.9375rem] italic">
               Full section-by-section editing arrives with the review queue in M4. For now, correct
               the identity fields here and the eligibility facts below.
             </p>
@@ -127,7 +127,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       {step === 'facts' && profile && (
         <>
           <Section n="03" title="What a resume never says" step={3}>
-            <p className="text-dim mb-6 max-w-[60ch] text-[0.9375rem]">
+            <p className="text-dim mb-6 u-prose text-[1rem]">
               Eligibility turns on these six facts, and none of them appear on a resume. Each one is
               stored encrypted on this machine.
             </p>
@@ -319,7 +319,7 @@ function UploadStep({
         <span className="u-data text-dim block">
           {filename ?? 'drop a file, or click to choose'}
         </span>
-        <span className="text-faint mt-2 block text-[0.8125rem]">PDF, DOCX, TXT, or Markdown</span>
+        <span className="text-faint mt-2 block text-[0.9375rem]">PDF, DOCX, TXT, or Markdown</span>
       </button>
       <input
         ref={inputRef}
@@ -331,9 +331,9 @@ function UploadStep({
           if (f) void handle(f);
         }}
       />
-      <p className="text-faint mt-5 max-w-[60ch] text-[0.8125rem]">
-        PDFs are read directly by the model rather than through a text-extraction library. It
-        handles scans and multi-column layouts better. The file stays on this machine.
+      <p className="text-faint mt-5 u-prose text-[0.9375rem]">
+        PDFs are read directly by the model rather than through a text-extraction library. The model
+        handles scans and multi-column layouts better. <em>The file stays on this machine.</em>
       </p>
     </Section>
   );
@@ -342,7 +342,7 @@ function UploadStep({
 function Summary({ label, n }: { label: string; n: number }) {
   return (
     <div className="flex items-baseline justify-between gap-6">
-      <dt className="text-dim text-[0.9375rem]">{label}</dt>
+      <dt className="text-dim text-[1rem]">{label}</dt>
       <dd className="u-data" style={{ color: n > 0 ? 'var(--ink)' : 'var(--ink-faint)' }}>
         {n === 0 ? 'none found' : `${n} entr${n === 1 ? 'y' : 'ies'}`}
       </dd>

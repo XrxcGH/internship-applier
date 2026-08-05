@@ -38,7 +38,7 @@ export function Nav({
 
   return (
     <nav className="u-nav sticky top-0 z-30">
-      <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 sm:px-10">
+      <div className="mx-auto flex max-w-[110rem] items-center gap-6 px-5 sm:px-8 lg:px-12">
         <button
           onClick={() => onNavigate('home')}
           className="u-eyebrow hover:text-ink shrink-0 py-3 transition-colors"
@@ -62,7 +62,7 @@ export function Nav({
         </div>
 
         <span
-          className="u-data hidden shrink-0 items-center gap-2 py-3 text-[0.6875rem] tracking-widest uppercase sm:flex"
+          className="u-data hidden shrink-0 items-center gap-2 py-3 text-[0.75rem] tracking-widest uppercase sm:flex"
           style={{ color: profileConfirmed ? 'var(--verified)' : 'var(--caution)' }}
         >
           <span
@@ -91,13 +91,9 @@ export function RunningHead({
       <div className="flex items-baseline justify-between gap-4">
         <span className="u-eyebrow">{gate ? `gate ${gate}` : 'no gate pending'}</span>
       </div>
-      <h1 className="u-display mt-3 text-5xl sm:text-6xl">{section}</h1>
-      <hr className="u-rule a-draw a-step-2 mt-5" />
-      {lede && (
-        <p className="text-dim a-rise a-step-3 mt-5 max-w-[64ch] text-[1.0625rem] leading-relaxed">
-          {lede}
-        </p>
-      )}
+      <h1 className="u-display mt-3 text-[3.25rem] leading-[1.02] sm:text-[4rem]">{section}</h1>
+      <hr className="u-rule a-draw a-step-2 mt-6" />
+      {lede && <p className="text-dim u-prose a-rise a-step-3 mt-6 text-[1.125rem]">{lede}</p>}
     </header>
   );
 }
@@ -133,8 +129,8 @@ export function Section({
 
 export function Field({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-6 py-2">
-      <span className="text-dim text-[0.9375rem]">{label}</span>
+    <div className="flex items-baseline justify-between gap-6 py-2.5">
+      <span className="text-dim text-[1rem]">{label}</span>
       <span className="u-data text-right" style={tone ? { color: tone } : undefined}>
         {value}
       </span>
@@ -142,10 +138,22 @@ export function Field({ label, value, tone }: { label: string; value: string; to
   );
 }
 
-/** Standard page frame: consistent max-width, gutters, and vertical rhythm. */
+/**
+ * Standard page frame.
+ *
+ * The frame is wide; the MEASURE is not. Reading comfort caps out somewhere around 70
+ * characters a line, so a prose page set to the full width of a laptop is genuinely
+ * harder to read than a narrow one. The fix is not a narrow page with empty margins,
+ * it is a wide page whose prose blocks carry `u-prose` and whose panels sit side by
+ * side. Widths are in rem, so they scale with the root type size.
+ */
 export function Page({ children, wide }: { children: ReactNode; wide?: boolean }) {
   return (
-    <div className={`mx-auto px-6 py-12 sm:px-10 sm:py-16 ${wide ? 'max-w-6xl' : 'max-w-3xl'}`}>
+    <div
+      className={`mx-auto px-5 py-10 sm:px-8 sm:py-14 lg:px-12 ${
+        wide ? 'max-w-[110rem]' : 'max-w-[78rem]'
+      }`}
+    >
       {children}
     </div>
   );

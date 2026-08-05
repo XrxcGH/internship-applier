@@ -3,6 +3,10 @@
 @import '@fontsource/instrument-serif/400.css';
 @import '@fontsource/instrument-serif/400-italic.css';
 @import '@fontsource-variable/newsreader';
+/* The italic axis is a separate file. Without it the browser synthesises a slant by
+   shearing the upright, which is why emphasis looked muddy. Newsreader's drawn italic
+   is a different letterform, not a tilted roman, and it is worth the 36 KB. */
+@import '@fontsource-variable/newsreader/wght-italic.css';
 @import '@fontsource/ibm-plex-mono/400.css';
 @import '@fontsource/ibm-plex-mono/500.css';
 @import 'tailwindcss';
@@ -102,9 +106,15 @@
 
 /* ─────────────────────────────────────────────── base */
 
+/* Everything in this stylesheet is sized in rem, including the page max-widths and
+   Tailwind's spacing scale, so the root size is the single dial for the whole app.
+   112.5% of the browser default lands on 18px while still respecting a reader who has
+   changed their own default; a hard `18px` here would override that and it is the one
+   setting people with low vision actually rely on. */
 html {
   color-scheme: dark light;
   scroll-behavior: smooth;
+  font-size: 112.5%;
 }
 
 body {
@@ -112,8 +122,8 @@ body {
   background-color: var(--paper);
   color: var(--ink);
   font-family: var(--font-body);
-  font-size: 17px;
-  line-height: 1.65;
+  font-size: 1rem;
+  line-height: 1.7;
   font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   min-height: 100dvh;
@@ -154,6 +164,28 @@ body {
   scrollbar-width: thin;
 }
 
+/* ─────────────────────────────────────────────── emphasis
+   Emphasis has to mean something, so it gets exactly two jobs. Bold marks the word a
+   reader must not miss (usually a guarantee or a limit). Italic marks a term being
+   named rather than used, and the asides. Anything more and both stop registering. */
+
+strong,
+b {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+em,
+i {
+  font-style: italic;
+}
+
+/* Emphasis inside already-dimmed prose has to lift, or it reads as noise. */
+.text-dim strong,
+.text-faint strong {
+  color: var(--ink);
+}
+
 /* ─────────────────────────────────────────────── semantic type
    Mono is semantic, not decorative: if it's set in mono it came from somewhere else
    and can be traced to a source. */
@@ -167,22 +199,29 @@ body {
 
 .u-eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.16em;
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--ink-faint);
 }
 
 .u-data {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-variant-numeric: tabular-nums;
+}
+
+/* Body prose. Caps the measure at a readable line length so widening the page frame
+   spreads the LAYOUT out rather than stretching sentences past comfort. */
+.u-prose {
+  max-width: 68ch;
+  line-height: 1.75;
 }
 
 /** Verbatim text quoted from a source — a job description, a form label, the user. */
 .u-quote {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   line-height: 1.7;
   color: var(--ink-dim);
   border-left: 2px solid var(--accent-dim);
@@ -247,11 +286,11 @@ body {
 .u-nav-link {
   position: relative;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-faint);
-  padding: 0.5rem 0.125rem;
+  padding: 0.625rem 0.125rem;
   transition:
     color 0.16s ease,
     opacity 0.16s ease;

@@ -22,7 +22,7 @@ const RULE_LABEL: Record<string, string> = {
   age_minimum: 'Minimum age',
   education_level: 'Education level',
   graduation_window: 'Graduation window',
-  enrollment: 'Enrolment',
+  enrollment: 'Enrollment',
   work_authorization: 'Work authorization',
   citizenship: 'Citizenship / clearance',
   location: 'Location',
@@ -60,15 +60,15 @@ export function RequirementChecklist({
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className="text-[0.9375rem]">{RULE_LABEL[r.rule] ?? r.rule}</span>
+                <span className="text-[1rem]">{RULE_LABEL[r.rule] ?? r.rule}</span>
                 <span
-                  className="u-data text-[0.6875rem] tracking-widest uppercase"
+                  className="u-data text-[0.75rem] tracking-widest uppercase"
                   style={{ color: mark.color }}
                 >
                   {mark.label}
                 </span>
               </div>
-              <p className="text-dim mt-0.5 text-[0.875rem]">{r.because}</p>
+              <p className="text-dim mt-0.5 text-[0.9375rem]">{r.because}</p>
               {quote && (
                 <blockquote className="u-quote mt-2 py-1">
                   {quote.length > 260 ? `${quote.slice(0, 260)}…` : quote}
@@ -109,7 +109,7 @@ export function ScoreBreakdownBars({
         return (
           <li key={k}>
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-[0.875rem]">{DIMENSION_LABEL[k]}</span>
+              <span className="text-[0.9375rem]">{DIMENSION_LABEL[k]}</span>
               <span className="u-data text-faint text-[0.75rem]">{Math.round(v * 100)}</span>
             </div>
             <div className="bg-rule/50 mt-1 h-px w-full">

@@ -15,6 +15,7 @@ import {
 import { Field, Page, RunningHead, Section } from '../components/Chrome';
 import { Badge, Button, Empty, Notice, TextArea } from '../components/Controls';
 import { AnswerReview } from '../components/AnswerReview';
+import { FillReview } from '../components/FillReview';
 
 /** Questions worth having on hand — most applications ask some version of these. */
 const COMMON_QUESTIONS = [
@@ -55,8 +56,12 @@ export function Applications({ onBack }: { onBack: () => void }) {
       <RunningHead
         section="Applications"
         gate="G3"
-        lede="Everything you approved at the queue. Each one needs its questions answered and every
-              answer read before anything gets filled in."
+        lede={
+          <>
+            Everything you approved in the queue. Each one needs its questions answered and every
+            answer <em>read</em> before anything gets filled in.
+          </>
+        }
       />
 
       {error && <Notice tone="redline">{error}</Notice>}
@@ -85,7 +90,7 @@ export function Applications({ onBack }: { onBack: () => void }) {
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <p className="u-eyebrow truncate">{a.company}</p>
-                      <p className="mt-1.5 text-[1.0625rem] leading-snug">{a.title}</p>
+                      <p className="mt-1.5 text-[1.125rem] leading-snug">{a.title}</p>
                     </div>
                     {a.blockedCount > 0 ? (
                       <Badge tone="redline">{a.blockedCount} flagged</Badge>
@@ -181,16 +186,30 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
             ? 'no questions yet'
             : `${approved} of ${app.answers.length} approved`}
         </Badge>
-        {!app.canDraft && <Badge tone="caution">no API key — write answers yourself</Badge>}
+        {app.canDraft ? (
+          <Badge tone="verified">{app.modelAccess.description}</Badge>
+        ) : (
+          <Badge tone="caution">no model — write answers yourself</Badge>
+        )}
       </div>
 
       {error && <Notice tone="redline">{error}</Notice>}
 
+      {/* A user who cannot draft needs to know the rest of the tool still works, or they
+          will reasonably conclude it is broken and stop. */}
+      {!app.canDraft && (
+        <Notice tone="caution">
+          <strong>Drafting is unavailable.</strong> {app.modelAccess.description} You can still
+          write each answer yourself: it gets fact-checked against your profile, flagged for
+          machine-sounding phrasing, and measured against your voice exactly the same way.
+        </Notice>
+      )}
+
       <Section n="01" title="Questions from the form" step={3}>
         {app.answers.length === 0 ? (
           <Empty title="No questions added yet.">
-            Open the application page and paste each free-text question below. Until form reading
-            lands, this is how questions get in.
+            Paste each free-text question from the application below. Reading them off the page
+            directly is not something this tool does yet.
           </Empty>
         ) : (
           <div className="space-y-6">
@@ -231,7 +250,7 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
           >
             Add question
           </Button>
-          <span className="text-faint text-[0.8125rem]">
+          <span className="text-faint text-[0.9375rem]">
             If you have answered it before, the previous answer is pulled in automatically.
           </span>
         </div>
@@ -243,7 +262,7 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
               <button
                 key={q}
                 onClick={() => setNewQuestion(q)}
-                className="u-card-flat hover:border-rule-strong text-dim hover:text-ink rounded-full px-3 py-1.5 text-[0.8125rem] transition-colors"
+                className="u-card-flat hover:border-rule-strong text-dim hover:text-ink rounded-full px-3 py-1.5 text-[0.9375rem] transition-colors"
               >
                 {q}
               </button>
@@ -252,26 +271,23 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
       </Section>
 
-      <Section n="03" title="What happens next" step={5}>
-        <div className="u-card-flat px-5 py-5">
-          <p className="text-dim text-[0.9375rem]">
-            Once every answer is approved, this tool can fill the form for you. It stops at the
-            submit button, every time. You read the filled page and click Submit yourself.
-          </p>
-          <p className="text-faint mt-3 text-[0.9375rem]">
-            Sensitive fields are never auto-filled: government IDs, bank details, passwords,
-            demographic questions, and anything you have to attest to.
-          </p>
-          <div className="mt-4">
-            <Button
-              variant="primary"
-              disabled
-              title="Form filling arrives in M6. Nothing is submitted for you, ever."
-            >
-              Fill the form (M6)
-            </Button>
-          </div>
-        </div>
+      <Section n="03" title="Fill the form" step={5}>
+        <p className="text-faint u-prose mb-5 text-[1rem]">
+          Sensitive fields are <em>never</em> auto-filled: government IDs, bank details, passwords,
+          demographic questions, and anything you have to attest to. Each one gets listed for you
+          with the reason.
+        </p>
+        <FillReview
+          applicationId={app.id}
+          applyUrl={app.applyUrl}
+          canFill={app.answers.length > 0 && ready}
+          blockedReason={
+            app.answers.length === 0
+              ? 'Add the form’s questions above and approve an answer for each one first.'
+              : `${app.answers.length - approved} of ${app.answers.length} answers still need your approval (gate G3).`
+          }
+          onChanged={refresh}
+        />
       </Section>
     </Page>
   );

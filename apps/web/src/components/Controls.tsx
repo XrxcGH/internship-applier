@@ -53,14 +53,14 @@ export function TextField({
   return (
     <label className="block py-3">
       <span className="flex items-baseline justify-between gap-3">
-        <span className="text-[0.9375rem]">{label}</span>
+        <span className="text-[1rem]">{label}</span>
         {flagged && (
-          <span className="u-data text-caution text-[0.6875rem] tracking-widest uppercase">
+          <span className="u-data text-caution text-[0.75rem] tracking-widest uppercase">
             check this
           </span>
         )}
       </span>
-      {hint && <span className="text-faint mt-1 block text-[0.8125rem] leading-snug">{hint}</span>}
+      {hint && <span className="text-faint mt-1 block text-[0.9375rem] leading-snug">{hint}</span>}
       <input
         {...rest}
         className={`u-data mt-2 w-full rounded-t border-b bg-transparent px-1 py-2 outline-none transition-colors ${
@@ -83,7 +83,7 @@ export function TextArea({
   return (
     <label className="block">
       {label && <span className="u-eyebrow mb-2 block">{label}</span>}
-      {hint && <span className="text-faint mb-2 block text-[0.8125rem]">{hint}</span>}
+      {hint && <span className="text-faint mb-2 block text-[0.9375rem]">{hint}</span>}
       <textarea
         {...rest}
         rows={rows}
@@ -108,14 +108,14 @@ export function SelectField({
   return (
     <label className="block py-3">
       <span className="flex items-baseline justify-between gap-3">
-        <span className="text-[0.9375rem]">{label}</span>
+        <span className="text-[1rem]">{label}</span>
         {flagged && (
-          <span className="u-data text-caution text-[0.6875rem] tracking-widest uppercase">
+          <span className="u-data text-caution text-[0.75rem] tracking-widest uppercase">
             check this
           </span>
         )}
       </span>
-      {hint && <span className="text-faint mt-1 block text-[0.8125rem] leading-snug">{hint}</span>}
+      {hint && <span className="text-faint mt-1 block text-[0.9375rem] leading-snug">{hint}</span>}
       <select
         {...rest}
         className={`u-data bg-raised text-ink mt-2 w-full rounded border px-2.5 py-2 outline-none transition-colors ${
@@ -136,9 +136,7 @@ export function Notice({
   children: ReactNode;
 }) {
   return (
-    <div className={`u-tint-${tone} text-dim my-4 rounded px-4 py-3 text-[0.9375rem]`}>
-      {children}
-    </div>
+    <div className={`u-tint-${tone} text-dim my-4 rounded px-4 py-3 text-[1rem]`}>{children}</div>
   );
 }
 
@@ -155,7 +153,7 @@ export function Badge({
   // nothing at all.
   return (
     <span
-      className={`u-data inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.6875rem] tracking-widest uppercase ${
+      className={`u-data inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.75rem] tracking-widest uppercase ${
         tone === 'neutral' ? 'border-rule text-faint' : ''
       }`}
       style={
@@ -178,7 +176,7 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
   return (
     <div className="u-card-flat px-6 py-12 text-center">
       <p className="text-dim">{title}</p>
-      {children && <div className="text-faint mt-3 text-[0.9375rem]">{children}</div>}
+      {children && <div className="text-faint mt-3 text-[1rem]">{children}</div>}
     </div>
   );
 }
