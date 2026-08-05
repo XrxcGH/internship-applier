@@ -17,8 +17,8 @@
  *   6. `placeholder`                             (weakest; often an example, not a name)
  *
  * Extraction runs inside the page rather than over a serialized DOM, because resolving a
- * label means walking the tree and reading computed visibility, and shipping the whole
- * document back to Node to do that would be slower and lossier.
+ * label means walking the tree — through open shadow roots — and reading computed style,
+ * and shipping the whole document back to Node to do that would be slower and lossier.
  */
 import type { Frame, Page } from 'playwright';
 import type { FormField } from '@ia/shared';
@@ -51,20 +51,34 @@ const SCAN = (): unknown => {
   const text = (el: Element | null): string =>
     (el?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
 
+  /**
+   * The tree an element's ids are scoped to: its shadow root, or the document.
+   *
+   * Strategies 1 and 2 used to query `document` directly, which is wrong in both
+   * directions for a control inside a shadow root. It cannot see the label sitting beside
+   * it in the same shadow root, so the two strongest strategies silently returned nothing
+   * — and ids are scoped per root, so a light-DOM element that happens to share the id
+   * could be returned instead, giving the field a completely unrelated label at the
+   * highest confidence the resolver has.
+   */
+  const rootOf = (el: HTMLElement): Document | ShadowRoot =>
+    el.getRootNode() as Document | ShadowRoot;
+
   const labelFor = (el: HTMLElement): string => {
+    const root = rootOf(el);
     // 1. aria-labelledby
     const by = el.getAttribute('aria-labelledby');
     if (by) {
       const joined = by
         .split(/\s+/)
-        .map((id) => text(document.getElementById(id)))
+        .map((id) => text(root.querySelector(`#${CSS.escape(id)}`)))
         .filter(Boolean)
         .join(' ');
       if (joined) return joined;
     }
     // 2. <label for> / wrapping label
     if (el.id) {
-      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      const l = root.querySelector(`label[for="${CSS.escape(el.id)}"]`);
       if (l && text(l)) return text(l);
     }
     const wrapping = el.closest('label');
@@ -118,7 +132,7 @@ const SCAN = (): unknown => {
    */
   const optionLabelFor = (el: HTMLElement): string => {
     if (el.id) {
-      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      const l = rootOf(el).querySelector(`label[for="${CSS.escape(el.id)}"]`);
       if (l) return text(l);
     }
     const wrapping = el.closest('label');
@@ -142,11 +156,39 @@ const SCAN = (): unknown => {
     if (by) {
       const parts = by
         .split(/\s+/)
-        .map((id) => text(document.getElementById(id)))
+        .map((id) => text(rootOf(el).querySelector(`#${CSS.escape(id)}`)))
         .filter(Boolean);
       if (parts.length) return parts.join(' ');
     }
     return '';
+  };
+
+  /**
+   * Is this control really on screen?
+   *
+   * A bounding box alone was wrong in both directions, and each direction cost something
+   * different.
+   *
+   * `visibility: hidden` and `opacity: 0` keep a non-zero rect, so those fields were
+   * classified, planned, and then spent the full five-second wait before failing — noise
+   * in a report whose entire value is that its warnings mean something.
+   *
+   * The other direction is worse. A field parked off-screen at `left: -9999px` has a
+   * perfectly good rect and Playwright considers it visible, so the tool typed into it.
+   * That is the classic honeypot, and honeypots are deliberately given attractive names
+   * — "email", "website" — precisely so a classifier recognizes them. Filling one is how
+   * a form decides you are a bot.
+   */
+  const isVisible = (el: HTMLElement, rect: DOMRect): boolean => {
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+    if (style.display === 'none') return false;
+    if (Number(style.opacity) === 0) return false;
+    // Off to the left or above the document entirely. A generous margin, because a field
+    // in a horizontal carousel or a not-yet-opened accordion is legitimately off-viewport.
+    if (rect.right < -500 || rect.bottom < -500) return false;
+    return true;
   };
 
   /** A selector that will still find this element later. */
@@ -163,8 +205,13 @@ const SCAN = (): unknown => {
       const pair = `[name="${CSS.escape(name)}"][value="${CSS.escape(value)}"]`;
       if (document.querySelectorAll(pair).length === 1) return pair;
     }
-    // Fall back to position among all controls. Verified by label read-back at fill time,
-    // so a shifted index is caught rather than silently filling the wrong box.
+    // Fall back to position among all controls, in the composed order `collect` walks —
+    // which is the order Playwright's `.nth()` resolves in.
+    //
+    // This is the weakest locator here and it has no safety net. The comment that used to
+    // sit on this line claimed a label read-back at fill time caught a shifted index;
+    // there is no such read-back anywhere in fill.ts, which reads the value only. A wrong
+    // element that accepts what was typed is reported as "ok".
     return `__index__${String(index)}`;
   };
 
@@ -191,11 +238,28 @@ const SCAN = (): unknown => {
     ':not([type=image]):not([type=reset]), ' +
     'textarea, select, [role=combobox], [contenteditable=true]';
 
-  // Includes shadow roots, which Playwright can reach but querySelectorAll cannot.
-  const collect = (root: Document | ShadowRoot, out: HTMLElement[]): void => {
-    out.push(...Array.from(root.querySelectorAll<HTMLElement>(SELECTOR)));
-    for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
+  /**
+   * Every fillable control, in COMPOSED ORDER — the order Playwright will see them in.
+   *
+   * This used to collect a root's light-DOM matches first and only then descend into its
+   * shadow roots, which produced a different ordering from the one Playwright's selector
+   * engine produces when it pierces open shadow roots in tree order. Measured on a page
+   * with one shadow-hosted input among three light-DOM controls, the scanner produced
+   * [light1, light2, image, shadowInput] and `.nth(0..3)` produced
+   * [shadowInput, light1, light2, image] — so on any frame containing a shadow-DOM
+   * control, every index locator in that frame addressed the wrong element.
+   *
+   * That mattered more than it sounds: there is no label re-verification at fill time (a
+   * comment below used to promise one), so a wrong element that accepts the typed value
+   * is reported "ok". Walking once, descending at each host's own position, keeps the two
+   * orderings in step.
+   */
+  const collect = (node: Document | ShadowRoot | Element, out: HTMLElement[]): void => {
+    for (const child of Array.from(node.children ?? [])) {
+      const el = child as HTMLElement;
+      if (el.matches(SELECTOR)) out.push(el);
       if (el.shadowRoot) collect(el.shadowRoot, out);
+      collect(el, out);
     }
   };
 
@@ -231,7 +295,7 @@ const SCAN = (): unknown => {
         control === 'select' || control === 'multiselect'
           ? Array.from(input.options ?? []).map((o) => ({ value: o.value, label: o.text }))
           : undefined,
-      visible: rect.width > 0 && rect.height > 0,
+      visible: isVisible(el, rect),
     };
   });
 };

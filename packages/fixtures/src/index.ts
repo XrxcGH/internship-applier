@@ -161,7 +161,18 @@ const NASTY = page(
     <label id="lbl-why">Why do you want this internship?</label>
     <div id="f-why" contenteditable="true" role="textbox" aria-labelledby="lbl-why"></div>
 
-    <!-- 12. Nested iframe carrying more of the form. -->
+    <!-- 12. A honeypot and two invisible fields. All three keep a non-zero bounding box,
+         so a rect-only visibility test passed them: the honeypot got filled (which is
+         exactly how a form decides you are a bot — note the attractive name) and the
+         other two each burned the full five-second wait before failing. -->
+    <label for="f-website">Website</label>
+    <input id="f-website" name="website" style="position:absolute; left:-9999px">
+    <label for="f-hidden">Middle name</label>
+    <input id="f-hidden" name="middle_name" style="visibility:hidden">
+    <label for="f-clear">Referral code</label>
+    <input id="f-clear" name="referral" style="opacity:0">
+
+    <!-- 13. Nested iframe carrying more of the form. -->
     <iframe id="extra" src="/framed" title="Additional questions" width="400" height="200"></iframe>
 
     <button type="submit" id="submit-application">Submit application</button>
@@ -219,6 +230,10 @@ const FRAMED = page(
 const WIZARD = page(
   'Multi-step — Fixture',
   /* html */ `
+  <!-- The global header every career site has. Its "Sign in" button used to be enough,
+       on its own, to make the run stop and report a login wall — and because the same
+       detector re-runs on continue, that verdict could never be cleared. -->
+  <header><a href="/">Careers</a> <button type="button" id="hdr-signin">Sign in</button></header>
   <form id="wizard">
     <div data-step="1">
       <label for="w-first">First name</label><input id="w-first" name="first_name">

@@ -80,6 +80,19 @@ describe('stopping instead of working around', () => {
     await session.page.goto(`${fixture.url}/simple`);
     expect(await detectIntervention(session.page)).toBeNull();
   }, 60_000);
+
+  /**
+   * A "Sign in" button in the global header is on practically every career site, and it
+   * used to be sufficient on its own — Playwright's has-text is a case-insensitive
+   * substring match. Worse, the same detector runs again on continue, so the run sat in
+   * awaiting_user forever on a page with no login wall at all. A password field is now
+   * required, and button text is not evidence of anything.
+   */
+  it('is not fooled by a sign-in button in the page header', async () => {
+    await session.page.goto(`${fixture.url}/wizard`);
+    expect(await session.page.locator('#hdr-signin').count()).toBe(1);
+    expect(await detectIntervention(session.page)).toBeNull();
+  }, 60_000);
 });
 
 describe('gate G4', () => {
