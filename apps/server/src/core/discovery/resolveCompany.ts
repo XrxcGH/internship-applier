@@ -25,7 +25,11 @@ const PROBES: Array<{
   },
   {
     source: 'lever',
-    url: (s) => `https://api.lever.co/v0/postings/${s}?mode=json&limit=1`,
+    // No limit. The count is what the resolution sort ranks boards by, and limit=1
+    // capped every Lever board at a jobCount of 1 — so an almost-empty Greenhouse board
+    // outranked a Lever board with two hundred openings, and the number shown to the
+    // caller was wrong for every Lever result.
+    url: (s) => `https://api.lever.co/v0/postings/${s}?mode=json`,
     count: (d) => (Array.isArray(d) ? d.length : 0),
   },
   {

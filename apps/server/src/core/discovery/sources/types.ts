@@ -53,6 +53,29 @@ export interface JobSource {
   fetch(query: SourceQuery): Promise<SourceResult>;
 }
 
+/**
+ * Turns HTML entities back into the characters they stand for.
+ *
+ * Separate from stripHtml because order matters and the two are needed at different
+ * points. Greenhouse returns its job content ESCAPED — `&lt;p&gt;About the role&lt;/p&gt;`
+ * — so stripping tags first finds none to strip, and the decode afterwards puts the
+ * markup back as literal text. Every requirement parser and the model then read `<p>` and
+ * `<li>` as part of the job description, and the UI rendered them on screen.
+ */
+export function decodeEntities(html: string): string {
+  return (
+    html
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#0?39;|&apos;/gi, "'")
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&#(\d+);/g, (_, d: string) => String.fromCharCode(Number(d)))
+      // Ampersand last, so "&amp;lt;" does not become a tag.
+      .replace(/&amp;/gi, '&')
+  );
+}
+
 export function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')

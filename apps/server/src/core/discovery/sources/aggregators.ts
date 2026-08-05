@@ -163,7 +163,12 @@ export const usajobs: JobSource = {
     const keyword = encodeURIComponent(q.keywords?.join(' ') ?? 'intern');
     const url =
       `https://data.usajobs.gov/api/search?Keyword=${keyword}` +
-      `&ResultsPerPage=${Math.min(q.limit ?? 50, 100)}&WhoMayApply=student`;
+      `&ResultsPerPage=${Math.min(q.limit ?? 50, 100)}&HiringPath=student`;
+
+    // HiringPath, not WhoMayApply. WhoMayApply takes All/Public/Status; "student" is
+    // not one of them, so the filter was ignored and this source returned general
+    // federal vacancies rather than the Pathways postings it promises. Untested against
+    // the live API — it needs a key this machine does not have.
 
     const raw = await politeFetch(url, {
       isDocumentedApi: true,
@@ -216,7 +221,11 @@ export const githubList: JobSource = {
   requiresKey: false,
   isConfigured: () => true,
   async fetch(q: SourceQuery): Promise<SourceResult> {
-    const repo = q.board ?? 'SimplifyJobs/Summer2026-Internships';
+    // `??` only catches null and undefined. The run route declares board as a string
+    // with a default of '', so an omitted board arrives as an empty string and was
+    // used verbatim — producing a raw.githubusercontent.com URL with nothing where the
+    // repo goes. The sibling adapters all use a truthiness check for this reason.
+    const repo = q.board || 'SimplifyJobs/Summer2026-Internships';
     const url = `https://raw.githubusercontent.com/${repo}/dev/.github/scripts/listings.json`;
 
     let data: Array<Record<string, unknown>>;

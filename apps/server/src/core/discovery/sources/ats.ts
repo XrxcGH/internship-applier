@@ -19,6 +19,7 @@ import {
   parseYear,
 } from '../normalize';
 import {
+  decodeEntities,
   stripHtml,
   type JobSource,
   type NormalizedPosting,
@@ -88,7 +89,10 @@ export const greenhouse: JobSource = {
     const data = await fetchJson<{ jobs?: GhJob[] }>(url, { rps: 2 });
 
     const postings = (data.jobs ?? []).map((j) => {
-      const text = stripHtml(j.content ?? '');
+      // Greenhouse returns `content` HTML-escaped. Decoded first, or stripHtml finds no
+      // tags to strip and its own decode step reintroduces them as visible text.
+      const html = j.content ? decodeEntities(j.content) : '';
+      const text = stripHtml(html);
       return build(
         {
           externalId: String(j.id),
@@ -97,7 +101,7 @@ export const greenhouse: JobSource = {
           company: q.board!,
           title: j.title,
           atsVendor: 'greenhouse',
-          descriptionHtml: j.content ?? null,
+          descriptionHtml: html || null,
           postedAt: j.updated_at ?? null,
           locations: j.location?.name ? [parseLocation(j.location.name)] : [],
         },

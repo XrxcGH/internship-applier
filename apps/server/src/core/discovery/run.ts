@@ -6,7 +6,7 @@
  * everywhere" when we didn't, which is the failure mode that makes an automated search
  * tool untrustworthy — so degradation is always reported.
  */
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, or, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { db, schema } from '../../infra/db/client';
 import { logger } from '../../infra/logger';
@@ -220,31 +220,50 @@ export function listRuns(limit = 20): RunSummary[] {
 /** Adds a manually-pasted posting (docs/04 § Tier C). Returns its id. */
 export function saveManualPosting(posting: NormalizedPosting): string {
   const { unique } = dedupe([{ posting, source: 'manual:pasted' }]);
-  persist(unique);
-  return (
-    db
-      .select({ id: schema.jobPosting.id })
-      .from(schema.jobPosting)
-      .where(eq(schema.jobPosting.canonicalUrl, posting.canonicalUrl))
-      .all()[0]?.id ?? ''
-  );
+  // The id comes back from persist rather than a second lookup by URL. Now that
+  // persistence also matches on fingerprint, a pasted posting can merge into a row that
+  // was discovered under a different URL — and a URL lookup would find nothing and return
+  // an empty id for a posting that was saved perfectly well.
+  return persist(unique).ids[0] ?? '';
 }
 
 interface PersistResult {
   total: number;
   perSource: Map<string, number>;
+  /** The row id each entry ended up in, new or matched, in the order given. */
+  ids: string[];
 }
 
 function persist(unique: ReturnType<typeof dedupe>['unique']): PersistResult {
   const perSource = new Map<string, number>();
+  const ids: string[] = [];
   let total = 0;
 
   for (const entry of unique) {
     const p = entry.posting;
+    const fp = fingerprint(p);
+
+    /**
+     * Cross-run matching, which used to be stage 1 only.
+     *
+     * dedupe() applies all three stages WITHIN a run, but persistence compared against
+     * the database by canonical URL alone — so the same job found on Greenhouse in one
+     * run and Adzuna in the next was stored twice, each copy with its own match row and
+     * its own G2 decision to make. The fingerprint column and its index were written on
+     * every insert and read by nothing.
+     *
+     * The fingerprint (company + normalized title + primary city) is the same stage-2
+     * key, so this is the existing rule applied across runs rather than a new one.
+     */
     const existing = db
       .select({ id: schema.jobPosting.id })
       .from(schema.jobPosting)
-      .where(eq(schema.jobPosting.canonicalUrl, p.canonicalUrl))
+      .where(
+        or(
+          eq(schema.jobPosting.canonicalUrl, p.canonicalUrl),
+          eq(schema.jobPosting.fingerprint, fp),
+        ),
+      )
       .all();
 
     const now = new Date().toISOString();
@@ -255,6 +274,7 @@ function persist(unique: ReturnType<typeof dedupe>['unique']): PersistResult {
         .where(eq(schema.jobPosting.id, existing[0].id))
         .run();
       linkSources(existing[0].id, entry.sources, p.externalId);
+      ids.push(existing[0].id);
       continue;
     }
 
@@ -283,18 +303,19 @@ function persist(unique: ReturnType<typeof dedupe>['unique']): PersistResult {
         closesAt: p.closesAt,
         isOpen: true,
         atsVendor: p.atsVendor,
-        fingerprint: fingerprint(p),
+        fingerprint: fp,
         firstSeenAt: now,
         lastSeenAt: now,
       })
       .run();
 
     linkSources(id, entry.sources, p.externalId);
+    ids.push(id);
     total++;
     for (const s of entry.sources) perSource.set(s, (perSource.get(s) ?? 0) + 1);
   }
 
-  return { total, perSource };
+  return { total, perSource, ids };
 }
 
 /** Provenance: a merged posting keeps every source that saw it. */
