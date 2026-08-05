@@ -107,6 +107,7 @@ function Card({
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <select
+          aria-label={`Report a status change for ${app.title} at ${app.company}`}
           className="u-data bg-raised text-ink border-rule focus:border-accent rounded border px-2 py-1.5 outline-none"
           value=""
           disabled={busy}
@@ -128,6 +129,7 @@ function Card({
           href={app.applyUrl}
           target="_blank"
           rel="noreferrer noopener"
+          aria-label={`Open the posting for ${app.title} at ${app.company}`}
           className="u-data text-faint hover:text-ink px-1 py-1 transition-colors"
         >
           ↗

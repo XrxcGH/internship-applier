@@ -98,6 +98,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           }}
           onError={setError}
           setBusy={setBusy}
+          busy={busy}
         />
       )}
 
@@ -138,8 +139,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           </Section>
 
           <div className="flex gap-3">
-            <Button onClick={() => void persist()}>Save</Button>
-            <Button variant="primary" onClick={() => setStep('facts')}>
+            <Button disabled={busy !== null} onClick={() => void persist()}>
+              Save
+            </Button>
+            <Button variant="primary" disabled={busy !== null} onClick={() => setStep('facts')}>
               Continue
             </Button>
           </div>
@@ -300,7 +303,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             )}
 
             <div className="mt-4 flex gap-3">
-              <Button onClick={() => setStep('confirm')}>Back</Button>
+              <Button disabled={busy !== null} onClick={() => setStep('confirm')}>
+                Back
+              </Button>
               <Button variant="primary" disabled={remaining > 0} onClick={() => void confirm()}>
                 Confirm profile
               </Button>
@@ -327,15 +332,21 @@ function UploadStep({
   onExtracted,
   onError,
   setBusy,
+  busy,
 }: {
   onExtracted: (p: CandidateProfile) => void;
   onError: (m: string) => void;
   setBusy: (m: string | null) => void;
+  busy: string | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [filename, setFilename] = useState<string | null>(null);
 
   async function handle(file: File) {
+    // One at a time. The dropzone stayed clickable during extraction, so two runs could
+    // overlap: the first to settle cleared the "Reading it…" indicator while the second
+    // was still going, and whichever finished last silently won.
+    if (busy !== null) return;
     setFilename(file.name);
     onError('');
     try {
@@ -354,6 +365,7 @@ function UploadStep({
   return (
     <Section n="01" title="Your resume" step={3}>
       <button
+        disabled={busy !== null}
         onClick={() => inputRef.current?.click()}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
@@ -361,7 +373,7 @@ function UploadStep({
           const f = e.dataTransfer.files[0];
           if (f) void handle(f);
         }}
-        className="border-rule hover:border-accent w-full border border-dashed px-6 py-14 text-center transition-colors"
+        className="border-rule hover:border-accent w-full border border-dashed px-6 py-14 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         <span className="u-data text-dim block">
           {filename ?? 'drop a file, or click to choose'}

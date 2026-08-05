@@ -136,7 +136,11 @@ export function AnswerReview({
           <p className="text-[1.125rem] leading-snug">{answer.questionText}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge>{answer.archetype.replace(/_/g, ' ')}</Badge>
-            {words > 0 && <Badge>{words} words</Badge>}
+            {words > 0 && (
+              <Badge>
+                {words} {words === 1 ? 'word' : 'words'}
+              </Badge>
+            )}
             {answer.reusedFrom && (
               <Badge tone="accent">reused · {answer.reusedFrom.useCount}×</Badge>
             )}
@@ -203,15 +207,22 @@ export function AnswerReview({
                   s.index === null ? (
                     <span key={i}>{s.text}</span>
                   ) : (
-                    <span
+                    /* A real button. These were `<span onClick>` with the verdict in a
+                       hover-only `title`, so on the screen where a claim's backing
+                       evidence is the entire point, a keyboard or screen-reader user
+                       could reach Approve but never find out what a highlight meant. */
+                    <button
                       key={i}
+                      type="button"
                       className={`u-claim u-claim-${s.verdict!}`}
                       data-active={active === s.index}
+                      aria-pressed={active === s.index}
                       onClick={() => setActive(active === s.index ? null : s.index)}
                       title={VERDICT_LABEL[s.verdict!]}
                     >
                       {s.text}
-                    </span>
+                      <span className="sr-only"> — {VERDICT_LABEL[s.verdict!]}</span>
+                    </button>
                   ),
                 )}
               </p>
@@ -362,27 +373,35 @@ export function AnswerReview({
             ) : (
               <ol className="space-y-3">
                 {answer.evidence.map((e, i) => (
-                  <li
-                    key={i}
-                    onClick={() => setActive(active === i ? null : i)}
-                    className={`cursor-pointer rounded px-3 py-2.5 transition-colors ${
-                      active === i ? 'bg-accent/12' : 'hover:bg-ink/[0.04]'
-                    }`}
-                  >
-                    <div className="mb-1.5">
-                      <Badge tone={VERDICT_TONE[e.verdict]}>{VERDICT_LABEL[e.verdict]}</Badge>
-                    </div>
-                    <p className="text-dim text-[0.9375rem] leading-snug">
-                      {e.claim.length > 90 ? `${e.claim.slice(0, 90)}…` : e.claim}
-                    </p>
-                    {e.quote && (
-                      <p className="u-quote mt-2 text-[0.75rem]">
-                        {e.quote.length > 140 ? `${e.quote.slice(0, 140)}…` : e.quote}
-                      </p>
-                    )}
-                    {e.profileRef && (
-                      <p className="u-data text-faint mt-1.5 text-[0.75rem]">{e.profileRef}</p>
-                    )}
+                  <li key={i}>
+                    {/* The click target is a button, not the <li>. Same reason as the
+                        claim highlights: this list is how a keyboard user finds out
+                        which fact backs which sentence. */}
+                    <button
+                      type="button"
+                      onClick={() => setActive(active === i ? null : i)}
+                      aria-pressed={active === i}
+                      className={`block w-full rounded px-3 py-2.5 text-left transition-colors ${
+                        active === i ? 'bg-accent/12' : 'hover:bg-ink/[0.04]'
+                      }`}
+                    >
+                      <span className="mb-1.5 block">
+                        <Badge tone={VERDICT_TONE[e.verdict]}>{VERDICT_LABEL[e.verdict]}</Badge>
+                      </span>
+                      <span className="text-dim block text-[0.9375rem] leading-snug">
+                        {e.claim.length > 90 ? `${e.claim.slice(0, 90)}…` : e.claim}
+                      </span>
+                      {e.quote && (
+                        <span className="u-quote mt-2 block text-[0.75rem]">
+                          {e.quote.length > 140 ? `${e.quote.slice(0, 140)}…` : e.quote}
+                        </span>
+                      )}
+                      {e.profileRef && (
+                        <span className="u-data text-faint mt-1.5 block text-[0.75rem]">
+                          {e.profileRef}
+                        </span>
+                      )}
+                    </button>
                   </li>
                 ))}
               </ol>

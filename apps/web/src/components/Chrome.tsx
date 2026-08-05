@@ -50,15 +50,24 @@ export function Nav({
 
         <div className="scrollbar-none flex flex-1 items-center gap-5 overflow-x-auto sm:gap-7">
           {items.map((item) => (
+            /* aria-disabled rather than disabled, so the reason stays reachable.
+               A locked destination is supposed to say what to do next, and that text
+               lived only in `title` on a `disabled` button — which is out of the tab
+               order, shows no tooltip on touch, and is generally skipped by screen
+               readers. The guidance was invisible to exactly the people who cannot
+               hover. */
             <button
               key={item.id}
-              className="u-nav-link shrink-0"
+              className={`u-nav-link shrink-0 ${item.blocked ? 'cursor-not-allowed opacity-40' : ''}`}
               aria-current={view === item.id ? 'page' : undefined}
-              disabled={Boolean(item.blocked)}
+              aria-disabled={item.blocked ? true : undefined}
               title={item.blocked}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => {
+                if (!item.blocked) onNavigate(item.id);
+              }}
             >
               {item.label}
+              {item.blocked && <span className="sr-only"> — {item.blocked}</span>}
             </button>
           ))}
         </div>

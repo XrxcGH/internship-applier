@@ -31,6 +31,13 @@ jobs:
       - name: Test
         run: npm test
 
+      # docs/06 calls this a gate and the script exits non-zero on a finding, but CI
+      # mirrored every other step of `npm run check` and left this one out — so a
+      # machine-sounding string in UI copy passed here and only failed whoever happened
+      # to run the full check locally.
+      - name: Audit copy
+        run: npm run audit:copy
+
       - name: Build web
         run: npm run build
 

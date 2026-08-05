@@ -145,6 +145,21 @@ describe('what needs the user, one thing at a time', () => {
     // And says so kindly, because the user did not do anything wrong.
     expect(quiet.nudge).toMatch(/following up, or letting go/i);
 
+    // The boundary day itself, because the rule is `>=` and nothing pinned that. The
+    // comparable threshold in reminders.ts is tested at its exact boundary; this was the
+    // odd one out.
+    const exactly = derive(
+      app({ status: 'submitted', submittedAt: daysAgo(GHOST_AFTER_DAYS) }),
+      NOW,
+    );
+    expect(exactly.effectiveStatus).toBe('ghosted');
+
+    const dayBefore = derive(
+      app({ status: 'submitted', submittedAt: daysAgo(GHOST_AFTER_DAYS - 1) }),
+      NOW,
+    );
+    expect(dayBefore.effectiveStatus).toBe('submitted');
+
     const recent = derive(app({ status: 'submitted', submittedAt: daysAgo(10) }), NOW);
     expect(recent.effectiveStatus).toBe('submitted');
     expect(recent.attention).toBe('none');

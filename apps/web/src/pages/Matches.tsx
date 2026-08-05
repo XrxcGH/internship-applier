@@ -58,7 +58,12 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
       const r = await listMatches({ eligibility: band, minScore: 0, hideDecided: true });
       setRows(r.matches);
       setCounts(r.counts);
-      setSelected((prev) => prev ?? r.matches[0]?.id ?? null);
+      // Validated against the rows that just arrived. Keeping a selection that is not in
+      // the new band left the detail pane blank beside a populated list — no message, no
+      // empty state, nothing to click.
+      setSelected((prev) =>
+        prev !== null && r.matches.some((m) => m.id === prev) ? prev : (r.matches[0]?.id ?? null),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

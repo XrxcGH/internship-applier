@@ -42,10 +42,16 @@ export function Settings() {
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null);
   const [deleted, setDeleted] = useState<string | null>(null);
 
+  // Every action handler on this page surfaces its errors; the mount path used to be the
+  // one that did not, so a failed fetch left "Checking…" and "Reading the ledger…"
+  // pulsing for the life of the page.
   const refresh = useCallback(() => {
-    void getModelAccess().then(setAccess);
-    void getCosts().then(setCosts);
-    void getDeletePreview().then(setPreview);
+    const fail = (err: unknown) => {
+      setError(err instanceof Error ? err.message : String(err));
+    };
+    void getModelAccess().then(setAccess).catch(fail);
+    void getCosts().then(setCosts).catch(fail);
+    void getDeletePreview().then(setPreview).catch(fail);
   }, []);
 
   useEffect(refresh, [refresh]);

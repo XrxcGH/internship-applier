@@ -158,8 +158,12 @@ body {
   border-radius: 3px;
 }
 
-/* Scrollbars picked up the browser default, which fought the palette everywhere. */
-* {
+/* Scrollbars picked up the browser default, which fought the palette everywhere.
+   The :not() matters: these rules sit outside any cascade layer, and Tailwind's utilities
+   live inside @layer utilities — so an unlayered universal selector beats every one of
+   them. scrollbar-none on the nav strip compiled fine and then lost to this rule,
+   which is why the strip still showed a scrollbar when it overflowed. */
+*:not(.scrollbar-none) {
   scrollbar-color: var(--rule-strong) transparent;
   scrollbar-width: thin;
 }

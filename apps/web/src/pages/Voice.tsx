@@ -33,9 +33,15 @@ export function Voice() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Both of these used to be fire-and-forget. On a failed fetch the samples state stayed
+  // null, every branch of section 01 tested falsy, and the page rendered a heading over
+  // nothing — no spinner, no error, and an unhandled rejection in the console.
   const refresh = useCallback(() => {
-    void listSamples().then(setSamples);
-    void getStyle().then(setStyle);
+    const fail = (err: unknown) => {
+      setError(err instanceof Error ? err.message : String(err));
+    };
+    void listSamples().then(setSamples).catch(fail);
+    void getStyle().then(setStyle).catch(fail);
   }, []);
 
   useEffect(refresh, [refresh]);

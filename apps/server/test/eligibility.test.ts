@@ -730,6 +730,44 @@ describe('properties that must always hold', () => {
     expect(filled.eligibility).toBe('eligible');
   });
 
+  /**
+   * The case above goes unknown → eligible, which does not test the property it is named
+   * for: it cannot catch a rule that flips an ALREADY-eligible verdict to ineligible when
+   * a field is filled in. This one starts from eligible and adds facts one at a time.
+   *
+   * Only facts that genuinely cannot disqualify are added. Two rules legitimately turn
+   * pass into fail on new information — stating a citizenship the posting excludes, or a
+   * work-authorization status that needs sponsorship the employer does not offer — and
+   * those are correct behaviour rather than exceptions to hide.
+   */
+  it('stays eligible as neutral profile facts are filled in one by one', () => {
+    const base = input({
+      profile: profile({
+        derived: { ...profile().derived, age: null, expectedGraduation: null },
+      }),
+      requirements: [],
+    });
+    expect(evaluateEligibility(base).eligibility).toBe('eligible');
+
+    const additions: Array<[string, Partial<ConfirmedProfile>]> = [
+      ['dateOfBirth', { dateOfBirth: '2006-03-15' }],
+      ['derived.age', { derived: { ...profile().derived, age: 20 } }],
+      [
+        'derived.expectedGraduation',
+        { derived: { ...profile().derived, age: 20, expectedGraduation: '2028-05' } },
+      ],
+      ['availability', { availability: profile().availability }],
+      ['citizenships', { citizenships: ['US'] }],
+    ];
+
+    let acc = base.profile;
+    for (const [what, patch] of additions) {
+      acc = { ...acc, ...patch } as ConfirmedProfile;
+      const o = evaluateEligibility({ ...base, profile: acc });
+      expect(o.eligibility, `became ${o.eligibility} after adding ${what}`).toBe('eligible');
+    }
+  });
+
   it('is deterministic for identical input', () => {
     for (const s of scenarios) {
       expect(evaluateEligibility(s)).toEqual(evaluateEligibility(s));
