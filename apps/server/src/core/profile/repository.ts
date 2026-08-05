@@ -5,6 +5,7 @@
  * one-line change and can't be forgotten at a call site.
  */
 import { eq } from 'drizzle-orm';
+import { ZodError } from 'zod';
 import { CandidateProfile } from '@ia/shared';
 import { db, schema } from '../../infra/db/client';
 import { decryptField, encryptField } from '../../infra/crypto/fieldCrypto';
@@ -91,6 +92,31 @@ export function getProfile(): CandidateProfile | null {
   try {
     return decryptRow(row);
   } catch (err) {
+    /**
+     * A schema mismatch is not a lost key, and must not be reported as one.
+     *
+     * The write path is typed but never validated; the read path parses strictly. So a
+     * resume with no email (stored as ''), a link written as "linkedin.com/in/x" with no
+     * scheme, or a year-only graduation date all store cleanly and then fail to parse on
+     * the way back — and this handler told the user their key had changed and their data
+     * was unrecoverable, when in fact one field was the wrong shape. Worse, it threw on
+     * every GET, so the G1 screen where they would have fixed it could not load either.
+     */
+    if (err instanceof ZodError) {
+      logger.error({ err: err.issues }, 'stored profile does not match the schema');
+      const where = err.issues
+        .slice(0, 4)
+        .map((i) => i.path.join('.') || '(root)')
+        .join(', ');
+      throw new Error(
+        'The stored profile does not match the shape this app expects, so it cannot be ' +
+          `loaded. The fields at fault: ${where}. Your data is still encrypted and intact — ` +
+          'this is a formatting problem, not a lost key. Re-uploading your resume will ' +
+          'rebuild the profile.',
+        { cause: err },
+      );
+    }
+
     logger.error({ err }, 'could not decrypt the stored profile');
     throw new Error(
       'The stored profile could not be decrypted. This usually means the master key changed ' +

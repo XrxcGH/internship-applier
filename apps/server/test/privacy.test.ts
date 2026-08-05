@@ -10,7 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import type { CandidateProfile } from '@ia/shared';
 import { ulid } from 'ulid';
 import { buildApp } from '../src/app';
-import { db, schema } from '../src/infra/db/client';
+import { db, schema, sqlite } from '../src/infra/db/client';
 import { runMigrations } from '../src/infra/db/migrate';
 import { saveProfile } from '../src/core/profile/repository';
 import { DELETE_CONFIRMATION } from '../src/core/privacy/export';
@@ -165,6 +165,38 @@ describe('delete', () => {
     expect(db.select().from(schema.profile).all()).toHaveLength(0);
     expect(db.select().from(schema.llmCall).all()).toHaveLength(0);
     expect(res.json().message).toMatch(/restart the app/i);
+  });
+
+  /**
+   * The list of tables to delete is maintained by hand, and nothing tied it to the schema.
+   * Checking two of nineteen tables — which is what this file used to do while its header
+   * claimed to catch "a missed table" — would not notice a new table being added and left
+   * out, so "delete everything" would quietly stop meaning everything.
+   */
+  it('deletes every table in the schema, not just the ones a test remembered', async () => {
+    seed();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/privacy/delete-all',
+      payload: { confirm: DELETE_CONFIRMATION },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Read from sqlite_master rather than from the hand-maintained TABLES const, so a
+    // table added to the schema and forgotten in that list fails here.
+    const tables = sqlite
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' " +
+          "AND name NOT LIKE '__drizzle%'",
+      )
+      .all() as Array<{ name: string }>;
+    expect(tables.length).toBeGreaterThan(15);
+
+    for (const { name } of tables) {
+      const { n } = sqlite.prepare(`SELECT COUNT(*) AS n FROM "${name}"`).get() as { n: number };
+      expect(n, `${name} still has rows after "delete everything"`).toBe(0);
+    }
   });
 
   it('accepts the phrase regardless of casing or surrounding space', async () => {

@@ -349,7 +349,7 @@ function UploadStep({
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,.docx,.doc,.txt,.md"
+        accept=".pdf,.docx,.txt,.md"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];

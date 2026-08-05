@@ -105,6 +105,9 @@ export function deriveYearsExperience(profile: CandidateProfile, now: Date): num
   for (const e of profile.experience) {
     const weight = WEIGHTS[e.type] ?? 0;
     if (weight === 0) continue;
+    // No start date, no contribution. Guessing one is how an undated line on a resume
+    // turned into decades of experience.
+    if (!e.startDate) continue;
     const end = e.endDate ?? nowYm;
     months += monthsBetween(e.startDate, end) * weight;
   }

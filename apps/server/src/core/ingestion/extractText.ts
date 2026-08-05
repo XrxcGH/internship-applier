@@ -4,10 +4,18 @@
  */
 import { readFile } from 'node:fs/promises';
 
+/**
+ * What can actually be read.
+ *
+ * Legacy .doc used to be in here. It should not have been: a real .doc is an OLE compound
+ * file, mammoth reads OOXML zips only, and the failure surfaced two steps later as a 502
+ * during extraction with a message about no text being readable. Accepting an upload the
+ * app cannot use is worse than declining it, because the user only finds out after
+ * choosing the file, waiting, and being told something that does not explain why.
+ */
 export const SUPPORTED_MIME = new Set([
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/msword',
   'text/plain',
   'text/markdown',
 ]);
@@ -19,8 +27,6 @@ export function mimeFromFilename(filename: string): string {
       return 'application/pdf';
     case 'docx':
       return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    case 'doc':
-      return 'application/msword';
     case 'md':
     case 'markdown':
       return 'text/markdown';
@@ -35,7 +41,7 @@ export function mimeFromFilename(filename: string): string {
 export async function extractText(path: string, mime: string): Promise<string | null> {
   if (mime === 'application/pdf') return null;
 
-  if (mime.includes('wordprocessingml') || mime === 'application/msword') {
+  if (mime.includes('wordprocessingml')) {
     const mammoth = await import('mammoth');
     const { value } = await mammoth.extractRawText({ path });
     return normalize(value);

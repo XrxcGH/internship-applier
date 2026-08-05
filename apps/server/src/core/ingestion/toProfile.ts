@@ -21,6 +21,26 @@ export const REQUIRED_BY_G1 = [
   'locationPrefs.base.region',
 ] as const;
 
+/**
+ * A URL the schema will accept, or nothing.
+ *
+ * Resumes print links the way people read them — "linkedin.com/in/rosa", "github.com/rosa"
+ * — and `z.string().url()` rejects both. Stored anyway (nothing validates on write), they
+ * made every subsequent read of the profile throw. A missing scheme is the one repair
+ * worth making automatically; anything else is dropped rather than guessed at.
+ */
+function asUrl(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  return URL.canParse(candidate) ? candidate : undefined;
+}
+
+/** A YYYY-MM the schema will accept, or nothing. A year alone does not name a month. */
+function asYearMonth(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(raw.trim()) ? raw.trim() : undefined;
+}
+
 export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): CandidateProfile {
   const ts = now.toISOString();
 
@@ -39,9 +59,9 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
     dateOfBirth: null,
     address: { country: 'US' },
     links: {
-      github: x.links.github ?? undefined,
-      linkedin: x.links.linkedin ?? undefined,
-      portfolio: x.links.portfolio ?? undefined,
+      github: asUrl(x.links.github),
+      linkedin: asUrl(x.links.linkedin),
+      portfolio: asUrl(x.links.portfolio),
       other: [],
     },
     workAuthorization: { country: 'US', status: 'unknown', needsSponsorship: false },
@@ -50,8 +70,8 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
       institution: e.institution,
       level: e.level,
       fieldOfStudy: e.fieldOfStudy ?? undefined,
-      startDate: e.startDate ?? undefined,
-      endDate: e.endDate ?? undefined,
+      startDate: asYearMonth(e.startDate),
+      endDate: asYearMonth(e.endDate),
       gpa:
         e.gpaValue !== null && e.gpaScale !== null
           ? { value: e.gpaValue, scale: e.gpaScale }
@@ -63,8 +83,8 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
       organization: e.organization,
       title: e.title,
       type: e.type,
-      startDate: e.startDate ?? '1970-01',
-      endDate: e.endDate ?? undefined,
+      startDate: asYearMonth(e.startDate),
+      endDate: asYearMonth(e.endDate),
       location: e.location ?? undefined,
       bullets: e.bullets,
     })),
@@ -104,9 +124,15 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
       ...REQUIRED_BY_G1,
       ...(x.fullName ? [] : ['fullName']),
       ...(x.email ? [] : ['email']),
-      // A missing start date became a sentinel above; the user must fix it, because
-      // experience duration feeds the seniority band and the experience-ceiling rule.
-      ...x.experience.flatMap((e, i) => (e.startDate ? [] : [`experience.${i}.startDate`])),
+      // Experience duration feeds the seniority band and the experience-ceiling rule, so
+      // a start date the extractor could not read — or wrote in a form the schema will
+      // not take — has to reach the user rather than be filled in with a guess.
+      ...x.experience.flatMap((e, i) =>
+        asYearMonth(e.startDate) ? [] : [`experience.${i}.startDate`],
+      ),
+      ...x.education.flatMap((e, i) =>
+        e.endDate && !asYearMonth(e.endDate) ? [`education.${i}.endDate`] : [],
+      ),
     ]),
     createdAt: ts,
     updatedAt: ts,

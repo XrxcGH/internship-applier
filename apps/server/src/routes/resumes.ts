@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { config } from '../config';
 import { db, schema } from '../infra/db/client';
@@ -60,7 +60,14 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
         bytes: bytes.byteLength,
         sha256,
         rawText: text ? encryptField(text, id) : null,
-        isPrimary: db.select().from(schema.resumeDocument).all().length === 0,
+        // Primary when nothing else claims it — not merely when the table is empty.
+        // That older test left the app with no primary at all after the primary was
+        // deleted, and no later upload could ever become one.
+        isPrimary: !db
+          .select()
+          .from(schema.resumeDocument)
+          .all()
+          .some((r) => r.isPrimary),
       })
       .run();
 
@@ -155,6 +162,28 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
       logger.warn({ err, id: row.id }, 'could not remove resume file; removing the row anyway');
     }
     db.delete(schema.resumeDocument).where(eq(schema.resumeDocument.id, req.params.id)).run();
+
+    /**
+     * Something has to be primary if anything is left.
+     *
+     * Deleting the primary used to leave none, and the fill run then had no resume to
+     * attach — reported as a skipped field with "No file to attach", which is honest but
+     * easy to miss on a form with thirty rows. The most recent survivor is promoted.
+     */
+    if (row.isPrimary) {
+      const next = db
+        .select()
+        .from(schema.resumeDocument)
+        .orderBy(desc(schema.resumeDocument.createdAt))
+        .all()[0];
+      if (next) {
+        db.update(schema.resumeDocument)
+          .set({ isPrimary: true })
+          .where(eq(schema.resumeDocument.id, next.id))
+          .run();
+      }
+    }
+
     return reply.code(204).send();
   });
 }
