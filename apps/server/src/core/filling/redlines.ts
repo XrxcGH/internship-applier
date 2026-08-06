@@ -250,8 +250,24 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── Attestations: the user's own legal statement ───────────────────────────
   {
     category: 'attestation',
-    // Forms phrase these in the first AND third person ("The applicant certifies"), and
-    // several jurisdictions use their own noun for it.
+    // Forms phrase these in the first, second AND third person ("The applicant certifies",
+    // "By checking this box, you certify"), and several jurisdictions use their own noun
+    // for it.
+    //
+    // THE SECOND PERSON IS ITS OWN BRANCH, not another word in the pronoun list, because
+    // "you" is in half the labels on an application form and the verbs are not all verbs.
+    // While it was missing, "By checking this box, you certify that the information
+    // provided is accurate" was not an attestation at all, and phrased as a question —
+    // "Do you certify that everything you have provided is accurate and complete?" — it
+    // was long enough and interrogative enough to be classified as an essay at 0.85, so an
+    // approved answer of "Yes" ticked the box. A machine signed a sworn statement in the
+    // applicant's name with no redline anywhere in the way.
+    //
+    // The branch requires "you" immediately before the verb, and the verbs that also have
+    // an innocent everyday sense have to bring "that" with them. Without those two
+    // restrictions "Have you declared a major?", "Which organization do you represent?" and
+    // "Do you have any certifications?" were all refused as sworn statements, which is the
+    // opposite mistake on fields a student form asks every time.
     //
     // THE VERB LIST IS THE WEAK PART OF THIS RULE, so it is worth saying why each word is
     // here. "confirm" was missing, and "By checking this box I confirm I am authorized to
@@ -260,7 +276,7 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     // statement in someone's name. "verify", "warrant" and "represent" are the same shape.
     // Anything of the form "I <verb> that ..." where the verb commits the applicant to the
     // truth of something belongs here; when adding one, add its test alongside.
-    test: /\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear|confirm|verif|warrant|represent)/i,
+    test: /\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear|confirm|verif|warrant|represent)|\byou\b\s+(hereby\s+)?(certif(y|ies)|attests?|affirms?|acknowledges?|swears?|confirms?|(declares?|represents?|warrants?|verif(y|ies))\s+that\b)|\b(certify|attest|affirm|acknowledge|declare|confirm|swear)\s+(that\s+)?you\b|\bhereby\b.{0,24}\b(certif|attest|affirm|declar|acknowledg|swear|warrant|represent)/i,
     note: 'A statement you are making personally. Only you can make it.',
   },
   {
@@ -394,6 +410,13 @@ export function normalizeField(parts: {
       // all and was handed back to the user to attach by hand.
       .normalize('NFD')
       .replace(/\p{M}+/gu, '')
+      // "&" is spelled out rather than dropped, because every pattern here that names it
+      // names it as a word. A checkbox reading "I have read and agree to the Terms &
+      // Conditions" matched no consent pattern and no classification rule either, so the
+      // user was told the tool "could not tell what this field is asking for" about the
+      // single most recognizable consent box on the page, instead of "Consent is yours to
+      // give". Dropping the character would join the words instead — "Terms  Conditions".
+      .replace(/&/g, ' and ')
       .replace(/[_\-.]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()

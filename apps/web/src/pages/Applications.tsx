@@ -43,6 +43,11 @@ export function Applications({ onBack }: { onBack: () => void }) {
     return (
       <Detail
         id={openId}
+        // The list row is the only thing that knows whether this one has been submitted:
+        // GET /api/applications/:id answers with the posting and the answers and nothing
+        // about the application's own state. Without it the fill panel offered to open
+        // and fill a form the user had already told it they sent.
+        submittedAt={list?.find((a) => a.id === openId)?.submittedAt ?? null}
         onBack={() => {
           setOpenId(null);
           refresh();
@@ -97,7 +102,12 @@ export function Applications({ onBack }: { onBack: () => void }) {
                     {/* A brand-new application has nothing to review, and saying "in
                         review" directly above "no questions yet" reads as a bug. The
                         detail header already distinguishes this case. */}
-                    {a.blockedCount > 0 ? (
+                    {/* Submitted outranks everything else on the card. An application
+                        the user has already sent still has every answer approved, so it
+                        was badged "ready" — reading as work still to do. */}
+                    {a.submittedAt ? (
+                      <Badge tone="verified">submitted</Badge>
+                    ) : a.blockedCount > 0 ? (
                       <Badge tone="redline">{a.blockedCount} flagged</Badge>
                     ) : a.answerCount === 0 ? (
                       <Badge>no questions yet</Badge>
@@ -130,11 +140,32 @@ export function Applications({ onBack }: { onBack: () => void }) {
   );
 }
 
-function Detail({ id, onBack }: { id: string; onBack: () => void }) {
+function Detail({
+  id,
+  submittedAt,
+  onBack,
+}: {
+  id: string;
+  submittedAt: string | null;
+  onBack: () => void;
+}) {
   const [app, setApp] = useState<ApplicationDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
+  /**
+   * The two things the server says once and never says again.
+   *
+   * `unresolved` — the draft still had unsupported claims after the model's own revision —
+   * and the style note come back on the draft and the save responses only. Neither is
+   * stored with the answer, so the refresh that follows every action re-fetched a payload
+   * without them and both were thrown away unread. AnswerReview renders each of them, so
+   * the sentence telling someone the MODEL failed rather than they did had never once
+   * reached the screen. Kept beside the answers and merged in below.
+   */
+  const [notes, setNotes] = useState<
+    Record<string, { styleNote?: string | null; unresolved?: boolean }>
+  >({});
 
   const refresh = useCallback(() => {
     getApplication(id)
@@ -237,11 +268,27 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
             {app.answers.map((a) => (
               <AnswerReview
                 key={a.id}
-                answer={a}
+                answer={{ ...a, ...notes[a.id] }}
                 canDraft={app.canDraft}
                 busy={busy}
-                onDraft={() => void run(`draft:${a.id}`, () => draftAnswer(a.id))}
-                onSave={(text) => run(`save:${a.id}`, () => saveAnswer(a.id, text))}
+                onDraft={() =>
+                  void run(`draft:${a.id}`, async () => {
+                    const drafted = await draftAnswer(a.id);
+                    setNotes((n) => ({
+                      ...n,
+                      [a.id]: { styleNote: drafted.styleNote, unresolved: drafted.unresolved },
+                    }));
+                  })
+                }
+                onSave={(text) =>
+                  run(`save:${a.id}`, async () => {
+                    const saved = await saveAnswer(a.id, text);
+                    // The whole entry is replaced rather than merged: the user has just
+                    // rewritten the text, so whatever the model failed to resolve in its
+                    // own draft is no longer a statement about what is on screen.
+                    setNotes((n) => ({ ...n, [a.id]: { styleNote: saved.styleNote } }));
+                  })
+                }
                 onApprove={() => void run(`approve:${a.id}`, () => approveAnswer(a.id))}
                 onUnapprove={() => void run(`un:${a.id}`, () => unapproveAnswer(a.id))}
                 onDelete={() => void run(`del:${a.id}`, () => deleteAnswer(a.id))}
@@ -307,6 +354,7 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
               ? 'Add the form’s questions above and approve an answer for each one first.'
               : `${app.answers.length - approved} of ${app.answers.length} answers still need your approval (gate G3).`
           }
+          submittedAt={submittedAt}
           onChanged={refresh}
         />
       </Section>

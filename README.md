@@ -23,6 +23,11 @@ npm start          # builds the interface and serves everything from one URL
 Then open the address it prints. `npm run dev` runs the API and the Vite dev server
 separately while you are working on it.
 
+If you are going to commit anything from this checkout, run `npm run hooks:install` first.
+It points git at `.githooks`, whose pre-commit hook refuses commits containing your resume,
+the database, a `.env`, or an Anthropic key. Git does not use that directory until you say
+so, so a fresh clone has no such protection.
+
 Drafting answers needs a model. It will use the [Claude Code
 CLI](https://code.claude.com/docs) if you have one installed and signed in, against a
 subscription you already pay for, or an `ANTHROPIC_API_KEY` if you set one. **Everything

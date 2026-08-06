@@ -3,9 +3,18 @@ import { z } from 'zod';
 /**
  * Events pushed to the UI over SSE at GET /api/events.
  * Each carries a monotonic `seq` so a reconnecting client can detect gaps.
+ *
+ * Three of the members below have no publisher anywhere in the server and are marked
+ * individually. Belonging to this union is not a promise that the event ever arrives, so
+ * whoever wires up the first stream consumer should read the notes before waiting on one.
  */
 export const AppEvent = z.discriminatedUnion('type', [
   z.object({
+    /**
+     * Not built: nothing publishes this. Resume extraction runs start to finish inside
+     * POST /api/resumes/:id/extract and the finished profile comes back in that response,
+     * so there is no moment in between at which progress could be announced.
+     */
     type: z.literal('extraction.progress'),
     seq: z.number().int(),
     documentId: z.string(),
@@ -42,6 +51,11 @@ export const AppEvent = z.discriminatedUnion('type', [
     }),
   }),
   z.object({
+    /**
+     * Not built: nothing publishes this. A matching run inserts or updates every match in
+     * one loop and returns totals at the end, so a screen watching the stream learns nothing
+     * about a new match until it refetches the list.
+     */
     type: z.literal('match.new'),
     seq: z.number().int(),
     matchId: z.string(),
@@ -93,6 +107,11 @@ export const AppEvent = z.discriminatedUnion('type', [
     skipped: z.number().int(),
   }),
   z.object({
+    /**
+     * Not built: nothing publishes this. The `task` table is written in one place only, to
+     * file a discovery run that has already finished, so there is no background worker whose
+     * failure this would carry to the user.
+     */
     type: z.literal('task.failed'),
     seq: z.number().int(),
     taskId: z.string(),

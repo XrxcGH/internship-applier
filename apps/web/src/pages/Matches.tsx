@@ -52,10 +52,26 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
   const [approved, setApproved] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
 
+  /**
+   * Only the newest list is allowed to paint.
+   *
+   * `listMatches` walks up to twenty pages one round trip at a time, so "all" is reliably
+   * slower to come back than "eligible". Switch bands while the wider one is still walking
+   * and its answer landed last: the queue filled with the rows and the counts of a band
+   * nobody had selected, sitting under the chip for the band they had. The detail fetch
+   * just below already guards itself this way; the list did not.
+   *
+   * A sequence number rather than a per-effect cancellation flag, because the "Recompute"
+   * button calls this too and that call has no effect to be torn down.
+   */
+  const listSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = (listSeq.current += 1);
     setError(null);
     try {
       const r = await listMatches({ eligibility: band, minScore: 0, hideDecided: true });
+      if (seq !== listSeq.current) return;
       setRows(r.matches);
       setCounts(r.counts);
       // Validated against the rows that just arrived. Keeping a selection that is not in
@@ -65,6 +81,7 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
         prev !== null && r.matches.some((m) => m.id === prev) ? prev : (r.matches[0]?.id ?? null),
       );
     } catch (e) {
+      if (seq !== listSeq.current) return;
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [band]);

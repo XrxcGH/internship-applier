@@ -92,8 +92,18 @@ export function sentences(text: string): string[] {
     .filter((s) => s.length > 0 && /\p{L}/u.test(s));
 }
 
+/**
+ * Word processors, Notes and Google Docs all turn a typed apostrophe into U+2019, and
+ * pasting from one of them is the ordinary way a writing sample arrives here. Every
+ * The measurements accept both forms — `words` and the contraction pattern each list the
+ * curly apostrophe explicitly — so nothing below depends on the flattening having already
+ * happened. `computeStyleProfile` still does it once for the whole sample, because a
+ * sample mixing both forms would otherwise compare unevenly against one that does not.
+ */
+const SMART_APOSTROPHES = /[‘’‛′]/g;
+
 export function words(text: string): string[] {
-  return text.toLowerCase().match(/[\p{L}']+/gu) ?? [];
+  return text.toLowerCase().match(/[\p{L}'’]+/gu) ?? [];
 }
 
 function stdev(xs: number[]): number {
@@ -110,7 +120,7 @@ function stdev(xs: number[]): number {
  * "don't" and "it's" all through them.
  */
 const CONTRACTIONS =
-  /\b\w+'(?:t|re|ve|ll|d|m)\b|\b(?:it|that|there|here|what|who|how|where|he|she|let)'s\b/gi;
+  /\b\w+['’](?:t|re|ve|ll|d|m)\b|\b(?:it|that|there|here|what|who|how|where|he|she|let)['’]s\b/gi;
 
 const FIRST_PERSON = /\b(?:i|me|my|mine|myself|we|us|our|ours)\b/gi;
 
@@ -171,7 +181,17 @@ export interface SampleInput {
 }
 
 export function computeStyleProfile(samples: SampleInput[], now = new Date()): StyleProfile {
-  const text = samples.map((s) => s.content).join('\n\n');
+  // Flattened before anything is counted. A sample pasted out of Word measured zero
+  // contractions where the same prose typed in a plain editor measured twenty-two per
+  // hundred words, so the same writer was told "you use contractions freely" or "you
+  // rarely use contractions" depending only on where they copied from — and the drafting
+  // prompt was instructed to write the opposite of their actual voice. The curly
+  // apostrophe also split every contraction into two words, which inflated the word count
+  // and dragged every per-100 rate down with it.
+  const text = samples
+    .map((s) => s.content)
+    .join('\n\n')
+    .replace(SMART_APOSTROPHES, "'");
   const ws = words(text);
   const sents = sentences(text);
   const lengths = sents.map((s) => words(s).length).filter((n) => n > 0);

@@ -54,8 +54,17 @@ no LLM needed for the metrics themselves:
 - Favored transitions and opening patterns, extracted as literal n-grams from the samples.
 - Vocabulary tier via a frequency-band lookup.
 
-A short LLM pass adds qualitative notes (register, warmth, directness, humor) that the
-metrics can't capture. These go into the drafting prompt as guidance, not as rules.
+`describeStyle` turns those same metrics into plain sentences — "You vary sentence length a
+lot", "You reach for em dashes and parentheses more than most people" — which are stored as
+`style_profile.qualitative_notes` and shown back to the user on the Voice page. They are
+assembled in TypeScript from the numbers above; there is no model call.
+
+> **Not built:** the short LLM pass this section used to describe, which was to add
+> qualitative notes (register, warmth, directness, humor) that the metrics cannot capture,
+> and feed them to the drafting prompt as guidance. Neither half exists. Nothing reads
+> `qualitativeNotes` except the endpoint that returns it to the Voice page, so those
+> sentences never reach the model at all — the prompt's voice section is built by
+> `voiceInstructions`, straight from the metrics.
 
 ## Drafting an answer
 
@@ -63,7 +72,7 @@ metrics can't capture. These go into the drafting prompt as guidance, not as rul
 question + field constraints (max length, tone hints from the form)
         │
         ▼
-  ① retrieve relevant profile facts   ← deterministic + embedding retrieval
+  ① retrieve relevant profile facts   ← deterministic keyword + skill overlap
         │
         ▼
   ② check the answer library          ← reuse an approved canonical answer if one fits
@@ -73,23 +82,29 @@ question + field constraints (max length, tone hints from the form)
         │
         ▼
   ④ factGuard  — every claim ↔ profile evidence, or flag
-        │
+  ⑥ tell-scrub — flag known AI-register phrasing
+        │        (both run on the draft; a blocking claim or a named tell
+        │         buys exactly one revision, then it goes to the user)
         ▼
-  ⑤ styleCritic — measure against StyleProfile, revise if drifting
-        │
-        ▼
-  ⑥ tell-scrub  — flag known AI-register phrasing for user review
+  ⑤ styleCritic — measure against StyleProfile; drift becomes a flag
         │
         ▼
      draft + evidence + flags  →  G3 review UI
 ```
 
+The numbering follows the sections below rather than the order things run. FactGuard and
+tell-scrub are the pair inside `draft.ts`, and between them they own the single revision
+pass. StyleCritic runs later, on the review side, and only ever produces a flag.
+
 ### ① Retrieval, not invention
 
 The prompt is given a bounded evidence set, not the whole profile: the experience bullets,
 projects, courses, and skills most relevant to the question and the posting. Retrieval is
-hybrid — keyword/skill overlap first, embedding similarity second. Each evidence item
-carries its `profileRef` so the generated text can cite it.
+deterministic — keyword and skill overlap, no model call and no embeddings, the same as the
+matching scorer (docs/05 § Fit score). Each evidence item carries its `profileRef` so the
+generated text can cite it. Embedding similarity as a second pass was the plan and is not
+built; until it is, an evidence item is only found by a word the question and the profile
+actually share.
 
 The system prompt states the constraint directly: *use only the supplied facts; if the
 question asks for something not in the evidence, say so in a `needs_input` field rather
@@ -107,18 +122,30 @@ recruiters at the same company compare notes.
 
 ### ③ Generation
 
-`claude-opus-5`, adaptive thinking, `effort: 'high'`. Prompt structure, ordered for cache
-stability:
+`claude-opus-5`, adaptive thinking. `buildSystemPrompt` assembles the system message in
+this order:
 
-1. **[cached]** System prompt: role, hard constraints, the no-invention rule.
-2. **[cached]** The confirmed profile summary.
-3. **[cached]** `StyleProfile` metrics + qualitative notes + 2 verbatim writing samples.
-4. Posting context (company, role, relevant requirement quotes).
-5. Retrieved evidence set.
-6. The question, with its length and format constraints.
+1. Role, then the hard rules: the no-invention rule, the no-upgrading rule, and the list of
+   constructions that get flagged automatically.
+2. **VOICE** — `voiceInstructions(style)`: the measured metrics stated as sentences, never
+   as adjectives. "Write naturally" is what every model already thinks it is doing.
+3. **LENGTH** — the form's word ceiling, or 120–200 words when it states none.
+4. **EVIDENCE** — the retrieved set, one fact per line, each tagged with its ref.
+5. **HOW THIS PERSON ACTUALLY WRITES** — up to three verbatim writing samples, each capped
+   at 1200 characters.
 
-Items 1–3 are the stable prefix and carry the `cache_control` breakpoint; they're identical
-across every answer for a given user, so per-answer cost is dominated by the small tail.
+The user message carries the question and, when there is one, the posting text — explicitly
+labelled as untrusted background rather than instructions.
+
+The model never sees the confirmed profile, only the evidence set, and it is told that
+facts outside that set do not exist for the task. That is what makes FactGuard's verdicts
+mean something: a claim can only be "supported" by something that was actually supplied.
+
+> **Not built:** prompt caching. This section described a stable prefix carrying a
+> `cache_control` breakpoint; the API backend sends no `cache_control` at all, so every
+> draft pays full price for the whole prompt. Adding it would also mean reordering: the
+> evidence set changes with every answer and currently sits *before* the writing samples,
+> which do not, so there is no long stable prefix to break on as written.
 
 ### ④ FactGuard
 
@@ -134,11 +161,21 @@ sentences). Each claim is classified:
 | `unsupported` | No profile basis | **Red. Blocks approval** until edited or explicitly acknowledged |
 | `overstated` | Supported fact, inflated (2 months → "extensive experience") | Red, with the original fact quoted alongside |
 
-Implementation: a verification call (`claude-opus-5`, `strict` structured output) that
-receives the draft plus the evidence set and returns per-claim verdicts with the specific
-`profileRef` or a reason for failure. Numbers, dates, titles, and organization names get an
-additional deterministic check — exact string/date comparison against the profile — because
-those are the highest-consequence errors and don't need a model's judgment.
+Implementation, in the order the layers actually matter:
+
+1. **Deterministic, and the only layer that runs.** `factGuard.ts` extracts durations, GPAs,
+   organisation and institution names, and skills from the draft and compares them against
+   the evidence set. No model, no API key, fully testable — which is why the adversarial
+   suite runs on every commit rather than only when a key is configured.
+2. **Model verdicts — built, tested, and not wired in.** `mergeModelVerdicts` implements the
+   merge policy (the model may downgrade a verdict, never clear one) and the adversarial
+   suite covers it, but nothing in the drafting path or the G3 route produces model
+   verdicts, so no claim at runtime is ever decided by one.
+
+The consequence, stated plainly because it is the sort of thing a reader assumes the other
+way round: semantic overstatement the regexes cannot reach — "I led the migration" when the
+evidence says "helped with the migration" — is caught by the human at G3 and by nothing
+else.
 
 `unsupported` and `overstated` flags are hard blockers on `approved_at`. The user can
 override by editing the text, or by clicking "this is true, it's just not on my resume" —
@@ -147,10 +184,16 @@ which prompts them to add the fact to the profile, so the next answer knows it t
 ### ⑤ StyleCritic
 
 Measures the draft with the same analyzer used on the samples and compares to the target
-`StyleProfile`. If sentence-length stdev, contraction rate, paragraph shape, or punctuation
-habits drift beyond a tolerance, a revision pass rewrites toward the target — with an
-explicit instruction not to change any factual content, followed by a re-run of FactGuard on
-the revision. Style edits must never silently alter facts.
+`StyleProfile`. It runs in the answers route, not in `draft.ts`: each drift past a severity
+of 0.4 — sentence-length stdev, contraction rate, paragraph shape, punctuation habits —
+becomes a `style_drift` flag on the answer, and the user sees it at G3.
+
+> **Not built:** the style revision pass this section used to describe, which was to rewrite
+> toward the target with an instruction not to change any factual content, then re-run
+> FactGuard on the result. Nothing rewrites for style. That is a smaller loss than it
+> sounds: the one revision the drafting pipeline does allow is spent on fabrications and
+> tells, which are the two that block approval, and style drift the user can see is
+> something they can fix in the editor without a model rewriting their facts on the way past.
 
 ### ⑥ Tell-scrub
 

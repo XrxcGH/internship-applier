@@ -12,7 +12,12 @@ const Env = z.object({
   SERVER_HOST: z.string().default('127.0.0.1'),
   SERVER_PORT: z.coerce.number().int().positive().default(8787),
   WEB_PORT: z.coerce.number().int().positive().default(5173),
-  DATABASE_PATH: z.string().default('./data/app.db'),
+  /**
+   * Where the SQLite file goes, if it must live somewhere other than DATA_DIR. Leave it
+   * unset — an explicit value here is the one way to put the database outside the root
+   * everything else is under. See `paths` below.
+   */
+  DATABASE_PATH: z.string().optional(),
   /** The single root for everything this app writes. Tests point it at a temp directory. */
   DATA_DIR: z.string().default('./data'),
 
@@ -99,11 +104,22 @@ export const config = {
    * master key stayed hardcoded to the repository, so `npm test` deleted the real ones
    * through the privacy tests. One root means isolating the tests is a single variable
    * and cannot be half-done.
+   *
+   * The database was the last path still holding out. It came from its own variable with
+   * its own default, so moving DATA_DIR to an encrypted volume moved the resumes and the
+   * master key there and left the database — every posting, answer and application — sitting
+   * in the repository, which is precisely the half-isolation this comment says cannot
+   * happen. Setting DATABASE_PATH still moves it on purpose; not setting it can no longer
+   * move it by accident.
+   *
+   * `migrations` is the one path that does not derive from the root, and it is read-only.
    */
   paths: {
     root: REPO_ROOT,
     data: DATA_DIR,
-    database: path.resolve(REPO_ROOT, env.DATABASE_PATH),
+    database: env.DATABASE_PATH
+      ? path.resolve(REPO_ROOT, env.DATABASE_PATH)
+      : path.resolve(DATA_DIR, 'app.db'),
     resumes: path.resolve(DATA_DIR, 'resumes'),
     artifacts: path.resolve(DATA_DIR, 'artifacts'),
     browserProfile: path.resolve(DATA_DIR, 'browser-profile'),

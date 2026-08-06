@@ -75,7 +75,10 @@ deliberately planted false claim is caught and blocks approval.
 
 **Built.** FactGuard is two layers and the deterministic one runs with no API key, so the
 adversarial suite runs on every commit rather than only when a key is configured. The model
-layer may downgrade a verdict but never clear one.
+layer is written and tested — it may downgrade a verdict but never clear one — and is **not
+wired into any production path**: neither `draftAnswer` nor the G3 route asks for model
+verdicts, so semantic overstatement that the deterministic checks cannot reach is caught by
+the human at G3 and by nothing else. docs/06 § ④ has the detail.
 
 Half the suite guards the opposite direction, which turned out to matter as much. A checker
 that flags honest sentences teaches you to click through warnings, and then it protects
@@ -149,28 +152,28 @@ schedule slips.
 
 | Layer | Approach |
 | --- | --- |
-| **Eligibility rules** | The highest-stakes code. ~60 hand-labeled JD excerpts as golden fixtures; property tests (no `fail` without a citation; `unknown` never yields `fail`; adding a profile fact never turns `eligible` into `ineligible`); a regression test per bug, permanently. |
+| **Eligibility rules** | The highest-stakes code. `eligibility.test.ts` covers every rule's pass/fail/unknown paths through synthetic profile and posting factories, plus property tests (no `fail` without a `requirementId` or posting evidence; `unknown` never yields `fail`; adding a profile fact never turns `eligible` into `ineligible`) and a regression test per bug, permanently. **Not built:** the corpus of ~60 hand-labeled real JD excerpts this row used to promise — no job-description text is exercised by any test. |
 | **Source adapters** | Normalization is pure and unit-tested: `normalize.test.ts` covers season and year, position type, work arrangement, term dates and duration, compensation, URL and title identity, and reading HTML out of a feed. **Not built:** recorded HTTP fixtures — neither `nock` nor `msw` is installed in any workspace — and the weekly CI job that was to hit the live APIs for schema drift and open an issue without failing the main build. CI triggers on push to `main` and on pull requests; there is no `schedule` block. |
-| **Extraction quality** | An eval harness over a small set of anonymized resumes with hand-labeled expected profiles; reports per-field precision/recall. Run before any extraction-prompt change ships. |
+| **Extraction quality** | `extraction.test.ts` unit-tests quote verification, the deterministic regex pass, value validation, and an end-to-end extraction with no model call. **Not built:** the eval harness — a set of anonymized resumes with hand-labeled expected profiles, reporting per-field precision/recall, to be run before any extraction-prompt change ships. There is no labelled resume set and nothing measures precision or recall, so a prompt change ships on unit tests alone. |
 | **FactGuard** | An adversarial suite: drafts with planted fabrications (invented employer, inflated duration, wrong GPA, nonexistent skill). Every one must be caught. This suite is a release gate. |
-| **StyleProfile** | Metric computation unit-tested against hand-measured samples; a round-trip test that a draft targeting a profile lands within tolerance. |
-| **Form filling** | Playwright against `packages/fixtures` in CI (headless). Recorded real-ATS HTML snapshots (PII-scrubbed) as regression fixtures for mapping/classification. Never against live employer forms in CI. |
+| **StyleProfile** | Metric computation unit-tested against hand-measured samples — `styleProfile.test.ts` covers text segmentation, `computeStyleProfile`, and the adequacy check. **Not built:** the round-trip test that a draft targeting a profile lands back within tolerance. Nothing currently checks that the voice instructions the drafting prompt is given actually move the output toward the profile. |
+| **Form filling** | Playwright against `packages/fixtures` in CI (headless). Never against live employer forms in CI. **Not built:** recorded real-ATS HTML snapshots (PII-scrubbed) as regression fixtures for mapping/classification — see docs/07 § Testing. |
 | **Redlines** | A dedicated suite asserting no redlined field is ever written, across every fixture form. Release gate. |
-| **Submit gate** | A static check that `filling/` contains no click on a submit-like locator, plus a runtime guard that throws if one occurs. Release gate. |
+| **Submit gate** | An ESLint rule and a source scan over `filling/` for a submit-shaped click and the other routes to submission, plus a fixture assertion that the mock ATS recorded zero POSTs across the suite. Release gate. There is no runtime guard — docs/07 § The submit gate (G4) is the authority on which layers exist. |
 | **API contracts** | Shared Zod schemas mean a contract break is a typecheck failure. Integration tests cover each server-side invariant in doc 09. |
-| **E2E** | One full happy path against the fixture site: upload → confirm → discover (mocked) → match → approve → draft → review → fill → pre-submit. Stops short of submission, by design. |
+| **E2E** | **Not built:** one full happy path against the fixture site — upload → confirm → discover (mocked) → match → approve → draft → review → fill → pre-submit, stopping short of submission by design. Every stage is covered on its own, and nothing yet runs them in sequence, so a break in the handoff between two of them is exactly the bug this suite would catch and the current tests would not. |
 
 ## Risks
 
 | Risk | Likelihood | Impact | Mitigation |
 | --- | --- | --- | --- |
-| ATS DOM changes break filling | High | Medium | Semantic `FormMap` over brittle selectors; generic adapter as fallback; read-back verification means silent wrong-fills surface as errors; recorded snapshots catch drift. |
+| ATS DOM changes break filling | High | Medium | Semantic `FormMap` over brittle selectors; generic adapter as fallback; read-back verification means silent wrong-fills surface as errors. The recorded snapshots that would catch drift before a user hits it are **not built** — until they are, the first thing that notices a real ATS changing its markup is a failed run. |
 | Workday complexity | High | Medium | Explicitly last in M6; ship the other four adapters first; degrade to "we mapped the form, here's what to paste" rather than a broken fill. |
-| Source API changes / rate limits | Medium | Medium | Many independent sources; per-source health and degradation; weekly drift check; caching. |
-| Requirement extraction gets eligibility wrong | Medium | **High** | Tri-state with `unknown`; quote verification; the inspectable filtered drawer; golden fixtures; property tests. A false `ineligible` is the worst bug this app can have. |
-| FactGuard misses a fabrication | Low | **High** | Deterministic checks on numbers/dates/names in addition to the model pass; adversarial release-gate suite; the human review gate as the last line. |
+| Source API changes / rate limits | Medium | Medium | Many independent sources; per-source health and degradation; a 6-hour response cache. **Not built:** the weekly drift check — CI runs on push and pull request only, with no `schedule` trigger. |
+| Requirement extraction gets eligibility wrong | Medium | **High** | Tri-state with `unknown`; quote verification; the inspectable filtered drawer; the synthetic per-rule scenarios and property tests in `eligibility.test.ts`. A false `ineligible` is the worst bug this app can have. |
+| FactGuard misses a fabrication | Low | **High** | Deterministic checks on numbers, dates, names and skills; adversarial release-gate suite; the human review gate as the last line — which, with the model pass unwired, is the only thing behind a semantic overstatement. |
 | Generated text still reads as machine-written | Medium | Low | StyleCritic + tell-scrub + the edit-distance nudge. Ultimately the user edits; the tool's job is a good first draft, not a final one. |
-| LLM cost surprises the user | Medium | Low | Prompt caching on the stable prefix; Haiku for bulk classification; a live cost panel; a configurable monthly cap that pauses LLM features rather than silently spending. |
+| LLM cost surprises the user | Medium | Low | A live cost panel, read from the `llm_call` ledger rather than estimated. **The other three mitigations are not built:** nothing sends a cache breakpoint, no call requests Haiku (the model is mapped but no caller asks for that purpose), and there is no spending cap. |
 | Local PII exposure | Low | High | Field encryption, keychain, restrictive ACLs, redacted logs, pre-commit hook, export/delete. |
 | User over-applies to poor fits | Medium | Low | Rationale states the likely rejection reason; effort estimates; per-application friction is deliberate. |
 
@@ -179,7 +182,7 @@ schedule slips.
 | Question | Decision | Consequence |
 | --- | --- | --- |
 | Build order | **M0 only, then reassess** | Skeleton is built; M1+ starts on explicit go-ahead. |
-| Submit behavior | **G4 as designed — the user clicks Submit in the browser** | No auto-submit path exists anywhere in the codebase. Enforced by test + runtime guard. |
+| Submit behavior | **G4 as designed — the user clicks Submit in the browser** | No auto-submit path exists anywhere in the codebase. Enforced by an ESLint rule, a source-scan test, and a zero-POST fixture assertion. |
 | Age | **18 or older** | Guardian mode is **deferred out of v1**. DOB is still collected (18+ requirements are common) and still encrypted; the minor-specific handling in doc 10 is not built. |
 | Market | **United States only** | Sources: USAJOBS, Adzuna-US, US ATS boards. Work-authorization rules built for US visa/sponsorship status and citizenship requirements. UK/EU adapters deferred. |
 

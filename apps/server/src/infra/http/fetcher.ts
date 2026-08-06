@@ -145,10 +145,15 @@ async function takeToken(host: string, rps: number): Promise<void> {
  * `startsWith` treated both as literal characters — so "/*?page=" and "/*\/apply$" could
  * never match anything and were silently treated as permission to fetch. Every failure
  * mode of this function has to err toward NOT fetching.
+ *
+ * `target` is the path AND the query string, because the REP matches against both. Feeding
+ * it a bare pathname put "/*?page=" back in the same place: a site that had disallowed
+ * paginating through its listings got paginated through anyway, while the plain path rules
+ * next to it in the same file were obeyed.
  */
-function robotsMatches(pattern: string, pathname: string): boolean {
+function robotsMatches(pattern: string, target: string): boolean {
   if (pattern === '/') return true;
-  if (!pattern.includes('*') && !pattern.endsWith('$')) return pathname.startsWith(pattern);
+  if (!pattern.includes('*') && !pattern.endsWith('$')) return target.startsWith(pattern);
 
   const anchored = pattern.endsWith('$');
   const body = anchored ? pattern.slice(0, -1) : pattern;
@@ -156,7 +161,7 @@ function robotsMatches(pattern: string, pathname: string): boolean {
     .split('*')
     .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('.*');
-  return new RegExp(`^${source}${anchored ? '$' : ''}`).test(pathname);
+  return new RegExp(`^${source}${anchored ? '$' : ''}`).test(target);
 }
 
 /**
@@ -231,7 +236,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
   if (!opts.isDocumentedApi) {
     const blocked = await disallowedPaths(u.origin);
     for (const p of blocked) {
-      if (robotsMatches(p, u.pathname)) {
+      if (robotsMatches(p, u.pathname + u.search)) {
         throw new HttpError(`robots.txt disallows ${u.pathname}`, 403, url);
       }
     }

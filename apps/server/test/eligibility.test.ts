@@ -719,14 +719,26 @@ describe('term_overlap', () => {
     expect(weeks).toBeLessThan(8);
   });
 
-  it('does not widen a day-precision date', () => {
-    // Only month-only bounds are ambiguous; an exact date is already exact.
+  it('counts an end date as the whole of the day it names', () => {
+    // An end bound is inclusive at both precisions: '2027-08' means through August, and
+    // '2027-06-15' means through the 15th. This test used to read "does not widen a
+    // day-precision date" and assert `toBeCloseTo(2, 0)`, which was true of a June 1–15
+    // window under either reading — so it pinned nothing and hid the off-by-a-day. Ending
+    // the window at midnight dropped the user's own last available day, and availability
+    // is always day-precision: June 1 through July 12 is 6 weeks to the hour, and was
+    // being refused against a 6-week minimum. 15 inclusive days, exactly.
     expect(
       overlapWeeks(
         { start: '2027-06-01', end: '2027-06-15' },
         { start: '2027-06-01', end: '2027-12-31' },
       ),
-    ).toBeCloseTo(2, 0);
+    ).toBeCloseTo(15 / 7, 5);
+    expect(
+      overlapWeeks(
+        { start: '2027-06-01', end: '2027-07-12' },
+        { start: '2027-06-01', end: '2027-07-12' },
+      ),
+    ).toBe(6);
   });
 });
 

@@ -20,6 +20,8 @@ import { decryptField } from '../infra/crypto/fieldCrypto';
 import { logger } from '../infra/logger';
 import { getProfile } from '../core/profile/repository';
 import { canTransition } from '../core/tracking/status';
+import { isActionable } from '../core/filling/classify';
+import type { FieldResult } from '../core/filling/fill';
 import {
   continueRun,
   discardRun,
@@ -28,6 +30,58 @@ import {
   startRun,
   type StartInput,
 } from '../core/filling/run';
+
+/**
+ * The statuses a fill run passes through, in order, and therefore the only statuses an
+ * application can be filled from.
+ *
+ * A run genuinely covers three of them in one go: every answer is approved, the form has
+ * been typed into, and the user is left to press submit themselves. Everything after
+ * `awaiting_submit` describes something that happened out in the world, which no amount of
+ * typing into a form can undo.
+ */
+const FILL_PATH: ApplicationStatus[] = ['draft', 'answers_ready', 'filled', 'awaiting_submit'];
+
+/**
+ * How each of the statuses beyond a fill run's reach is put to the user.
+ *
+ * Written out one by one because the status names do not survive being dropped into a
+ * sentence: "This application is already interview" is not something a person would say.
+ */
+const PAST_FILLING: Partial<Record<ApplicationStatus, string>> = {
+  submitted: 'You have already sent this one.',
+  acknowledged: 'The employer has already acknowledged this one.',
+  interview: 'This one has already reached the interview stage.',
+  offer: 'This one has already reached an offer.',
+  rejected: 'This one has already been turned down.',
+  withdrawn: 'You withdrew this one.',
+  ghosted: 'This one has been quiet long enough to count as gone.',
+};
+
+/**
+ * Where a finished run may move an application, or nothing if the model refuses.
+ *
+ * The route used to write `awaiting_submit` straight over whatever was stored, without
+ * asking. That is a jump the status model refuses — `draft → awaiting_submit` is not a legal
+ * hop, so the one transition this tool makes on its own was the one transition nothing
+ * checked. Walking the path a hop at a time is how the write earns the status it claims.
+ *
+ * It also refuses outright for anything past `awaiting_submit`, which is what the damage
+ * was. Re-opening a fill on an application already sent dragged it from "Waiting" back to
+ * "Ready for you" and put "The form is filled. Read it and submit it yourself." beside a
+ * submission date — an invitation to apply to the same job twice.
+ */
+function advanceToAwaitingSubmit(from: ApplicationStatus): ApplicationStatus | null {
+  const start = FILL_PATH.indexOf(from);
+  if (start < 0) return null;
+
+  let current = from;
+  for (const next of FILL_PATH.slice(start + 1)) {
+    if (!canTransition(current, next, 'tool').ok) return null;
+    current = next;
+  }
+  return current;
+}
 
 interface Loaded {
   applyUrl: string;
@@ -57,6 +111,24 @@ export function load(applicationId: string): LoadResult {
     .all()[0];
 
   if (!row) return { ok: false, code: 'NOT_FOUND', message: 'No such application.' };
+
+  // An application the user has already sent is finished with as far as this tool is
+  // concerned, and typing into its form again would be the least of it: the status write at
+  // the end of a run put it back in "Ready for you" and asked the user to submit something
+  // they had submitted weeks ago. Nothing here checked, and the review screen still offers
+  // the buttons after a reload, because it remembers the submission only for as long as the
+  // page stays open.
+  const status = row.application.status as ApplicationStatus;
+  if (!FILL_PATH.includes(status)) {
+    return {
+      ok: false,
+      code: 'PAST_FILLING',
+      message:
+        `${PAST_FILLING[status] ?? `This application is already ${status.replace(/_/g, ' ')}.`} ` +
+        'Filling the form again would move it back to "Ready for you" and ask you to submit ' +
+        'something that is no longer waiting on you.',
+    };
+  }
 
   const profile = getProfile();
   if (!profile?.confirmedAt) {
@@ -141,11 +213,34 @@ function readableResumePath(id: string, storedPath: string): string | undefined 
   return decoded;
 }
 
+/**
+ * Why one field was left for the user, in the four words the stored column allows.
+ *
+ * Everything that was not a redline and did not throw used to be recorded as
+ * `unclassified`, which was a straight untruth about most of them. A field the tool
+ * understood perfectly well and typed into, only for the page to hand back a different
+ * value, was filed under "this tool could not tell what this field is asking for" — and so
+ * was a GPA box left empty because the profile has no GPA. Someone reading their exported
+ * data came away thinking the form was full of fields nothing could make sense of.
+ *
+ * `mismatch` shares `failed` because the honest thing both say is that the value did not
+ * land, and the review screen is where the difference between them is spelled out.
+ */
+function skipReason(r: FieldResult): 'redline' | 'unclassified' | 'no_match' | 'failed' {
+  if (r.field.semantic === 'REDLINE') return 'redline';
+  if (r.status === 'failed' || r.status === 'mismatch') return 'failed';
+  // The same question the planner asked before it skipped this field: could the field be
+  // named at all? If it could, the tool knew what was wanted and had nothing to put there.
+  return isActionable(r.field) ? 'no_match' : 'unclassified';
+}
+
 function refuse(
   reply: { code: (n: number) => { send: (b: unknown) => unknown } },
   r: Extract<LoadResult, { ok: false }>,
 ) {
-  const status = r.code === 'NOT_FOUND' ? 404 : 400;
+  // A conflict rather than a bad request: the call was well formed, the application is
+  // simply somewhere a fill run has no business touching.
+  const status = r.code === 'NOT_FOUND' ? 404 : r.code === 'PAST_FILLING' ? 409 : 400;
   return reply
     .code(status)
     .send({ error: { code: r.code, message: r.message, details: r.details } });
@@ -207,20 +302,43 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
             .filter((r) => r.status !== 'ok')
             .map((r) => ({
               label: r.field.label,
-              reason:
-                r.field.semantic === 'REDLINE'
-                  ? 'redline'
-                  : r.status === 'failed'
-                    ? 'failed'
-                    : 'unclassified',
+              reason: skipReason(r),
               category: r.field.redlineCategory,
             }));
 
+          /**
+           * The status is read again here rather than reused from `load()`.
+           *
+           * A run takes minutes — a login wall, a bot check, a long form — and the user
+           * spends them in the browser with the tracker open in another tab. Someone who
+           * finishes the form by hand and records that on the board while the run is still
+           * open would, on the stale status, have had the finished run overwrite
+           * `submitted` with `awaiting_submit` the moment it caught up.
+           */
+          const current = db
+            .select({ status: schema.application.status })
+            .from(schema.application)
+            .where(eq(schema.application.id, req.params.id))
+            .all()[0];
+
+          // `awaiting_submit` is as far as this app will ever move an application on its
+          // own. The next status is written by the user telling us they submitted it.
+          const next = current
+            ? advanceToAwaitingSubmit(current.status as ApplicationStatus)
+            : null;
+          if (!next) {
+            logger.warn(
+              { applicationId: req.params.id, status: current?.status },
+              'fill finished on an application that has moved past filling; leaving its status alone',
+            );
+          }
+
+          // What the run found is recorded either way. The form really was filled, and
+          // dropping that on the floor because the status moved underneath us would lose
+          // the one list telling the user which fields still need them.
           db.update(schema.application)
             .set({
-              // `awaiting_submit` is as far as this app will ever move an application on its
-              // own. The next status is written by the user telling us they submitted it.
-              status: 'awaiting_submit',
+              ...(next ? { status: next } : {}),
               skippedFields: skipped,
               updatedAt: new Date().toISOString(),
             })

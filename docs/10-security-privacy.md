@@ -26,10 +26,15 @@ adversary on the user's machine.
 data/                          # gitignored in full
 ├─ app.db                      # SQLite; 🔒 columns field-encrypted
 ├─ resumes/                    # original uploads
-├─ artifacts/                  # generated cover letters (no screenshots — see docs/07)
+├─ artifacts/                  # reserved; nothing writes here yet (see below)
 ├─ browser-profile/            # Playwright persistent context + storage state
 └─ .master.key                 # ONLY when the OS credential store was unavailable
 ```
+
+`artifacts/` was to hold generated cover letters; nothing generates one, and no screenshot
+is ever captured either (docs/07 § The submit gate). The directory is empty on every
+install, and the deletion routine still clears it so that stays true if something starts
+writing there.
 
 **Field-level encryption.** Columns marked 🔒 in doc 03 are encrypted with AES-256-GCM
 before insert and decrypted on read. Each value gets a fresh 96-bit nonce; the row id is
@@ -64,10 +69,21 @@ is.
 would defeat the `.gitkeep` negation), `.env`, `*.db`, `*.db-wal`, `*.db-shm`, and
 `*.sqlite`.
 
-> **Not built:** the pre-commit hook this section used to describe, which was supposed to
-> refuse commits containing resume/PII file patterns or an `sk-ant-` prefix. There is no
-> hook. The `.gitignore` above is the only thing standing between the data directory and a
-> commit.
+**Pre-commit hook.** `.githooks/pre-commit` refuses a commit that would leak PII or a
+secret, on four checks over the staged file list:
+
+1. anything under `data/` except `data/.gitkeep` — that directory holds the resume, the
+   profile, the browser session, and the logs;
+2. any `.db`, `.sqlite`, `.db-wal`, or `.db-shm` file, anywhere;
+3. any `.env` file other than `.env.example`;
+4. any `resume`/`cv`/`transcript`-shaped `.pdf`, `.doc`, `.docx`, or `.rtf`;
+
+and then reads the staged *content* of every file for an `sk-ant-` key.
+
+It is opt-in: git ignores `.githooks` until `core.hooksPath` points at it, so a fresh clone
+has no hook at all until someone runs `npm run hooks:install`. That is one command standing
+between a new checkout and the `.gitignore` above being the only protection left, which is
+why it belongs in setup rather than in a footnote.
 
 ## Secrets
 
@@ -192,7 +208,15 @@ applications or missed ones.
 - **Delete everything** — `POST /api/privacy/delete-all` with a typed confirmation string
   wipes every table in `app.db`, `resumes/`, `artifacts/`, `browser-profile/`, and the keychain
   entries. Files are removed, not just unlinked from the DB.
-- **Per-item deletion** for resumes, writing samples, and applications.
+- **Per-item deletion** for resumes (`DELETE /api/resumes/:id`), writing samples
+  (`DELETE /api/writing-samples/:id`), individual drafted answers
+  (`DELETE /api/answers/:id`), and saved answer templates
+  (`DELETE /api/answer-library/:id`). **Not built:** deleting a single application. There is
+  no `DELETE /api/applications/:id`, and `schema.application` is never a delete target
+  anywhere in the server — the row and its answers survive until "delete everything" takes
+  the whole database. It is not a one-liner: an application delete has to cascade to its
+  `application_answer` rows and its fill artifacts, or it leaves the answers behind, which
+  is the PII the user was trying to remove.
 - A Settings → Privacy panel that states, in plain sentences, exactly what is stored where
   and what leaves the machine.
 

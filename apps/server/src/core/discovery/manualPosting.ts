@@ -93,6 +93,25 @@ function readCountry(value: unknown): string | undefined {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
 }
 
+/**
+ * The places a remote posting says you may live, from schema.org
+ * `applicantLocationRequirements` — a Country or State node, or a list of them.
+ *
+ * The field was read off the page and then thrown away: `remoteEligibleIn` was written as
+ * an empty list on every manual posting, so a page that said in structured data "remote,
+ * but you must be resident in the United States" was stored as knowing nothing about where
+ * it would take people, and that is what the privacy export showed back.
+ */
+function readApplicantLocations(value: unknown): string[] {
+  const nodes = Array.isArray(value) ? value : [value];
+  const out: string[] = [];
+  for (const node of nodes) {
+    const name = typeof node === 'string' ? node : (node as { name?: unknown } | null)?.name;
+    if (typeof name === 'string' && name.trim()) out.push(name.trim());
+  }
+  return out;
+}
+
 export interface ManualResult {
   posting: NormalizedPosting;
   usedJsonLd: boolean;
@@ -160,7 +179,7 @@ export async function fetchManualPosting(url: string): Promise<ManualResult> {
     positionType: parsePositionType(title, description),
     workArrangement: remote ? 'remote' : arrangement,
     hybridDaysOnsite: parseHybridDays(hay),
-    remoteEligibleIn: [],
+    remoteEligibleIn: readApplicantLocations(ld?.applicantLocationRequirements),
     programFlags: [],
     term: {
       season: parseSeason(hay),

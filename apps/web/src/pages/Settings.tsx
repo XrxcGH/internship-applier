@@ -45,7 +45,12 @@ export function Settings() {
   // Every action handler on this page surfaces its errors; the mount path used to be the
   // one that did not, so a failed fetch left "Checking…" and "Reading the ledger…"
   // pulsing for the life of the page.
+  //
+  // Clears the banner on the way in, so retrying after the server comes back leaves the
+  // page reading as it did before the failure rather than keeping a red bar over three
+  // sections that have just loaded.
   const refresh = useCallback(() => {
+    setError(null);
     const fail = (err: unknown) => {
       setError(err instanceof Error ? err.message : String(err));
     };
@@ -108,12 +113,27 @@ export function Settings() {
               or get rid of it."
       />
 
-      {error && <Notice tone="redline">{error}</Notice>}
+      {error && (
+        <Notice tone="redline">
+          {error}
+          {/* The way back. Every other control that reloads this page lives inside a
+              branch that only renders once the data it needs has arrived, so a mount
+              fetch that failed left no control anywhere on screen and the only way
+              forward was reloading the tab by hand. */}
+          <div className="mt-3">
+            <Button size="sm" disabled={busy !== null} onClick={refresh}>
+              Try again
+            </Button>
+          </div>
+        </Notice>
+      )}
 
       <Section n="01" title="Model access" step={3}>
-        {!access ? (
-          <p className="text-dim a-pulse">Checking…</p>
-        ) : (
+        {/* Yields to the banner above, as Applications already does. Keyed only on the
+            data being absent, a failed fetch pulsed "Checking…" under a red error for
+            the life of the page — the page looked like it was still working on it. */}
+        {!access && !error && <p className="text-dim a-pulse">Checking…</p>}
+        {access && (
           <div className="u-card-flat px-5 py-5">
             <div className="mb-3 flex flex-wrap items-center gap-3">
               <Badge tone={access.available ? 'verified' : 'caution'}>
@@ -153,9 +173,8 @@ export function Settings() {
       </Section>
 
       <Section n="02" title="What it has cost" step={4}>
-        {!costs ? (
-          <p className="text-dim a-pulse">Reading the ledger…</p>
-        ) : (
+        {!costs && !error && <p className="text-dim a-pulse">Reading the ledger…</p>}
+        {costs && (
           <>
             <p className="text-dim u-prose mb-4">{costs.note}</p>
 
@@ -212,9 +231,11 @@ export function Settings() {
           <Notice tone="verified">{deleted}</Notice>
         ) : preview === null ? (
           <div className="u-card-flat px-5 py-5">
+            {/* The precondition holds either way, but saying "loading" over a failed
+                fetch promised something that was never going to arrive. */}
             <p className="text-dim u-prose">
-              Loading what is stored. Nothing can be deleted until this page can tell you exactly
-              what would go.
+              {error ? 'Could not read what is stored.' : 'Loading what is stored.'} Nothing can be
+              deleted until this page can tell you exactly what would go.
             </p>
           </div>
         ) : (

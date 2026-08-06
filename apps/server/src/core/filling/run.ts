@@ -166,64 +166,79 @@ export async function continueRun(input: StartInput): Promise<FillRun> {
     throw new Error('No open fill run for this application. Start one first.');
   }
 
-  const blocked = await detectIntervention(run.session.page);
-  if (blocked) {
-    run.state = 'awaiting_user';
-    run.intervention = blocked;
-    run.message = blocked.detail;
-    // The same announcement start makes. An intervention that appears BETWEEN start and
-    // continue — a login wall behind a wizard step, a bot check the first interaction
-    // triggered — is the one a watching UI is least expecting, and without this it reached
-    // nobody: the run parked in awaiting_user and the screen sat unchanged until someone
-    // reloaded it by hand.
-    publish({
-      type: 'fill.needs_input',
-      applicationId: input.applicationId,
-      reason: blocked.reason,
-      detail: blocked.detail,
+  // Everything past this point ends in a state the user can act on, the same way starting a
+  // run does. A throw from the re-read or from the fill used to leave the run parked in
+  // `reading` or `filling` forever: the route reported the error, but the screen kept
+  // offering "Fill the form" — the card is deliberately withheld from a `failed` run
+  // precisely because its only outcome is the same error a second time — and the run's own
+  // message still described the page as it looked before anything went wrong.
+  try {
+    const blocked = await detectIntervention(run.session.page);
+    if (blocked) {
+      run.state = 'awaiting_user';
+      run.intervention = blocked;
+      run.message = blocked.detail;
+      // The same announcement start makes. An intervention that appears BETWEEN start and
+      // continue — a login wall behind a wizard step, a bot check the first interaction
+      // triggered — is the one a watching UI is least expecting, and without this it reached
+      // nobody: the run parked in awaiting_user and the screen sat unchanged until someone
+      // reloaded it by hand.
+      publish({
+        type: 'fill.needs_input',
+        applicationId: input.applicationId,
+        reason: blocked.reason,
+        detail: blocked.detail,
+      });
+      return run;
+    }
+
+    run.intervention = undefined;
+    run.state = 'reading';
+    run.map = await buildFormMap(run.session.page);
+    run.plan = buildFillPlan({
+      fields: run.map.fields,
+      profile: input.profile,
+      answers: input.answers,
+      resumePath: input.resumePath,
     });
+
+    run.state = 'filling';
+    run.result = await executePlan(run.session.page, run.plan, (r) => {
+      publish({
+        type: 'fill.step',
+        applicationId: input.applicationId,
+        field: r.field.label,
+        status: r.status,
+        note: r.note,
+      });
+    });
+
+    run.state = 'done';
+    run.message = describeFill(run.result);
+
+    // All four outcomes, because this is the last thing a stream consumer ever hears about
+    // the run. Announcing only `filled` and `skipped` meant a run that typed five values and
+    // had three of them quietly rejected by the page signed off as "5 filled, 0 skipped":
+    // the two counts that carried the bad news had nowhere to go, and a screen watching the
+    // stream showed a clean run over a form with three wrong boxes in it.
+    publish({
+      type: 'fill.done',
+      applicationId: input.applicationId,
+      filled: run.result.filled,
+      mismatched: run.result.mismatched,
+      failed: run.result.failed,
+      skipped: countSkipped(run.result),
+    });
+
     return run;
+  } catch (err) {
+    run.state = 'failed';
+    run.message = err instanceof Error ? err.message : String(err);
+    logger.error({ err, applicationId: input.applicationId }, 'fill run failed while continuing');
+    // Rethrown rather than returned, because the route turns this into the 502 the review
+    // screen already knows how to show. Marking the run is what the caller cannot do.
+    throw err;
   }
-
-  run.intervention = undefined;
-  run.state = 'reading';
-  run.map = await buildFormMap(run.session.page);
-  run.plan = buildFillPlan({
-    fields: run.map.fields,
-    profile: input.profile,
-    answers: input.answers,
-    resumePath: input.resumePath,
-  });
-
-  run.state = 'filling';
-  run.result = await executePlan(run.session.page, run.plan, (r) => {
-    publish({
-      type: 'fill.step',
-      applicationId: input.applicationId,
-      field: r.field.label,
-      status: r.status,
-      note: r.note,
-    });
-  });
-
-  run.state = 'done';
-  run.message = describeFill(run.result);
-
-  // All four outcomes, because this is the last thing a stream consumer ever hears about the
-  // run. Announcing only `filled` and `skipped` meant a run that typed five values and had
-  // three of them quietly rejected by the page signed off as "5 filled, 0 skipped": the two
-  // counts that carried the bad news had nowhere to go, and a screen watching the stream
-  // showed a clean run over a form with three wrong boxes in it.
-  publish({
-    type: 'fill.done',
-    applicationId: input.applicationId,
-    filled: run.result.filled,
-    mismatched: run.result.mismatched,
-    failed: run.result.failed,
-    skipped: countSkipped(run.result),
-  });
-
-  return run;
 }
 
 /**

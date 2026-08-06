@@ -142,6 +142,52 @@ function addAnswer(approved: boolean, question = 'Why do you want this internshi
   return id;
 }
 
+/**
+ * Gate G1, over the wire.
+ *
+ * Every other test in this file runs with the profile already confirmed, so the check that
+ * refuses a run built on facts the user has never looked at was never once exercised. It is
+ * the gate standing between the extractor's guesses — a misread graduation date, a phone
+ * number picked out of a footer — and an employer's form, and it needs a test of its own so
+ * that dropping it is a failure rather than a silent change of behaviour.
+ */
+describe('gate G1 blocks filling', () => {
+  beforeEach(() => {
+    // The fixture is declared with `confirmedAt: null`, so writing it back is exactly what
+    // an unconfirmed profile looks like from the route's side.
+    saveProfile(PROFILE);
+  });
+
+  afterEach(() => {
+    confirmProfile();
+  });
+
+  it('refuses a run against a profile the user has not confirmed', async () => {
+    addAnswer(true);
+    for (const url of [
+      `/api/applications/${applicationId}/fill`,
+      `/api/applications/${applicationId}/fill/continue`,
+    ]) {
+      const res = await app.inject({ method: 'POST', url });
+      expect(res.statusCode, url).toBe(400);
+      expect(res.json().error.code, url).toBe('PROFILE_INCOMPLETE');
+      // Says which gate, because "incomplete" on its own does not tell anyone what to do.
+      expect(res.json().error.message, url).toMatch(/confirm your profile/i);
+    }
+  });
+
+  it('checks the profile before it checks the answers', async () => {
+    // The other order would let an unapproved answer stand in for the missing confirmation:
+    // the user fixes the answer, gets a second refusal, and only then learns about G1.
+    addAnswer(false);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/applications/${applicationId}/fill`,
+    });
+    expect(res.json().error.code).toBe('PROFILE_INCOMPLETE');
+  });
+});
+
 describe('gate G3 blocks filling', () => {
   it('refuses to open a browser while an answer is unapproved', async () => {
     addAnswer(false);

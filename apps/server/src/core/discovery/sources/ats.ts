@@ -205,6 +205,145 @@ export const ashby: JobSource = {
 
 const REMOTE_RE = /\bremote\b/i;
 
+/** The word itself plus the qualifiers boards habitually attach to it. */
+const REMOTE_TOKEN = /\b(?:fully\s+|100%\s+)?remote(?:[- ](?:only|first|work|position|role))?\b/gi;
+
+/**
+ * The same pattern without `/g`, for asking rather than replacing.
+ *
+ * `test` on a global regex advances `lastIndex` and leaves it there, so reusing
+ * REMOTE_TOKEN to ask the question would make each answer depend on which part was asked
+ * about before it.
+ */
+const MENTIONS_REMOTE = new RegExp(REMOTE_TOKEN.source, 'i');
+
+/**
+ * Removes the remote wording from one comma-separated part and keeps whatever geography
+ * was sitting next to it.
+ *
+ * A part that so much as mentioned remoteness used to be dropped whole, so "Remote - US"
+ * lost the country entirely and "New York, NY or Remote" lost the state. Both are ordinary
+ * Greenhouse and Lever location strings, and both left the posting looking like it names
+ * nowhere at all.
+ */
+function stripRemoteToken(part: string): string {
+  // Nothing to strip means nothing to tidy. This runs over EVERY comma-part, and the
+  // conjunction trim below would otherwise eat a part that is exactly "OR" — Oregon's
+  // state code — leaving "Portland, OR" recorded as a city in no state at all. A part that
+  // never mentioned remoteness is returned untouched.
+  if (!MENTIONS_REMOTE.test(part)) return part.trim();
+
+  return (
+    part
+      .replace(REMOTE_TOKEN, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s\-–—/|]+|[\s\-–—/|]+$/g, '')
+      // One conjunction, from one end, and never down to nothing. Trimming both ends at
+      // once turned "OR or Remote" — Portland's state followed by the conjunction — into an
+      // empty string, so a Portland posting recorded a city in no state at all.
+      .replace(/\s+(?:or|and)$/i, '')
+      .replace(/^(?:or|and)\s+/i, '')
+      // "Remote (US)" leaves a lone bracketed country behind. Only a part that is bracketed
+      // end to end is unwrapped, so "New York (NY)" keeps both of its brackets.
+      .replace(/^[([{]([^()[\]{}]*)[)\]}]$/, '$1')
+      .trim()
+  );
+}
+
+/**
+ * Country names as boards write them, used to tell "Berlin, Germany" from "Austin, TX".
+ *
+ * Two-letter ISO codes are deliberately absent. CA, IN, DE, LA, MD, MT, NE and PA are all
+ * US state abbreviations as well as country codes, and the state reading is overwhelmingly
+ * the more common one on these boards — treating "San Francisco, CA" as a Canadian posting
+ * would be a far worse error than the one this table is here to fix. England, Scotland and
+ * Wales are absent for the same reason in reverse: they are the region half of "London,
+ * England", not the country.
+ */
+const COUNTRY_NAMES = new Set([
+  'us',
+  'u s',
+  'usa',
+  'u s a',
+  'united states',
+  'united states of america',
+  'uk',
+  'united kingdom',
+  'great britain',
+  'ireland',
+  'canada',
+  'mexico',
+  'brazil',
+  'argentina',
+  'chile',
+  'colombia',
+  'costa rica',
+  'germany',
+  'france',
+  'spain',
+  'italy',
+  'portugal',
+  'netherlands',
+  'the netherlands',
+  'belgium',
+  'luxembourg',
+  'switzerland',
+  'austria',
+  'denmark',
+  'sweden',
+  'norway',
+  'finland',
+  'iceland',
+  'poland',
+  'czechia',
+  'czech republic',
+  'slovakia',
+  'hungary',
+  'romania',
+  'bulgaria',
+  'greece',
+  'croatia',
+  'serbia',
+  'ukraine',
+  'estonia',
+  'latvia',
+  'lithuania',
+  'turkey',
+  'india',
+  'china',
+  'japan',
+  'korea',
+  'south korea',
+  'taiwan',
+  'hong kong',
+  'singapore',
+  'malaysia',
+  'thailand',
+  'vietnam',
+  'indonesia',
+  'philippines',
+  'pakistan',
+  'bangladesh',
+  'israel',
+  'saudi arabia',
+  'qatar',
+  'uae',
+  'united arab emirates',
+  'egypt',
+  'morocco',
+  'nigeria',
+  'kenya',
+  'ghana',
+  'south africa',
+  'australia',
+  'new zealand',
+]);
+
+function asCountry(part: string | undefined): string | undefined {
+  if (!part) return undefined;
+  return COUNTRY_NAMES.has(part.replace(/\./g, '').trim().toLowerCase()) ? part : undefined;
+}
+
 export function parseLocation(
   raw: string,
   remoteHint?: boolean,
@@ -212,8 +351,18 @@ export function parseLocation(
   const remote = remoteHint ?? REMOTE_RE.test(raw);
   const parts = raw
     .split(/[,|]/)
-    .map((s) => s.trim())
-    .filter((s) => s && !REMOTE_RE.test(s));
+    .map((s) => stripRemoteToken(s.trim()))
+    .filter(Boolean);
+
+  // "Berlin, Germany" and "London, UK" are as common on these boards as "Austin, TX", and
+  // reading the second part positionally as a region filed the country under region — so a
+  // posting the user opened said "Based in Berlin Germany" with no country recorded at all,
+  // and the privacy export showed the same. Only the last part is tested, and only against
+  // names, so a two-part string that really is "City, Region" is untouched.
+  if (parts.length <= 2) {
+    const country = asCountry(parts.at(-1));
+    if (country) return { city: parts.length === 2 ? parts[0] : undefined, country, remote };
+  }
 
   // No country unless the string names one. These boards usually give "City, Region" and
   // nothing more, so filling the gap with "US" recorded "London, England" and "Toronto,

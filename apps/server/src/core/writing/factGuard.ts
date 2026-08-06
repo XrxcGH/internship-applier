@@ -106,6 +106,14 @@ function containsPhrase(haystack: string, needle: string): boolean {
   return needle.length > 0 && ` ${haystack} `.includes(` ${needle} `);
 }
 
+/**
+ * Spelled-out counts, through ninety.
+ *
+ * This used to stop at twelve, which made the guard avoidable by anyone who writes numbers
+ * out: "I worked at Kestrel Analytics for 20 years" was caught and blocked, while the same
+ * sentence written "for twenty years" produced no duration at all, came back amber, and
+ * was approvable at G3. The magnitudes worth inventing were exactly the ones missing.
+ */
 const NUMBER_WORDS: Record<string, number> = {
   one: 1,
   two: 2,
@@ -119,7 +127,45 @@ const NUMBER_WORDS: Record<string, number> = {
   ten: 10,
   eleven: 11,
   twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
 };
+
+const TENS = ['twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+const ONES = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+
+/**
+ * The compound form first, so "twenty-five years" is read as twenty-five rather than as a
+ * bare "five" with the tens word left behind; then every single word longest-first, so
+ * "seventeen" is not read as "seven" trailing a stray "teen".
+ */
+const COUNT_PATTERN = [
+  String.raw`\d{1,2}`,
+  String.raw`(?:${TENS.join('|')})[\s-](?:${ONES.join('|')})`,
+  ...Object.keys(NUMBER_WORDS).sort((a, b) => b.length - a.length),
+].join('|');
+
+/** Digits verbatim; words summed, so "twenty-five" is 25 rather than 20 or 5. */
+function countOf(raw: string): number {
+  if (/^\d+$/.test(raw)) return Number(raw);
+  return raw
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .reduce((sum, w) => sum + (NUMBER_WORDS[w] ?? 0), 0);
+}
 
 /** Months between two YYYY-MM values. */
 function monthsBetween(start: string, end: string): number {
@@ -140,15 +186,27 @@ export interface DurationClaim {
   raw: string;
 }
 
-/** "for two years", "over 18 months", "a three-month internship". */
+/**
+ * "for two years", "over 18 months", "a three-month internship".
+ *
+ * The trailing "old" is excluded because an age is not a duration of work. Without that,
+ * "I'm 19 years old and have been coding since high school" measured nineteen years
+ * against the longest entry on the profile and came back red — "The draft says 19 years.
+ * The longest matching entry on your profile is about 44 months." — on a sentence that is
+ * both true and the most ordinary thing a student can write. The hyphenated adjective
+ * ("as a 19-year-old sophomore") failed the same way, which is why the lookahead allows
+ * for a hyphen as well as a space.
+ */
 export function extractDurations(text: string): DurationClaim[] {
   const out: DurationClaim[] = [];
-  const re =
-    /\b(?:for|over|across|spent|nearly|almost|about|around)?\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)[\s-]*(year|yr|month|mo|week)s?\b/gi;
+  const re = new RegExp(
+    String.raw`\b(?:for|over|across|spent|nearly|almost|about|around)?\s*(${COUNT_PATTERN})` +
+      String.raw`[\s-]*(year|yr|month|mo|week)s?\b(?![\s-]*old\b)`,
+    'gi',
+  );
 
   for (const m of text.matchAll(re)) {
-    const rawN = m[1]!.toLowerCase();
-    const n = /^\d+$/.test(rawN) ? Number(rawN) : (NUMBER_WORDS[rawN] ?? 0);
+    const n = countOf(m[1]!);
     if (n <= 0) continue;
     const unit = m[2]!.toLowerCase();
     const months = unit.startsWith('y') ? n * 12 : unit.startsWith('w') ? n / 4.345 : n;
@@ -160,6 +218,20 @@ export function extractDurations(text: string): DurationClaim[] {
 /** The denominator of "3.62/4.0" or "3.62 out of 4", and the tail of "on a 4.0 scale". */
 const GPA_SCALE_TAIL = /\b(\d\.\d{1,2})\s*(?:\/|out of)\s*(?:4|4\.0|5|5\.0)\b/gi;
 const GPA_SCALE_PHRASE = /\bon\s+a\s+\d(?:\.\d{1,2})?[\s-]*(?:point\s*)?scale\b/gi;
+
+/**
+ * Nouns that make a nearby whole number a count of something rather than a grade. "GPA
+ * (last 2 years): 3.4" and "My GPA in my last 2 years was 3.4" both used to hand back the
+ * 2 — the first number within twelve characters of the label — and the user was blocked at
+ * G3 with "The draft says GPA 2; your profile says 3.4", which is not a sentence they can
+ * act on because they never claimed a GPA of 2.
+ */
+const COUNT_NOUN_TAIL =
+  /^\s*(?:year|semester|quarter|term|month|week|credit|hour|course|class)e?s?\b/i;
+
+/** A grade, not an SAT score or a year: one leading digit, or any decimal under ten. */
+const isGradeShaped = (token: string): boolean =>
+  token.includes('.') ? Number(token) < 10 : token.length === 1;
 
 /**
  * Every number this returns is a GPA the draft CLAIMS, so a scale must never come back.
@@ -180,9 +252,21 @@ export function extractGpas(text: string): number[] {
     .replace(GPA_SCALE_TAIL, (m, value: string) => value.padEnd(m.length, ' '))
     .replace(GPA_SCALE_PHRASE, (m) => ' '.repeat(m.length));
 
-  // "GPA: 3.62", "my GPA is a 3.9"
-  for (const m of masked.matchAll(/\bgpa\b[^0-9]{0,12}(\d(?:\.\d{1,2})?)/gi))
-    out.push(Number(m[1]));
+  // "GPA: 3.62", "my GPA is a 3.9", "GPA (last 2 years): 3.4". Read forward to the end of
+  // the clause and take the first number that can be a grade, rather than the first number
+  // full stop — a count of years or semesters routinely sits between the label and the
+  // value, and skipping it also stops the real GPA behind it from going unchecked.
+  for (const label of masked.matchAll(/\bgpa\b/gi)) {
+    const from = label.index + label[0].length;
+    const window = masked.slice(from, from + 40).split(/[.!?;](?=\s|$)/)[0]!;
+    for (const n of window.matchAll(/\b\d+(?:\.\d+)?\b/g)) {
+      if (!isGradeShaped(n[0])) continue;
+      if (!n[0].includes('.') && COUNT_NOUN_TAIL.test(window.slice(n.index + n[0].length)))
+        continue;
+      out.push(Number(n[0]));
+      break;
+    }
+  }
   // "3.9 GPA", "3.9 cumulative GPA" — the number can lead.
   for (const m of masked.matchAll(/\b(\d\.\d{1,2})\s+(?:\w+\s+){0,2}gpa\b/gi))
     out.push(Number(m[1]));

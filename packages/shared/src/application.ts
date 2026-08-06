@@ -95,6 +95,12 @@ export const FormField = z.object({
   semantic: FieldSemantic,
   redlineCategory: RedlineCategory.optional(),
   confidence: z.number().min(0).max(1),
+  /**
+   * Not built: nothing sets this, and nothing reads it. A wizard is walked by re-reading the
+   * page after each advance, so a map only ever describes the step the browser is currently
+   * on and its fields have no other step to name. The field is kept because a scanner that
+   * read a whole wizard in one pass is where a step number would come from.
+   */
   step: z.number().int().optional(),
   frame: z.string().optional(),
 });
@@ -136,6 +142,12 @@ export const Application = z.object({
   status: ApplicationStatus,
   applyUrl: z.string().url(),
   atsVendor: z.string(),
+  /**
+   * Not built: nothing writes this. No route accepts a per-application resume choice, so it
+   * is always null and every fill falls back to whichever resume is marked primary. The
+   * field is kept because choosing a different resume for one application — a research lab
+   * that should see the research CV — is what it would record.
+   */
   resumeDocumentId: z.string().nullable(),
   /** Written ONLY by POST /api/applications/:id/mark-submitted (gate G4). */
   submittedAt: z.string().datetime().nullable(),

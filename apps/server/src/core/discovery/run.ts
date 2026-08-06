@@ -116,7 +116,14 @@ export async function runDiscovery(
           location: target.location,
         });
         report.found = result.postings.length;
-        report.notes = result.notes;
+        report.notes = [...result.notes, ...(result.gaps ?? [])];
+        // A source that came back short says so here. Without this a run that stopped at
+        // the first page of a paginated source, or dropped rows it could not read, was
+        // reported to the user as a complete search of that source.
+        if (result.gaps?.length) {
+          report.degraded = true;
+          skipped.push(...result.gaps);
+        }
         for (const p of result.postings) {
           collected.push({ posting: p, source: `${target.source}:${target.board}` });
         }

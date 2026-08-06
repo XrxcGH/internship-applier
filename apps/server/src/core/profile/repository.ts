@@ -128,13 +128,22 @@ export function getProfile(): CandidateProfile | null {
 }
 
 export function saveProfile(p: CandidateProfile, now: Date = new Date()): CandidateProfile {
+  const existing = db.select({ id: schema.profile.id }).from(schema.profile).limit(1).all();
+
+  // There is one profile row, and its id is both the key every match row points at and the
+  // additional authenticated data each encrypted column is sealed with. A save carrying a
+  // different id — a hand-rolled PUT /api/profile, or a caller that forgot to pin it —
+  // rewrote the primary key of the row it was updating: harmless-looking on a fresh install
+  // and a foreign-key error surfaced as a bare 500 the moment any match existed, with the
+  // user's own edits lost either way. The stored row keeps the id it was created with.
+  const id = existing[0]?.id ?? p.id;
   const next: CandidateProfile = {
     ...p,
+    id,
     derived: deriveProfile(p, now),
     updatedAt: now.toISOString(),
   };
   const row = encryptRow(next);
-  const existing = db.select({ id: schema.profile.id }).from(schema.profile).limit(1).all();
 
   if (existing[0]) {
     db.update(schema.profile).set(row).where(eq(schema.profile.id, existing[0].id)).run();

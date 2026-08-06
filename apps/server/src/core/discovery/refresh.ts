@@ -6,7 +6,7 @@
  */
 import { and, asc, eq, isNotNull, lt, sql } from 'drizzle-orm';
 import { db, schema } from '../../infra/db/client';
-import { HttpError, politeFetch } from '../../infra/http/fetcher';
+import { HttpError, politeFetch, scrubUrl } from '../../infra/http/fetcher';
 import { logger } from '../../infra/logger';
 
 export interface RefreshSummary {
@@ -117,7 +117,7 @@ export async function refreshPostings(
         summary.closedByFetch++;
       } else {
         summary.errors++;
-        logger.debug({ err, url: c.url }, 'refresh check failed; leaving posting open');
+        logger.debug({ err, url: scrubUrl(c.url) }, 'refresh check failed; leaving posting open');
       }
     }
   }

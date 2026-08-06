@@ -233,7 +233,11 @@ export const application = sqliteTable(
     deadlineAt: text('deadline_at'),
     screenshotPath: text('screenshot_path'),
     skippedFields: text('skipped_fields', { mode: 'json' }),
-    notes: text('notes'), // ENCRYPTED
+    // This carried the same ENCRYPTED marker as the eight columns that really are, while
+    // nothing in the app writes it at all — so it promised a protection that did not exist,
+    // and whoever adds the first notes feature would have taken the column as handled.
+    // Whatever writes it must call encryptField(value, applicationId) and mark it then.
+    notes: text('notes'), // plaintext — no writer yet
     createdAt: text('created_at').notNull().default(now),
     updatedAt: text('updated_at').notNull().default(now),
   },

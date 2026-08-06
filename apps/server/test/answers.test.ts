@@ -5,7 +5,7 @@
  * refuses to approve an answer that holds one — the check has to be enforced where a
  * modified client cannot route around it.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { CandidateProfile } from '@ia/shared';
 import { ulid } from 'ulid';
@@ -227,6 +227,37 @@ describe('G3 — approval is blocked by unverified claims', () => {
 });
 
 /**
+ * Gate G1, from the approval side.
+ *
+ * The fact check runs against the confirmed profile, so with no confirmed profile there is
+ * nothing to check a claim against. A verification that could not run must not read as a
+ * verification that passed: a null result once meant "zero blocking flags", which let any
+ * text at all through the gate and on towards an employer's form.
+ */
+describe('G1 — approval needs a confirmed profile', () => {
+  afterEach(() => {
+    confirmProfile();
+  });
+
+  it('refuses to approve while the profile is unconfirmed', async () => {
+    const id = await addQuestion('Tell us about a project you are proud of.');
+    // Text the profile fully supports, so G1 is the only thing that can refuse it.
+    await write(id, 'I interned at Kestrel Analytics and built internal tooling in TypeScript.');
+
+    // The fixture is declared with `confirmedAt: null`, so writing it back un-confirms it.
+    saveProfile(PROFILE);
+
+    const res = await app.inject({ method: 'POST', url: `/api/answers/${id}/approve` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('PROFILE_INCOMPLETE');
+    expect(res.json().error.message).toMatch(/confirm your profile/i);
+
+    // And nothing was stamped on the way past.
+    expect(db.select().from(schema.applicationAnswer).all()[0]!.approvedAt).toBeNull();
+  });
+});
+
+/**
  * The suite pins LLM_PROVIDER=none (see vitest.setup.ts), so "no model available" is the
  * deterministic state here regardless of what is installed on the machine running it.
  */
@@ -298,10 +329,31 @@ describe('answer library', () => {
     expect(findReusable('Tell us about a project you are proud of.', 'Northwind')).toBeNull();
   });
 
-  it('pre-fills from the library but does not approve', async () => {
+  it('never reuses an answer whose own text names the company it was written for', () => {
+    // The archetype flag says whether a good answer to this QUESTION names the company;
+    // it says nothing about what the writer actually typed. A `proud_of` answer is
+    // reusable by archetype, so before this check one that happened to name Kestrel was
+    // handed to the next application verbatim and the Northwind form went out talking
+    // about Kestrel. Reuse is a convenience; a letter addressed to the wrong employer
+    // ends the application, so the ambiguous case is refused and the user writes fresh.
     saveApproved(
       'Tell us about a project you are proud of.',
-      'I built internal tooling at Kestrel Analytics.',
+      'I built internal tooling at Kestrel.',
+      'Kestrel',
+    );
+    expect(findReusable('Tell us about a project you are proud of.', 'Northwind')).toBeNull();
+    expect(findReusable('Tell us about a project you are proud of.', 'Kestrel')?.text).toContain(
+      'Kestrel',
+    );
+  });
+
+  it('pre-fills from the library but does not approve', async () => {
+    // The stored text deliberately does not name Kestrel, the company it was written for.
+    // Reuse across companies is refused for text that names its own company (see the test
+    // above), and this case is about the pre-fill/approve split, not about that refusal.
+    saveApproved(
+      'Tell us about a project you are proud of.',
+      'I built internal tooling that let support close billing tickets without an engineer.',
       'Kestrel',
     );
     const res = await app.inject({

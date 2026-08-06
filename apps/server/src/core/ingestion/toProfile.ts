@@ -43,24 +43,132 @@ function asYearMonth(raw: string | null | undefined): string | undefined {
 }
 
 /** A trailing "USA" on a location line is a country, not a state. */
-const COUNTRY_TAIL = /^(u\.?s\.?a?\.?|united states( of america)?)$/i;
+const US_TAIL = /^(u\.?s\.?a?\.?|united states( of america)?)$/i;
 
 /**
- * The candidate's own location line, split into the home city and state the profile keeps.
+ * Countries named often enough on a resume that "Berlin, Germany" has to be read as a city
+ * and a country rather than a city and a state.
+ *
+ * A two-part line is normally "City, State", so only a name listed here is promoted out of
+ * the state slot; anything unrecognised keeps today's reading rather than being guessed at.
+ * Names that are also US states — Georgia — are deliberately absent, because "Atlanta,
+ * Georgia" is by far the likelier line to meet.
+ */
+const COUNTRY_NAMES: Record<string, string> = {
+  canada: 'Canada',
+  mexico: 'Mexico',
+  'united kingdom': 'United Kingdom',
+  uk: 'United Kingdom',
+  'u.k.': 'United Kingdom',
+  england: 'United Kingdom',
+  scotland: 'United Kingdom',
+  wales: 'United Kingdom',
+  ireland: 'Ireland',
+  germany: 'Germany',
+  france: 'France',
+  spain: 'Spain',
+  portugal: 'Portugal',
+  italy: 'Italy',
+  netherlands: 'Netherlands',
+  belgium: 'Belgium',
+  switzerland: 'Switzerland',
+  austria: 'Austria',
+  sweden: 'Sweden',
+  norway: 'Norway',
+  denmark: 'Denmark',
+  finland: 'Finland',
+  poland: 'Poland',
+  romania: 'Romania',
+  ukraine: 'Ukraine',
+  greece: 'Greece',
+  turkey: 'Turkey',
+  israel: 'Israel',
+  india: 'India',
+  pakistan: 'Pakistan',
+  bangladesh: 'Bangladesh',
+  china: 'China',
+  japan: 'Japan',
+  'south korea': 'South Korea',
+  taiwan: 'Taiwan',
+  singapore: 'Singapore',
+  vietnam: 'Vietnam',
+  philippines: 'Philippines',
+  indonesia: 'Indonesia',
+  malaysia: 'Malaysia',
+  thailand: 'Thailand',
+  australia: 'Australia',
+  'new zealand': 'New Zealand',
+  brazil: 'Brazil',
+  argentina: 'Argentina',
+  chile: 'Chile',
+  colombia: 'Colombia',
+  peru: 'Peru',
+  nigeria: 'Nigeria',
+  ghana: 'Ghana',
+  kenya: 'Kenya',
+  egypt: 'Egypt',
+  'south africa': 'South Africa',
+  morocco: 'Morocco',
+  uae: 'United Arab Emirates',
+  'united arab emirates': 'United Arab Emirates',
+  'saudi arabia': 'Saudi Arabia',
+  qatar: 'Qatar',
+  russia: 'Russia',
+};
+
+/** The country a trailing part of a location line names, if it names one at all. */
+function asCountry(part: string): string | undefined {
+  if (US_TAIL.test(part)) return 'US';
+  return COUNTRY_NAMES[part.toLowerCase()];
+}
+
+/**
+ * The candidate's own location line, split into the home city, state and country the
+ * profile keeps.
  *
  * The extractor is asked for this on every run and the answer used to be dropped on the
- * floor, so at G1 the user retyped a city the tool had already read off the page. Both
- * halves stay in `needsReview`: this is a suggestion to check, not a fact being asserted. A
+ * floor, so at G1 the user retyped a city the tool had already read off the page. City and
+ * state stay in `needsReview`: this is a suggestion to check, not a fact being asserted. A
  * line that is not recognisably "City, State" leaves the state empty rather than inventing
  * one.
+ *
+ * A country the resume states used to be thrown away and the profile filled in with "US"
+ * regardless — so "Berlin, Germany" was stored as somebody living in the state of Germany,
+ * in the United States, and the fill engine went on to type "US" into the country field of
+ * their applications. That is a wrong fact asserted in the user's name, on a screen that
+ * shows no country control for them to correct it on.
  */
-function splitLocation(raw: string | null | undefined): { city: string; region: string } {
+function splitLocation(raw: string | null | undefined): {
+  city: string;
+  region: string;
+  country?: string;
+} {
   const parts = (raw ?? '')
     .split(',')
     .map((p) => p.trim())
     .filter(Boolean);
-  if (parts.length > 1 && COUNTRY_TAIL.test(parts[parts.length - 1]!)) parts.pop();
-  return { city: parts[0] ?? '', region: parts[1] ?? '' };
+
+  /**
+   * A country is only ever taken from a name we recognise, at any part count.
+   *
+   * Position alone used to be enough for a third part — "Toronto, ON, Canada" reads that
+   * way — but a resume header is not a structured address. "Apt 4, Austin, TX" and
+   * "Brooklyn, New York, NY" are equally ordinary, and both stored the state abbreviation
+   * as the country. That value goes on to be typed into the Country field of a real
+   * application, on a screen with no country control to correct it, so the tool would have
+   * asserted "TX" as a country in the user's name.
+   *
+   * When the trailing part is not a country we know, it stays where it is and the country
+   * is left absent — the same refusal to guess the two-part branch already made.
+   */
+  let country: string | undefined;
+  const last = parts[parts.length - 1];
+  if (last && parts.length >= 2) {
+    country = asCountry(last);
+    if (country) parts.pop();
+  }
+
+  return { city: parts[0] ?? '', region: parts[1] ?? '', ...(country ? { country } : {}) };
 }
 
 export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): CandidateProfile {
@@ -80,13 +188,16 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
     email: x.email ?? '',
     phone: x.phone ?? undefined,
     dateOfBirth: null,
-    address: { country: 'US' },
+    address: { country: home.country ?? 'US' },
     links: {
       github: asUrl(x.links.github),
       linkedin: asUrl(x.links.linkedin),
       portfolio: asUrl(x.links.portfolio),
       other: [],
     },
+    // This is the country the authorization question is *about*, not where the user lives:
+    // the tool only searches US postings, so the question every posting asks is whether
+    // they may work in the US. The answer itself stays 'unknown' and G1 makes them give it.
     workAuthorization: { country: 'US', status: 'unknown', needsSponsorship: false },
     citizenships: [],
     education: x.education.map((e) => ({
@@ -125,7 +236,7 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
     languages: x.languages,
     availability: { flexible: true },
     locationPrefs: {
-      base: { city: home.city, region: home.region, country: 'US' },
+      base: { city: home.city, region: home.region, country: home.country ?? 'US' },
       maxCommuteKm: 50,
       remoteOk: true,
       hybridOk: true,

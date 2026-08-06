@@ -100,13 +100,14 @@ export const adzuna: JobSource = {
 
     const what = encodeURIComponent(q.keywords?.join(' ') ?? 'internship');
     const where = encodeURIComponent(q.location ?? '');
+    const perPage = Math.min(q.limit ?? 50, 50);
     const url =
       `https://api.adzuna.com/v1/api/jobs/${ADZUNA_COUNTRY}/search/1` +
       `?app_id=${process.env.ADZUNA_APP_ID}&app_key=${process.env.ADZUNA_APP_KEY}` +
-      `&results_per_page=${Math.min(q.limit ?? 50, 50)}&what=${what}${where ? `&where=${where}` : ''}` +
+      `&results_per_page=${perPage}&what=${what}${where ? `&where=${where}` : ''}` +
       `&content-type=application/json`;
 
-    const data = await fetchJson<{ results?: AdzunaJob[] }>(url, { rps: 1 });
+    const data = await fetchJson<{ results?: AdzunaJob[]; count?: number }>(url, { rps: 1 });
 
     const postings = (data.results ?? []).map((j) =>
       build(
@@ -117,16 +118,7 @@ export const adzuna: JobSource = {
           company: j.company?.display_name ?? 'Unknown',
           title: j.title,
           postedAt: j.created ?? null,
-          locations: j.location?.display_name
-            ? [
-                {
-                  city: j.location.area?.at(-1),
-                  region: j.location.area?.at(-2),
-                  country: ADZUNA_COUNTRY.toUpperCase(),
-                  remote: /remote/i.test(j.location.display_name),
-                },
-              ]
-            : [],
+          locations: j.location?.display_name ? [adzunaLocation(j.location)] : [],
           compensation: j.salary_min
             ? { min: j.salary_min, max: j.salary_max, currency: 'USD', period: 'year' }
             : null,
@@ -135,9 +127,63 @@ export const adzuna: JobSource = {
       ),
     );
 
-    return { postings, notes: [] };
+    const gaps = truncationGaps('adzuna', postings.length, perPage, data.count);
+    return { postings, notes: [], gaps };
   },
 };
+
+/**
+ * Adzuna's `area` is a hierarchy written largest first — country, state, county, city — and
+ * it is not always four deep. Reading it from the end put the county in the region field
+ * for a full-depth listing, and for a state-wide one ("US", "California") it put the state
+ * in the city field and the country in the region: the queue then offered a posting
+ * "in California, US" as though California were a town. Anything shallower than three
+ * levels names no city at all, so none is claimed.
+ */
+function adzunaLocation(loc: { display_name?: string; area?: string[] }): {
+  city?: string;
+  region?: string;
+  country?: string;
+  remote: boolean;
+} {
+  const area = loc.area ?? [];
+  return {
+    city: area.length >= 3 ? area.at(-1) : undefined,
+    region: area.length >= 2 ? area[1] : undefined,
+    country: ADZUNA_COUNTRY.toUpperCase(),
+    remote: /remote/i.test(loc.display_name ?? ''),
+  };
+}
+
+/**
+ * What to say when a paginated source had more to give.
+ *
+ * Both keyed sources ask for one page and stop. That is a defensible limit — it keeps a
+ * single run from hammering a free API — but it was invisible: the run summary said
+ * "50 found" with no note and no degradation, which reads as everything the source had.
+ * When the API tells us the true total we quote it; when it doesn't, a full page is itself
+ * the signal that there is probably more behind it.
+ */
+function truncationGaps(
+  source: string,
+  returned: number,
+  perPage: number,
+  total?: number,
+): string[] {
+  if (typeof total === 'number' && total > returned) {
+    return [
+      `${source}: showing the first ${returned} of ${total} matches — this run reads one ` +
+        'page. Narrow the search with more specific keywords or a location to see the rest.',
+    ];
+  }
+  if (typeof total !== 'number' && returned >= perPage) {
+    return [
+      `${source}: returned a full page of ${returned} results and did not say how many ` +
+        'matched in total, so there are probably more. Narrow the search to see them.',
+    ];
+  }
+  return [];
+}
 
 // ---------------------------------------------------------------- USAJOBS
 
@@ -148,7 +194,11 @@ interface UsaJob {
     PositionURI: string;
     ApplyURI?: string[];
     OrganizationName?: string;
-    PositionLocation?: Array<{ CityName?: string; CountrySubDivisionCode?: string }>;
+    PositionLocation?: Array<{
+      CityName?: string;
+      CountrySubDivisionCode?: string;
+      CountryCode?: string;
+    }>;
     PublicationStartDate?: string;
     ApplicationCloseDate?: string;
     UserArea?: { Details?: { JobSummary?: string; MajorDuties?: string[] } };
@@ -172,9 +222,10 @@ export const usajobs: JobSource = {
     }
 
     const keyword = encodeURIComponent(q.keywords?.join(' ') ?? 'intern');
+    const perPage = Math.min(q.limit ?? 50, 100);
     const url =
       `https://data.usajobs.gov/api/search?Keyword=${keyword}` +
-      `&ResultsPerPage=${Math.min(q.limit ?? 50, 100)}&HiringPath=student`;
+      `&ResultsPerPage=${perPage}&HiringPath=student`;
 
     // HiringPath, not WhoMayApply. WhoMayApply takes All/Public/Status; "student" is
     // not one of them, so the filter was ignored and this source returned general
@@ -190,7 +241,9 @@ export const usajobs: JobSource = {
         Host: 'data.usajobs.gov',
       },
     });
-    const data = JSON.parse(raw) as { SearchResult?: { SearchResultItems?: UsaJob[] } };
+    const data = JSON.parse(raw) as {
+      SearchResult?: { SearchResultItems?: UsaJob[]; SearchResultCountAll?: number };
+    };
 
     const postings = (data.SearchResult?.SearchResultItems ?? []).map((item) => {
       const d = item.MatchedObjectDescriptor;
@@ -206,14 +259,16 @@ export const usajobs: JobSource = {
           title: d.PositionTitle,
           postedAt: d.PublicationStartDate ?? null,
           closesAt: d.ApplicationCloseDate ?? null,
-          // 'US' is asserted here on purpose, unlike the other adapters. This is the US
-          // federal government's own hiring system, and the only geographic field read
-          // back is a country subdivision code — a state. The country is what the source
-          // says, not a default standing in for a value it never gave us.
+          // The country comes from the posting, like everywhere else in the discovery
+          // path. Every federal location used to be stamped 'US', and the federal
+          // government hires into embassies, consulates and overseas bases — a duty
+          // station in Ramstein or Yokosuka was stored as American and exported that way.
+          // 'US' remains the fallback when the field is missing, because this is the US
+          // federal government's own hiring system.
           locations: (d.PositionLocation ?? []).map((l) => ({
             city: l.CityName,
             region: l.CountrySubDivisionCode,
-            country: 'US',
+            country: usaJobsCountry(l.CountryCode),
             remote: false,
           })),
         },
@@ -221,9 +276,18 @@ export const usajobs: JobSource = {
       );
     });
 
-    return { postings, notes: [] };
+    const total = data.SearchResult?.SearchResultCountAll;
+    const gaps = truncationGaps('usajobs', postings.length, perPage, total);
+    return { postings, notes: [], gaps };
   },
 };
+
+/** USAJOBS writes the country out in full ("United States"); the rest of the app uses codes. */
+function usaJobsCountry(raw?: string): string {
+  const value = (raw ?? '').trim();
+  if (!value) return 'US';
+  return /^(?:united states(?: of america)?|usa|u\.?s\.?a?\.?)$/i.test(value) ? 'US' : value;
+}
 
 // ---------------------------------------------------------------- community list
 
@@ -308,14 +372,17 @@ export const githubList: JobSource = {
     }
 
     const notes = [`github_list: ${postings.length} active listings from ${repo}`];
-    if (unreadable > 0) {
-      notes.push(
-        `github_list: skipped ${unreadable} ${unreadable === 1 ? 'row' : 'rows'} in ${repo} ` +
-          'that could not be read. The list format may have changed.',
-      );
-    }
+    const gaps =
+      unreadable > 0
+        ? [
+            `github_list: skipped ${unreadable} ${unreadable === 1 ? 'row' : 'rows'} in ${repo} ` +
+              'that could not be read. The list format may have changed.',
+          ]
+        : [];
 
-    return { postings, notes };
+    // The count above is a status line; the rows we lost are a hole in the search, and only
+    // the second kind belongs in the run summary's list of what was missed.
+    return { postings, notes, gaps };
   },
 };
 

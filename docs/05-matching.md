@@ -84,7 +84,9 @@ Two guards on the output:
    `unknown` rather than to a rejection.
 
 Caching: requirements are extracted once per posting and reused across profile changes.
-The prompt prefix (system + extraction schema + few-shot) is stable and cached.
+The prompt prefix (system + extraction schema + few-shot) is stable, which is what would
+make it cacheable. **Not built:** prompt caching. No call anywhere sends a cache breakpoint,
+so every extraction pays for the whole prefix.
 
 ## Stage 1 — Hard eligibility rules
 
@@ -226,9 +228,17 @@ The guardrails below are the design, not the current behaviour:
 `eligibility.ts` is the highest-stakes module in the system — a bug there silently costs the
 user opportunities. It gets:
 
-- A golden fixture set of ~60 real anonymized JD excerpts with hand-labeled expected
-  outcomes, covering each rule's pass/fail/unknown paths.
-- Property tests: no rule may return `fail` without a `requirementId`; `unknown` inputs can
-  never produce `fail`; adding a profile fact can never turn `eligible` into `ineligible`
-  for an unchanged posting.
+- A golden fixture set covering each rule's pass/fail/unknown paths. These are synthetic:
+  `eligibility.test.ts` builds them from `profile()`, `posting()` and `req()` factories, so
+  every scenario is a structured requirement object rather than prose. No job-description
+  text is exercised anywhere in the suite. **Not built:** the ~60 real anonymized JD
+  excerpts with hand-labeled expected outcomes this line used to claim. The gap that leaves
+  is the step *before* these rules — whether requirement extraction turned the posting's
+  actual words into the right requirement object in the first place.
+- Property tests: no rule may return `fail` without either a `requirementId` or posting
+  `evidence` — six of the thirteen fail paths (location twice, term overlap, deadline,
+  posting open, excluded company) cite evidence rather than a requirement, because they
+  fail on something the posting says rather than on a requirement it states; `unknown`
+  inputs can never produce `fail`; adding a profile fact can never turn `eligible` into
+  `ineligible` for an unchanged posting.
 - A regression test per bug found, forever.

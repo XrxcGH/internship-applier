@@ -172,20 +172,44 @@ Detection order: URL host → embedded script fingerprints → DOM markers → `
 
 Per field, by control type:
 
-- **text/textarea** — `pressSequentially`, respecting `maxLength`; verify the value stuck by
-  reading it back.
-- **select** — match by option `value`, then exact label, then normalized label, then
-  fuzzy. Below a similarity threshold, leave blank and flag.
-- **combobox/autocomplete** — type a prefix, wait for the listbox, select by exact match.
-  If no exact match appears, blank + flag. Never picks "close enough" on a combobox.
-- **radio/checkbox** — click by resolved label. (Never for redlined categories.)
-- **date** — try native `input[type=date]` first; else drive the picker widget; verify the
-  resulting value.
-- **file** — `setInputFiles` with the primary resume, plus generated cover letter / transcript
-  when the field asks for them.
-- **richtext** — focus and type; verify via `innerText`.
-- **multi-step** — advance only after the current step validates; on validation failure,
-  stop and report which field the site rejected. No screenshot is taken per step, or ever.
+- **text/textarea** — `pressSequentially`, on a value `buildFillPlan` has already cut to the
+  field's `maxLength`; verify the value stuck by reading it back. Keystroke pacing is
+  dropped past 120 characters, because nothing is watching an essay box.
+- **select** — `chooseOption` tries the option's `value` attribute, then the whole label,
+  then the options whose opening *words* are the intended answer — and that last pass only
+  counts when exactly one option fits. Anything below that bar is left blank and flagged.
+  There is no similarity score and no threshold; the ordering is the whole mechanism, and
+  it is what stops "US" landing on "Australia" and "No" landing on "Yes, now or in the
+  future".
+- **combobox/autocomplete** — click the control open, then take the first `[role=option]`
+  in document order whose text *contains* the first 24 characters of the intended value,
+  case-insensitively. That is weaker than it sounds: on a country list "US" matches
+  "Australia" long before it reaches "United States". Read-back is the only thing standing
+  behind it — what the control ends up holding is compared against what was intended, so a
+  wrong pick surfaces as a mismatch in the pre-submit review rather than passing as filled.
+  Nothing types a prefix and nothing waits for the listbox to narrow.
+- **radio/checkbox** — a grouped radio is matched against each button's *own* label (exact
+  label, then the option's value, then a label starting with the answer) and that button is
+  checked. A stray checkbox or ungrouped radio is only ever ticked, never unticked, and
+  only for an affirmative value; anything else is left exactly as the page had it. (Never
+  for redlined categories.)
+- **date** — `fill()` on the native input. A date input holds a structured value, so typing
+  an ISO string into its segmented editor produces nothing. There is no picker-widget
+  fallback: a date control that is not a real `input[type=date]` is a field the user
+  finishes.
+- **file** — `setInputFiles` with the primary resume, on the resume field only. Every other
+  file field is skipped with "Attach this file yourself."
+- **richtext** — click to focus, then `keyboard.insertText`; verify via `data-value` or
+  `innerText`.
+- **multi-step** — the tool never clicks Next. It fills the step that is on screen and
+  stops. The user advances the wizard in the browser window that is already open and tells
+  the app to continue, which re-reads the page and re-plans from scratch — filling against
+  a map built before the user moved is how a value lands in the wrong box. No screenshot is
+  taken per step, or ever.
+
+> **Not built:** generated cover letters and transcripts. `classify.ts` recognizes a
+> `cover_letter_upload` field, but nothing in the server produces such a document, so those
+> fields are skipped like any other non-resume upload.
 
 Every write is verified by read-back. A field that didn't take is reported, not assumed.
 
@@ -205,12 +229,22 @@ click a submit control.
 
 **How that is actually enforced**, because a promise is worth what its enforcement is worth:
 
-- an ESLint `no-restricted-syntax` rule that fails the build on a submit-shaped click,
-  `requestSubmit()`, `form.submit()`, or an Enter keypress inside the filling module;
-- a test that scans the module's own source for the same patterns, so the rule cannot be
-  silenced with a disable comment without the test noticing;
-- a fixture test asserting the mock ATS recorded **zero** POSTs across the entire suite;
-- and a CI grep for any endpoint that could write `submitted_at` without the user.
+- an ESLint `no-restricted-syntax` rule over `core/filling/**` with one selector, aimed at a
+  submit-shaped `.click()` — `CallExpression[callee.property.name='click'][callee.object.name=/[Ss]ubmit/]`.
+  That is the whole of the lint layer; the other routes to submission are not expressible as
+  a useful selector and are covered below;
+- a test in `app.test.ts` that scans the filling module's own source for the wider set —
+  a submit-shaped `.click()`, `requestSubmit()`, `form.submit()`, `.submit()`,
+  `new SubmitEvent`, and `.press('Enter')` — so the lint rule cannot be silenced with a
+  disable comment without the test noticing, and so the patterns ESLint misses are still
+  caught. The same file asserts that `POST /api/applications/:id/submit` is a 404;
+- and a fixture test asserting the mock ATS recorded **zero** POSTs across the entire suite,
+  which is the only one of the three that checks the outcome rather than the source text.
+
+> **Not built:** a CI grep for any endpoint that could write `submitted_at` without the
+> user. This section used to list one; `.github/` and `scripts/` contain no such check. The
+> single G4 step in `ci.yml` greps `apps/server/src` for a submit-shaped click, which
+> duplicates the lint rule rather than adding the missing layer.
 
 Two things this section used to claim were never built, said plainly rather than quietly
 dropped. **No screenshot is captured** — `application.screenshot_path` exists in the schema
@@ -225,13 +259,18 @@ static and behavioural; there is no runtime guard.
   inputs, shadow-DOM widgets, an iframe form, a 3-step wizard, a fake login wall, a combobox
   with near-miss options, and a page containing every redlined field type. Playwright tests
   run headless against it in CI.
-- **Recorded page snapshots** — saved HTML from real ATS pages (scrubbed of PII) as
-  regression fixtures for `formMap` + `classify`. No network, no real submissions.
 - **Redline test** — asserts that no redlined field is ever written, on every fixture.
 - **The plan step** — `buildFillPlan` produces the complete list of intended values, with a
   reason attached to every skip, before anything is typed. It is a pure function over the
   form map, the profile and the approved answers, so most of what a dry run would tell you
   is assertable in a unit test with no browser at all.
+
+> **Not built:** recorded page snapshots — saved HTML from real ATS pages, scrubbed of PII,
+> as regression fixtures for `formMap` + `classify`. This section listed them as a layer
+> that exists; the repo holds two `.html` files and both belong to the web app. The
+> synthetic fixture site is the only form corpus these modules are tested against, which
+> means nothing here would notice a real ATS changing its markup. Worth building: it is the
+> mitigation docs/11 names for the highest-likelihood risk in the form-filling work.
 
 > **Not built:** a `--dry-run` flag or a "Preview fill" control. docs/08 and docs/09
 > described both; neither exists. The plan above is the closest real thing, and it is not

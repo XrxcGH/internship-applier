@@ -115,6 +115,16 @@ interface Rule {
 const NOT_A_MAILING_ADDRESS =
   /\bbirth\b|\bborn\b|\bcitizen(ship)?s?\b|\bnationalit(y|ies)\b|\bnational origin\b/i;
 
+/**
+ * Wording that turns a school word into context rather than the question.
+ *
+ * "University graduation date" asks when, not where; "Year in school" asks how far along.
+ * Neither is answered by the name of the institution. See the `unless` on the school rule
+ * for what went wrong while these were missing.
+ */
+const ASKS_WHEN_NOT_WHICH =
+  /\bgraduat\w*\b.{0,20}\b(dates?|years?|months?|terms?|semesters?)\b|\b(date|year|month|when)\b.{0,20}\bgraduat|\byear\b.{0,20}\bin school\b|\bclass (standing|year)\b|\bacademic year\b/i;
+
 /** The semantics whose value is read off the profile's address, whatever named them. */
 const FROM_MAILING_ADDRESS = new Set<FieldSemantic>([
   'address_line1',
@@ -198,6 +208,19 @@ const RULES: Rule[] = [
     semantic: 'school',
     test: /\b(school|university|college|institution|alma mater)\b/i,
     confidence: 0.9,
+    // A school word names a school only when the question asks WHICH one. This rule sits
+    // above graduation_date and enrollment_status, and matching is first-wins, so
+    // "University graduation date", "College graduation year" and "When did you graduate
+    // from college?" were all answered with the institution — the school's name typed into
+    // a date box, read back unchanged, and reported to the user as filled successfully.
+    // The same shadowing hid "Year in school", which is a class-standing question and had
+    // its own branch in enrollment_status that nothing could ever reach.
+    //
+    // The disqualifier needs the graduation word paired with a date, a year or a "when".
+    // The bare adjective must not disqualify anything, or "Graduate school" — which is
+    // asking which one — would fall through to a date rule. ("Graduate program" never
+    // reaches this rule: it carries no school word, so an earlier rule claims it first.)
+    unless: ASKS_WHEN_NOT_WHICH,
   },
   // graduation_date sits ABOVE degree deliberately. Matching is first-wins, and the
   // broad /\bdegree\b/ swallowed "Degree date" and "Degree completion date" — typing a
@@ -221,7 +244,7 @@ const RULES: Rule[] = [
   { semantic: 'gpa', test: /\bgpa\b|\bgrade point average\b/i, confidence: 0.97 },
   {
     semantic: 'enrollment_status',
-    test: /\b(currently )?enrolled\b|\benrollment status\b|\bclass (standing|year)\b|\byear in school\b|\bacademic year\b/i,
+    test: /\b(currently )?enrolled\b|\benrollment status\b|\bclass (standing|year)\b|\byear\b.{0,20}\bin school\b|\bacademic year\b/i,
     confidence: 0.9,
   },
 

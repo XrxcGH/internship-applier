@@ -243,19 +243,47 @@ describe('what is really on the page', () => {
    * shadow-DOM control, every index locator was off by one or more. There is no label
    * read-back at fill time to catch that, so a wrong element that accepted the value was
    * reported "ok".
+   *
+   * The two bare inputs are added here rather than shipped in the fixture page, and they
+   * are what makes this check mean anything: an index locator is the fallback for a
+   * control with neither an id nor a usable name, and every control on /nasty has an id,
+   * so this loop used to run zero times and pass on a page where the ordering bug was
+   * live. One goes on each side of the shadow host, because the host is where the
+   * scanner's walk and Playwright's used to part company.
    */
   it('numbers index locators in the order Playwright resolves them', async () => {
-    const m = await mapOf('/nasty');
+    await session.page.goto(`${fixture.url}/nasty`);
+    await session.page.evaluate(() => {
+      const host = document.getElementById('f-portfolio-host');
+      if (!host) throw new Error('the fixture no longer has #f-portfolio-host');
+      const bare = (label: string): HTMLInputElement => {
+        const el = document.createElement('input');
+        // An aria-label, so the control names itself without an id for a label to point at.
+        el.setAttribute('aria-label', label);
+        return el;
+      };
+      host.insertAdjacentElement('beforebegin', bare('before the shadow host'));
+      host.insertAdjacentElement('afterend', bare('after the shadow host'));
+    });
+    const m = await buildFormMap(session.page);
+
+    // Named, not just counted: if these two ever stop landing as index locators this
+    // fails outright, rather than going back to looping over an empty list and passing.
     const indexed = m.fields.filter((f) => f.locator.startsWith('__index__'));
+    expect(indexed.map((f) => f.label)).toEqual([
+      'before the shadow host',
+      'after the shadow host',
+    ]);
+
     for (const f of indexed) {
       const n = Number(/^__index__(\d+)/.exec(f.locator)![1]);
       const resolved = session.page.locator(FILLABLE_CONTROLS).nth(n);
       expect(await resolved.count(), f.label).toBe(1);
-      // The element Playwright lands on must be the one the scanner described.
-      const name = await resolved.getAttribute('name');
-      expect(name ?? '', f.label).not.toBe('');
+      // The element Playwright lands on must be the one the scanner described — not
+      // merely some control that happens to have a name on it.
+      expect(await resolved.getAttribute('aria-label'), f.label).toBe(f.label);
     }
-  });
+  }, 60_000);
 
   /**
    * A shadow host that ALSO has light-DOM children of its own — the ordinary shape of a

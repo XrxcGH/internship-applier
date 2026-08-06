@@ -52,21 +52,46 @@ function keyfilePath(): string {
  * absent rather than adopted, so a damaged file never gets copied into the credential store
  * and made authoritative.
  */
+/**
+ * The keyfile, when the credential store is empty and we are about to adopt it.
+ *
+ * A keyfile of the wrong length throws for the same reason `readFallbackKey` does: it is a
+ * key that exists and cannot be read, which is not the same as no key at all. Returning
+ * null here would have sent the caller on to mint a fresh random key and store THAT in the
+ * credential store, quietly abandoning every field already sealed under the real one. The
+ * two read paths have to agree, or the guard only covers whichever one the machine happens
+ * to take.
+ *
+ * A file that cannot be read at all — permissions, a race with an editor — is still null,
+ * because that is genuinely "no key found" rather than "a key we must not replace".
+ */
 function existingFallbackKey(): Buffer | null {
   const file = keyfilePath();
   if (!fs.existsSync(file)) return null;
+
+  let raw: string;
   try {
-    const key = Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'base64');
-    return key.length === KEY_BYTES ? key : null;
+    raw = fs.readFileSync(file, 'utf8').trim();
   } catch {
     return null;
   }
+
+  const key = Buffer.from(raw, 'base64');
+  if (key.length !== KEY_BYTES) throw new CorruptKeyfileError(file);
+  return key;
 }
 
 function readFallbackKey(): Buffer {
   const file = keyfilePath();
   if (fs.existsSync(file)) {
-    return Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'base64');
+    const key = Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'base64');
+    // A truncated or overwritten keyfile used to be handed back as-is. Nothing checked it
+    // here, so the first encryptField call died on `RangeError: Invalid key length` from
+    // deep inside node:crypto — an error that names no file, offers no way forward, and
+    // appears on every profile read and every resume upload. The file is almost always
+    // recoverable from a backup; the user just has to be told which file it is.
+    if (key.length !== KEY_BYTES) throw new CorruptKeyfileError(file);
+    return key;
   }
   const key = randomBytes(KEY_BYTES);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -80,7 +105,7 @@ function readFallbackKey(): Buffer {
 }
 
 /**
- * The one error here that must never be swallowed.
+ * The kind of error here that must never be swallowed.
  *
  * Distinct from "the credential store is unavailable", which is survivable and falls back
  * to a keyfile. A key of the wrong length means something wrote over ours, and generating
@@ -94,6 +119,24 @@ export class CorruptMasterKeyError extends Error {
         'unreadable. Restore the credential-store entry, or delete your data and start again.',
     );
     this.name = 'CorruptMasterKeyError';
+  }
+}
+
+/**
+ * The same condition, one storage location over.
+ *
+ * The keyfile is not a lesser path — on any machine where the OS credential store is
+ * unavailable it holds the only copy of the key — so a damaged one deserves the same care
+ * as a damaged credential-store entry, and the same refusal to mint a replacement.
+ */
+export class CorruptKeyfileError extends Error {
+  constructor(file: string) {
+    super(
+      `The master key file at ${file} is not a valid key. This tool will not generate a ` +
+        'replacement, because doing so would make everything already stored unreadable. ' +
+        'Restore that file from a backup, or delete your data and start again.',
+    );
+    this.name = 'CorruptKeyfileError';
   }
 }
 

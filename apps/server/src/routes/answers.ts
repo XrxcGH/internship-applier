@@ -117,7 +117,16 @@ function verify(
 ): Verified {
   const evidence = retrieveEvidence(profile, question, { postingContext });
   const guard = guardDraft(text, evidence);
-  const tells = findTells(text);
+  // Em-dash density and sentence rhythm are tells only relative to how this person writes,
+  // which is why the drafting side hands the same baselines over. Measured against the
+  // generic defaults instead, someone who genuinely writes with em dashes opened the review
+  // screen to "1.9 per 100. Swap some for a period or a comma." against their own prose —
+  // and the flags shown at G3 come from here, so the fix on the drafting side never reached
+  // the screen the user actually reads.
+  const tells = findTells(text, {
+    baselineEmDashPer100: style?.punctuation.emDash,
+    baselineSentenceStdev: style?.sentenceLengthStdev,
+  });
   const styleReport = critiqueStyle(text, style);
 
   const flags: AnswerFlag[] = [

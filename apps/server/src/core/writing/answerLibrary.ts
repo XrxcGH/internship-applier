@@ -9,8 +9,10 @@
  * THE RULE THAT MATTERS: an answer that names the company is never reused for a different
  * company. The failure mode here is the one that ends an application immediately — a
  * cover letter addressed to the wrong employer — and no amount of convenience is worth
- * risking it. Question archetypes carry a `companySpecific` flag, and reuse across
- * companies is refused for those regardless of how similar the question text is.
+ * risking it. Two mechanisms enforce it. Question archetypes carry a `companySpecific`
+ * flag, and reuse across companies is refused for those regardless of how similar the
+ * question text is; and any stored answer whose own text names the company it was written
+ * for is refused for a different company whatever its archetype says.
  *
  * Reuse pre-fills; it does not approve. Gate G3 still applies to every answer on every
  * application. What reuse buys is a fast confirm instead of a fresh review, and the card
@@ -256,6 +258,41 @@ function toEntry(row: typeof schema.answerTemplate.$inferSelect): LibraryEntry {
 }
 
 /**
+ * Does this text name the company it was written for?
+ *
+ * Word-run containment over letters and digits, so "Meta" does not match "metadata".
+ *
+ * THE DISTINCTIVE PART OF THE NAME IS WHAT COUNTS, not the whole stored string. Companies
+ * are recorded as they appear on the posting — "Stripe, Inc.", "Acme Analytics" — while
+ * the sentence a person actually writes says "Stripe" or "Acme". Requiring the full run
+ * meant the check passed on exactly the answers it exists to catch, and a cover letter
+ * naming the previous employer went out to the next one. Legal suffixes are dropped and
+ * each remaining word is enough on its own; short words are excluded because a company
+ * called "Box" or "On" would otherwise match half the English language.
+ */
+const LEGAL_SUFFIX = /\b(inc|llc|ltd|corp|corporation|co|gmbh|plc|sa|nv|ag|limited)\b/g;
+
+function namesCompany(text: string, company: string): boolean {
+  const flatten = (s: string): string =>
+    ` ${s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()} `;
+
+  const haystack = flatten(text);
+  const full = flatten(company).trim();
+  if (full.length > 1 && haystack.includes(` ${full} `)) return true;
+
+  const words = full
+    .replace(LEGAL_SUFFIX, ' ')
+    .split(' ')
+    .filter((w) => w.length > 3);
+
+  return words.some((w) => haystack.includes(` ${w} `));
+}
+
+/**
  * An approved answer to reuse, or null.
  *
  * Refuses to cross companies for company-specific archetypes — see the header. Also
@@ -274,13 +311,22 @@ export function findReusable(question: string, company: string | null): LibraryE
   if (!row?.approvedAt) return null;
   const entry = toEntry(row);
 
-  if (companySpecific) {
-    const sameCompany =
-      entry.company !== null &&
-      company !== null &&
-      entry.company.toLowerCase() === company.toLowerCase();
-    if (!sameCompany) return null;
-  }
+  const sameCompany =
+    entry.company !== null &&
+    company !== null &&
+    entry.company.toLowerCase() === company.toLowerCase();
+
+  if (companySpecific && !sameCompany) return null;
+
+  // The archetype flag says whether a good answer to this QUESTION names the company. It
+  // says nothing about what the writer actually typed. An approved "why are you interested
+  // in this role?" answer reading "This role at Acme sits right at the intersection of data
+  // and product" was handed straight to the next application and written into its final
+  // text, and the card only said "reused · 1×" — so the Beta Corp form went out talking
+  // about Acme. What matters is whether the text names its own company, not which bucket
+  // the question fell into.
+  if (!sameCompany && entry.company && namesCompany(entry.text, entry.company)) return null;
+
   return entry;
 }
 

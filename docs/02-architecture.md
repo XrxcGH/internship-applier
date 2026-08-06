@@ -244,10 +244,14 @@ internship-applier/
 - Response cache keyed by URL + ETag, 6h default TTL, so re-running discovery is cheap.
 - Identifiable User-Agent. `robots.txt` respected for any generic page fetch (source APIs
   are exempt as documented API surfaces).
-- LLM calls: `claude-opus-5` for extraction/drafting/rationale; `claude-haiku-4-5` for
-  bulk field classification and cheap yes/no checks. Prompt caching on the stable prefix
-  (system prompt + confirmed profile) — the profile is the dominant repeated context, so
-  it goes early and is frozen between edits.
+- LLM calls: `claude-opus-5` for extraction, drafting and rationale. `claude-haiku-4-5` is
+  mapped for bulk field classification, but nothing requests that purpose — classification
+  is entirely deterministic today.
+
+  **Not built:** prompt caching. No call anywhere sends a cache breakpoint. The paragraph
+  this replaces also had the contents wrong: drafting never sends the confirmed profile at
+  all, only the specific evidence retrieved for the question being answered (docs/06 § ③),
+  so the profile was never the repeated context it described.
 
 ## Failure posture
 

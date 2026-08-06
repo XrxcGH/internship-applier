@@ -611,18 +611,31 @@ export function overlapWeeks(
  * internship against a July-to-September availability computed three weeks of overlap
  * instead of seven and came back `ineligible`.
  *
- * A day-precision date is already exact and is left alone.
+ * A day-precision start is already exact and is left alone.
  */
 function monthStart(d: string): string {
   return /^\d{4}-\d{2}$/.test(d) ? `${d}-01` : d;
 }
 
-/** The instant a bound stops covering: the first of the next month, exclusive. */
+/** The instant a bound stops covering: the first moment past the day or month it names. */
 function endBound(d: string): number {
-  if (!/^\d{4}-\d{2}$/.test(d)) return Date.parse(d);
-  const [y, m] = d.split('-').map(Number);
-  // Month is 1-based here and 0-based in Date.UTC, so this is already "the next month".
-  return Date.UTC(y!, m!, 1);
+  if (/^\d{4}-\d{2}$/.test(d)) {
+    const [y, m] = d.split('-').map(Number);
+    // Month is 1-based here and 0-based in Date.UTC, so this is already "the next month".
+    return Date.UTC(y!, m!, 1);
+  }
+
+  // A plain date covers the whole of the day it names, exactly as a plain month covers the
+  // whole of its month. Reading it as midnight threw away the last day of the user's own
+  // availability window, which is always a day-precision date: somebody free from June 1
+  // through July 12 has the six weeks this rule demands to the hour, and was refused with
+  // "only about 6 week(s); 6 are needed".
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const midnight = Date.parse(`${d}T00:00:00Z`);
+    return Number.isNaN(midnight) ? midnight : midnight + 24 * 60 * 60 * 1000;
+  }
+
+  return Date.parse(d);
 }
 
 const MIN_OVERLAP_WEEKS = 6;
@@ -732,20 +745,26 @@ export function termOverlap({ profile, posting, requirements }: RuleInput): Rule
     );
   }
 
-  const rounded = Math.round(weeks);
-  return weeks >= MIN_OVERLAP_WEEKS
-    ? pass('term_overlap', `Overlaps your availability by about ${rounded} weeks.`, {
-        profileRef: 'availability',
-        ...(requirementId ? { requirementId } : {}),
-      })
-    : fail(
-        'term_overlap',
-        `Overlaps your availability by only about ${rounded} week(s); ${MIN_OVERLAP_WEEKS} are needed.`,
-        {
-          evidence: `term ${posting.term.start ?? '?'}..${posting.term.end ?? '?'}`,
-          profileRef: 'availability',
-        },
-      );
+  if (weeks >= MIN_OVERLAP_WEEKS) {
+    return pass('term_overlap', `Overlaps your availability by about ${Math.round(weeks)} weeks.`, {
+      profileRef: 'availability',
+      ...(requirementId ? { requirementId } : {}),
+    });
+  }
+
+  // The verdict is decided on the exact overlap while the sentence quoted a rounded one, so
+  // a window five and a half weeks long was refused with "only about 6 week(s); 6 are
+  // needed" — a rejection that reads as an argument for accepting. A shortfall is reported
+  // rounded DOWN, so the number in the sentence can never reach the threshold it missed.
+  const short = Math.floor(weeks * 10) / 10;
+  return fail(
+    'term_overlap',
+    `Overlaps your availability by only about ${short} weeks; ${MIN_OVERLAP_WEEKS} are needed.`,
+    {
+      evidence: `term ${posting.term.start ?? '?'}..${posting.term.end ?? '?'}`,
+      profileRef: 'availability',
+    },
+  );
 }
 
 export function deadline({ posting, now }: RuleInput): RuleResult {
@@ -755,6 +774,11 @@ export function deadline({ posting, now }: RuleInput): RuleResult {
   // JSON-LD both hand over bare dates, and Date.parse puts those at midnight UTC — which
   // closed the posting a full day early and reported "Closed on <today>" to a user who
   // still had hours to apply. Close of business, generously: end of that day.
+  //
+  // End of day is read in UTC, and deliberately so. Stretching it to UTC-10 to cover the
+  // westmost US zone was tried and reverted: it is a different rule from the one docs/05
+  // § Rules states ("the whole of that day"), and it carries the deadline ten hours into
+  // the following day, so "Closed on <date>" stops being true of the date it names.
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(posting.closesAt.trim());
   const closes = dateOnly
     ? Date.parse(`${posting.closesAt.trim()}T23:59:59Z`)
@@ -808,15 +832,28 @@ export function experienceCeiling({ profile, requirements }: RuleInput): RuleRes
 }
 
 export function excludedCompany({ profile, posting }: RuleInput): RuleResult {
-  const excluded = profile.preferences.excludeCompanies.map((c) => c.toLowerCase().trim());
   const company = posting.company.toLowerCase().trim();
 
-  return excluded.some((e) => e && company.includes(e))
-    ? fail('excluded_company', `${posting.company} is on your exclude list.`, {
-        evidence: posting.company,
-        profileRef: 'preferences.excludeCompanies',
-      })
-    : pass('excluded_company', 'Not on your exclude list.');
+  // An entry matches anywhere in the company name, which is what makes "Amazon" catch
+  // "Amazon Web Services". The sentence, though, claimed the company itself was on the
+  // list — so a user who had excluded Meta was told "Metabase is on your exclude list"
+  // about a company they had never heard of and could not find in their own settings.
+  // Naming the entry that actually matched makes the rejection something they can act on.
+  const hit = profile.preferences.excludeCompanies.find((entry) => {
+    const needle = entry.toLowerCase().trim();
+    return needle !== '' && company.includes(needle);
+  });
+
+  if (!hit) return pass('excluded_company', 'Not on your exclude list.');
+
+  const isWholeName = hit.toLowerCase().trim() === company;
+  return fail(
+    'excluded_company',
+    isWholeName
+      ? `${posting.company} is on your exclude list.`
+      : `${posting.company} matches "${hit.trim()}" on your exclude list.`,
+    { evidence: posting.company, profileRef: 'preferences.excludeCompanies' },
+  );
 }
 
 export const RULES = [

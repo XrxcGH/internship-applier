@@ -49,6 +49,25 @@ describe('parseLocation', () => {
     expect(both.city).toBe('New York');
   });
 
+  /**
+   * "OR" is Oregon. The remote-token cleanup trims a dangling conjunction, and trimming
+   * both ends at once reduced the part "OR or Remote" to nothing — so a Portland posting
+   * recorded a city in no state, and the location rule had nothing to compare against.
+   */
+  it('does not mistake Oregon for a conjunction', () => {
+    expect(parseLocation('Portland, OR')).toMatchObject({ city: 'Portland', region: 'OR' });
+    expect(parseLocation('Portland, OR or Remote')).toMatchObject({
+      city: 'Portland',
+      region: 'OR',
+      remote: true,
+    });
+  });
+
+  it('keeps the geography when a part also says remote', () => {
+    expect(parseLocation('Remote (US)')).toMatchObject({ country: 'US', remote: true });
+    expect(parseLocation('Berlin, Germany')).toMatchObject({ city: 'Berlin', country: 'Germany' });
+  });
+
   it('trusts an explicit remote flag over the text', () => {
     expect(parseLocation('New York, NY', true).remote).toBe(true);
     expect(parseLocation('Remote', false).remote).toBe(false);

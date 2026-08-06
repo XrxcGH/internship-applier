@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@ia/shared';
 import * as api from '../lib/api';
+import { isAnswered } from '../lib/review';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Notice, SelectField, TextField } from '../components/Controls';
 
@@ -64,10 +65,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
        * confirm a profile whose location and work authorization are still blank. G1 only
        * means something if it checks the value rather than the interaction.
        */
-      const value = at(next, clears);
-      const answered =
-        typeof value === 'string' ? value.trim() !== '' && value !== 'unknown' : true;
-      return answered
+      return isAnswered(at(next, clears))
         ? { ...next, needsReview: next.needsReview.filter((f) => f !== clears) }
         : { ...next, needsReview: [...new Set([...next.needsReview, clears])] };
     });
@@ -228,6 +226,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 <option value="other">Other</option>
               </SelectField>
 
+              {/* Clearing a date has to read as absent, not as an empty string. The profile
+                  schema wants YYYY-MM-DD or nothing at all, so a date box emptied by hand
+                  made the next Save — and Confirm, which saves first — come back with
+                  "Profile did not match the expected shape" and no clue which field meant
+                  it. Same treatment the date of birth above already gets. */}
               <TextField
                 label="Available from"
                 type="date"
@@ -236,7 +239,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 flagged={flagged('availability.start')}
                 onChange={(e) =>
                   patch(
-                    (p) => ({ ...p, availability: { ...p.availability, start: e.target.value } }),
+                    (p) => ({
+                      ...p,
+                      availability: { ...p.availability, start: e.target.value || undefined },
+                    }),
                     'availability.start',
                   )
                 }
@@ -248,7 +254,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 flagged={flagged('availability.end')}
                 onChange={(e) =>
                   patch(
-                    (p) => ({ ...p, availability: { ...p.availability, end: e.target.value } }),
+                    (p) => ({
+                      ...p,
+                      availability: { ...p.availability, end: e.target.value || undefined },
+                    }),
                     'availability.end',
                   )
                 }

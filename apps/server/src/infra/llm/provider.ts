@@ -21,7 +21,13 @@ export type ProviderKind = 'api' | 'claude_cli' | 'none';
 
 export interface GenerateRequest {
   purpose: LlmPurpose;
-  /** Instructions. On the CLI path this is appended to Claude Code's own system prompt. */
+  /**
+   * Instructions. This must stand on its own: on the CLI path it REPLACES Claude Code's
+   * default system prompt rather than adding to it (see claudeCli.ts), which is deliberate
+   * — the default frames the model as a coding agent in a repository, the wrong voice for a
+   * job application. A prompt written as a fragment to be appended to something gets no
+   * something.
+   */
   system: string;
   user: string;
   maxTokens?: number;

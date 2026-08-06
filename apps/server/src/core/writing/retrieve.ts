@@ -73,10 +73,34 @@ export interface RetrieveOptions {
 }
 
 /**
+ * Who the writer is, in one line. Always included, whatever the question is about.
+ *
+ * FactGuard treats a proper noun with nothing behind it as a fabrication, so before this
+ * existed "I'm based in New Brunswick" was blocked at G3 with `"New Brunswick" does not
+ * appear anywhere on your profile` — a true sentence, about a fact the profile holds, with
+ * no override available and no way to satisfy the message it offered. The user's own name
+ * failed the same way whenever a draft signed off with it.
+ */
+function identityEvidence(profile: ConfirmedProfile): Evidence | null {
+  const name = profile.fullName?.trim() ?? '';
+  const base = profile.locationPrefs?.base;
+  const place = [base?.city, base?.region]
+    .map((s) => s?.trim())
+    .filter(Boolean)
+    .join(', ');
+  if (!name && !place) return null;
+
+  const text = name && place ? `${name}, based in ${place}` : name || `Based in ${place}`;
+  return { ref: 'identity', kind: 'identity', text, facts: {}, score: 1 };
+}
+
+/**
  * Builds the evidence set for one question.
  *
- * Identity facts are always included regardless of score: a draft that cannot name the
- * user's own school or current role is worse than one with a slightly larger prompt.
+ * The identity line above is always included regardless of score. Everything else is
+ * ranked by keyword overlap and cut at `limit`, with one education and one experience item
+ * topped up at the tail if the ranking dropped them — a draft that cannot name the user's
+ * own school or current role is worse than one with a slightly larger prompt.
  */
 export function retrieveEvidence(
   profile: ConfirmedProfile,
@@ -106,10 +130,18 @@ export function retrieveEvidence(
 
     // The role itself, even when its bullets don't match — dates and titles are the
     // facts most often misstated, so they must be in the evidence set to be checkable.
+    //
+    // The location belongs in the text for the opposite reason. It was left out, so
+    // "I interned at Acme Analytics in Columbus" came back blocking at G3 with
+    // `"Columbus" does not appear anywhere on your profile` — while the profile held
+    // exactly that city on exactly that job. There is no override at G3, and the fix the
+    // message suggests was already done.
     items.push({
       ref: `experience.${i}`,
       kind: 'experience',
-      text: `${e.title} at ${e.organization} (${e.startDate ?? 'date not stated'} to ${e.endDate ?? 'present'})`,
+      text:
+        `${e.title} at ${e.organization}${e.location ? ` in ${e.location}` : ''} ` +
+        `(${e.startDate ?? 'date not stated'} to ${e.endDate ?? 'present'})`,
       facts: {
         organization: e.organization,
         title: e.title,
@@ -173,7 +205,8 @@ export function retrieveEvidence(
     });
   });
 
-  const limit = opts.limit ?? 14;
+  const identity = identityEvidence(profile);
+  const limit = Math.max(0, (opts.limit ?? 14) - (identity ? 1 : 0));
   const ranked = items.sort((a, b) => b.score - a.score);
 
   // Always keep at least one education and one experience item if the profile has them,
@@ -191,7 +224,7 @@ export function retrieveEvidence(
     const slot = chosen.length - 1 - i;
     if (slot >= 0) chosen[slot] = item;
   });
-  return chosen;
+  return identity ? [identity, ...chosen] : chosen;
 }
 
 /** The evidence block as the drafting prompt sees it. */

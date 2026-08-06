@@ -26,6 +26,7 @@ import { ulid } from 'ulid';
 import { logger } from '../../infra/logger';
 import { classifyField, type FieldDescriptor } from './classify';
 import { checkRedline } from './redlines';
+import { FILLABLE_CONTROLS } from './selectors';
 
 /** What the in-page scanner returns, before classification happens in Node. */
 interface RawField extends FieldDescriptor {
@@ -46,9 +47,17 @@ interface RawField extends FieldDescriptor {
 /**
  * Runs inside the browser. Written as a single self-contained function because Playwright
  * serializes it across the boundary — it cannot close over anything from this module.
+ *
+ * `selector` is FILLABLE_CONTROLS, handed in as an argument for exactly that reason. It used
+ * to be a second copy of the same string written out here, with a comment saying a test
+ * asserted the two matched. No such test existed, and a drift between them is not a cosmetic
+ * problem: this walk numbers the controls that an index locator later resolves with
+ * `.nth()`, so the two disagreeing lands a typed value on the wrong element — and the
+ * exclusions in that string are what keep `input[type=image]` out of a list the fill path
+ * clicks, which on that element submits the form.
  */
 /* c8 ignore start — executes in the page context, covered by the fixture tests. */
-const SCAN = (): unknown => {
+const SCAN = (selector: string): unknown => {
   const text = (el: Element | null): string =>
     (el?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
 
@@ -179,6 +188,16 @@ const SCAN = (): unknown => {
    * That is the classic honeypot, and honeypots are deliberately given attractive names
    * — "email", "website" — precisely so a classifier recognizes them. Filling one is how
    * a form decides you are a bot.
+   *
+   * THE CHECKS HAVE TO WALK UP THE TREE, because none of the properties that hide a field
+   * have to be set on the field itself. `getComputedStyle` does not inherit `opacity`, so a
+   * honeypot inside `<div style="opacity:0">` reported opacity 1, a full-size rect and
+   * `visibility: visible` — it passed every test here, was classified "Email Address" at
+   * 0.97, and had the applicant's real address typed into it. The same for a wrapper with
+   * `height: 0; overflow: hidden`, which clips its children away without touching their
+   * rects. Both are as common a honeypot as `left: -9999px`, and because nothing re-reads
+   * the label at fill time (see `locatorFor` below) the run signed off "ok" over a form
+   * that had just flagged the applicant as a bot.
    */
   const isVisible = (el: HTMLElement, rect: DOMRect): boolean => {
     if (rect.width <= 0 || rect.height <= 0) return false;
@@ -189,6 +208,27 @@ const SCAN = (): unknown => {
     // Off to the left or above the document entirely. A generous margin, because a field
     // in a horizontal carousel or a not-yet-opened accordion is legitimately off-viewport.
     if (rect.right < -500 || rect.bottom < -500) return false;
+
+    // Only the two properties an ancestor can hide a child with WITHOUT that showing up in
+    // the child's own computed style or rect. `visibility` and `display: none` are already
+    // answered above — the first inherits, so the element's own value is the effective one
+    // and a child that sets `visibility: visible` back on is genuinely visible; the second
+    // leaves the child with a 0x0 rect.
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      const s = getComputedStyle(a);
+      // Opacity is not inherited and a child cannot undo it, so a fully transparent
+      // ancestor hides everything under it however solid the child's own style looks.
+      if (Number(s.opacity) === 0) return false;
+      // A clipping ancestor with no room in it. An ordinary `overflow: hidden` wrapper of a
+      // normal size is everywhere in real forms and must keep its children fillable, and
+      // `display: contents` and inline boxes are skipped because their rects say nothing
+      // about what they clip.
+      if (s.display === 'contents' || s.display === 'inline') continue;
+      if (s.overflowX !== 'visible' || s.overflowY !== 'visible') {
+        const r = a.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+      }
+    }
     return true;
   };
 
@@ -230,15 +270,6 @@ const SCAN = (): unknown => {
     return 'text';
   };
 
-  // Must stay identical to FILLABLE_CONTROLS in ./selectors.ts. It cannot import it:
-  // this function is serialized into the page and closes over nothing. A test asserts
-  // the two match, because a drift here makes an index locator resolve to the wrong
-  // element, and dropping the image/reset exclusions would let a click submit the form.
-  const SELECTOR =
-    'input:not([type=hidden]):not([type=submit]):not([type=button])' +
-    ':not([type=image]):not([type=reset]), ' +
-    'textarea, select, [role=combobox], [contenteditable=true]';
-
   /**
    * Every fillable control, in COMPOSED ORDER — the order Playwright will see them in.
    *
@@ -261,7 +292,7 @@ const SCAN = (): unknown => {
   const collect = (node: Document | ShadowRoot | Element, out: HTMLElement[]): void => {
     for (const child of Array.from(node.children ?? [])) {
       const el = child as HTMLElement;
-      if (el.matches(SELECTOR)) out.push(el);
+      if (el.matches(selector)) out.push(el);
       collect(el, out);
       if (el.shadowRoot) collect(el.shadowRoot, out);
     }
@@ -359,7 +390,10 @@ export function scanExpression(): string {
   const preamble = Object.entries(PAGE_HELPERS)
     .map(([name, impl]) => `const ${name} = ${impl};`)
     .join(' ');
-  return `(() => { ${preamble} return (${source})(); })()`;
+  // The one thing the scanner needs from this module. Handing it over as an argument is
+  // what stops the page's copy of the fillable-control selector from drifting away from the
+  // one `fill.ts` resolves index locators against.
+  return `(() => { ${preamble} return (${source})(${JSON.stringify(FILLABLE_CONTROLS)}); })()`;
 }
 
 /**

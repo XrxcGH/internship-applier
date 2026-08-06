@@ -79,12 +79,15 @@ export function FillReview({
   applyUrl,
   canFill,
   blockedReason,
+  submittedAt,
   onChanged,
 }: {
   applicationId: string;
   applyUrl: string;
   canFill: boolean;
   blockedReason: string | null;
+  /** When the user told us they submitted it, as recorded on the server. Null until they do. */
+  submittedAt: string | null;
   onChanged: () => void;
 }) {
   const [run, setRun] = useState<FillRunView | null>(null);
@@ -104,9 +107,21 @@ export function FillReview({
    *
    * With the run gone and nothing on this screen carrying the application's status, the
    * panel fell back to its opening card — inviting the user to open and fill the form
-   * they had just told it they submitted.
+   * they had just told it they submitted. This covers the moment between the click and
+   * the reload of the record it changed; the `submittedAt` prop covers every mount after.
    */
-  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
+  const [markedAt, setMarkedAt] = useState<string | null>(null);
+
+  /**
+   * Whether the user has said they sent this one, however this screen came to know it.
+   *
+   * The local memory above only survived as long as the panel did. Come back to the
+   * application from the list, or reload the tab, and the panel offered "Open and read
+   * the form" for an application already sitting in the tracker as submitted — and that
+   * button really does open a browser and plan a fill, so following it meant applying to
+   * the same posting twice.
+   */
+  const submitted = markedAt ?? submittedAt;
 
   /**
    * Picks up a run the server already has open. Returns null when there is none.
@@ -213,19 +228,19 @@ export function FillReview({
 
       {!checked && <p className="text-faint u-data">Checking for an open browser…</p>}
 
-      {checked && !run && submittedAt !== null && (
+      {checked && !run && submitted !== null && (
         <div className="u-tint-verified rounded px-5 py-5">
           <p className="a-stamp u-data text-verified mb-2 text-lg tracking-widest uppercase">
             submitted
           </p>
           <p className="text-dim">
-            Recorded on {submittedAt.slice(0, 10)}. It is on the tracker now — that is where
-            replies, follow-ups and deadlines live.
+            Recorded on {submitted.slice(0, 10)}. It is on the tracker now — that is where replies,
+            follow-ups and deadlines live.
           </p>
         </div>
       )}
 
-      {checked && !run && submittedAt === null && (
+      {checked && !run && submitted === null && (
         <div className="u-card-flat px-5 py-5">
           <p className="text-dim u-prose">
             This opens the application page in a browser you can watch, reads the form, and shows
@@ -398,7 +413,7 @@ export function FillReview({
                 onClick={() =>
                   void act('mark', async () => {
                     const r = await markSubmitted(applicationId);
-                    setSubmittedAt(r.submittedAt ?? new Date().toISOString());
+                    setMarkedAt(r.submittedAt ?? new Date().toISOString());
                     return null;
                   })
                 }

@@ -12,10 +12,11 @@ import { ulid } from 'ulid';
 import { z } from 'zod';
 import { ApplicationStatus } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
+import { discardRun } from '../core/filling/run';
 import { csvFilename, toCsv } from '../core/tracking/exportCsv';
 import { buildReminders, draftFollowUp, draftWithdrawal } from '../core/tracking/reminders';
 import { computeStats, RESPONDED as RESPONDED_STATUSES } from '../core/tracking/stats';
-import { canTransition, derive, type TrackedApplication } from '../core/tracking/status';
+import { canTransition, derive, SET_BY, type TrackedApplication } from '../core/tracking/status';
 
 /**
  * Every tracked application, with the counts the derived state needs.
@@ -156,6 +157,13 @@ export async function trackerRoutes(app: FastifyInstance): Promise<void> {
         payload: { from, to, by: 'user', note: parsed.data.note ?? null },
       })
       .run();
+
+    // Once an application has left the tool's own statuses there is nothing left to fill,
+    // so any browser still sitting on its form is closed — the same thing mark-submitted
+    // does. Leaving it open left a window pointed at a form the user had already sent, and
+    // the review panel goes on offering its "continue filling" buttons for as long as a run
+    // exists to continue.
+    if (SET_BY[to] === 'user') await discardRun(req.params.id);
 
     return { id: req.params.id, status: to, updatedAt: now };
   });

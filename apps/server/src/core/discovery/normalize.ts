@@ -201,38 +201,166 @@ export interface ParsedComp {
   raw?: string;
 }
 
+/**
+ * A money figure: an optional currency prefix glued to the dollar sign, one or two amounts
+ * with an optional "k", and an optional period.
+ */
+const MONEY_RE =
+  /([A-Za-z]{1,3})?\$\s?([\d,]+(?:\.\d{2})?)\s*(k\b)?\s*(?:(?:-|–|—|to)\s*\$?\s?([\d,]+(?:\.\d{2})?)\s*(k\b)?)?\s*(?:\/|per\s+|an?\s+)?\s*(hour|hourly|hrs?|week|weekly|wk|month|monthly|mo|day|daily|year|yearly|yr|annually)?/gi;
+
+const PERIOD_BY_UNIT: Record<string, 'hour' | 'day' | 'week' | 'month' | 'year'> = {
+  hour: 'hour',
+  hourly: 'hour',
+  hr: 'hour',
+  hrs: 'hour',
+  day: 'day',
+  daily: 'day',
+  week: 'week',
+  weekly: 'week',
+  wk: 'week',
+  month: 'month',
+  monthly: 'month',
+  mo: 'month',
+  year: 'year',
+  yearly: 'year',
+  yr: 'year',
+  annually: 'year',
+};
+
+/**
+ * What the letters in front of a dollar sign mean. Every figure used to be stamped USD, so
+ * a Toronto posting offering CA$30 an hour was recorded as if it paid US dollars.
+ */
+const DOLLAR_PREFIX: Record<string, string> = {
+  us: 'USD',
+  usd: 'USD',
+  ca: 'CAD',
+  cad: 'CAD',
+  c: 'CAD',
+  au: 'AUD',
+  aud: 'AUD',
+  a: 'AUD',
+  nz: 'NZD',
+  nzd: 'NZD',
+  sg: 'SGD',
+  sgd: 'SGD',
+  s: 'SGD',
+  hk: 'HKD',
+  hkd: 'HKD',
+  nt: 'TWD',
+  mx: 'MXN',
+  r: 'BRL',
+};
+
+/** Words that make the figure a company statistic rather than an offer of pay. */
+const NOT_PAY_BEFORE =
+  /\b(?:401\s?\(?k\)?|match(?:es|ing|ed)?|revenue|funding|funded|raised|valuation|valued|donat\w*|scholarship|tuition|fees?|prices?|costs?|budget|award|prize|grant|savings|discount|refund|deposit|loan|debt|invest\w*|acquisition|market cap)\b/i;
+
+/** A scale word right after the figure — "$4 billion" is never somebody's wage. */
+const MAGNITUDE_AFTER = /^\s*(?:billion|million|trillion|bn|[bm])\b/i;
+
+/** Wording that marks a figure as what the job pays. */
+const PAY_CONTEXT =
+  /\b(?:pay|paid|pays|salar(?:y|ies)|compensation|comp|wages?|rates?|stipend|hourly|earn\w*|remuneration|base|range|offers?)\b/i;
+
+/** One money figure found in the text, with how much reason there is to believe it is pay. */
+interface PayCandidate {
+  match: RegExpExecArray;
+  unit?: 'hour' | 'week' | 'month' | 'year';
+  score: number;
+}
+
+function amount(raw: string, thousands: string | undefined): number {
+  const n = Number(raw.replace(/,/g, ''));
+  return thousands ? n * 1000 : n;
+}
+
+/**
+ * The words immediately around a figure, stopping at the sentence it sits in.
+ *
+ * A flat character window reached across full stops, so "We raised $50 million in Series B.
+ * The internship pays $40/hr." threw away the $40 as well: the word "raised" from the
+ * previous sentence was still inside the window. Whether a number is a wage is decided by
+ * the sentence that number is in.
+ */
+function clauseBefore(text: string, at: number): string {
+  const window = text.slice(Math.max(0, at - 80), at);
+  // The colon is not a boundary: "Pay: $30" puts the one word that matters in front of it.
+  const cut = window.search(/[.;!?\n][^.;!?\n]*$/);
+  return cut === -1 ? window : window.slice(cut + 1);
+}
+
+function clauseAfter(text: string, from: number): string {
+  const window = text.slice(from, from + 40);
+  const cut = window.search(/[.;!?\n]/);
+  return cut === -1 ? window : window.slice(0, cut);
+}
+
+/**
+ * Pulls the pay out of a description.
+ *
+ * Every parser here would rather say nothing than guess, and this one used to take the
+ * first dollar figure anywhere in the text on any terms. "We are a $4 billion company"
+ * three paragraphs above a real "$45-$50/hour" range meant the posting was recorded as
+ * paying $4 an hour — which scored it near zero on pay and told the user in as many words
+ * that "the pay is low or unpaid" on one of the best-paying roles in their queue. A 401(k)
+ * match written as "we match $1 for $1" did the same thing.
+ *
+ * So every figure in the text is considered, the ones that are plainly not wages are
+ * discarded, and the one with the best evidence behind it wins: a stated period beats a
+ * nearby pay word, which beats a bare number. A bare number on its own still parses, since
+ * plenty of postings write nothing but "$30" in a pay field.
+ */
 export function parseCompensation(text: string): ParsedComp | null {
   if (/\bunpaid\b/i.test(text)) return { unpaid: true, raw: 'unpaid' };
   if (/\b(academic|course|school) credit only\b/i.test(text)) {
     return { academicCreditOnly: true, raw: 'academic credit only' };
   }
 
-  const m = text.match(
-    /\$\s?([\d,]+(?:\.\d{2})?)\s*(?:-|–|—|to)?\s*\$?\s?([\d,]+(?:\.\d{2})?)?\s*(?:\/|per\s+)?\s*(hour|hr|week|wk|month|mo|year|yr|annually)?/i,
-  );
-  if (!m?.[1]) return null;
+  let best: PayCandidate | null = null;
 
-  const min = Number(m[1].replace(/,/g, ''));
-  const max = m[2] ? Number(m[2].replace(/,/g, '')) : undefined;
-  const unit = m[3]?.toLowerCase();
+  for (const m of text.matchAll(MONEY_RE)) {
+    const start = m.index;
+    const end = start + m[0].length;
+    const before = clauseBefore(text, start);
+    const after = clauseAfter(text, end);
 
-  const period: ParsedComp['period'] = unit?.startsWith('h')
-    ? 'hour'
-    : unit?.startsWith('w')
-      ? 'week'
-      : unit?.startsWith('mo') || unit === 'm'
-        ? 'month'
-        : unit
-          ? 'year'
-          : // No unit given: infer from magnitude. Interns are quoted hourly far more
-            // often than annually, and the two ranges don't overlap in practice.
-            min < 200
-            ? 'hour'
-            : min < 20_000
-              ? 'month'
-              : 'year';
+    if (MAGNITUDE_AFTER.test(after) || NOT_PAY_BEFORE.test(before)) continue;
 
-  return { min, max, currency: 'USD', period, raw: m[0].trim() };
+    const unit = m[6] ? PERIOD_BY_UNIT[m[6].toLowerCase()] : undefined;
+    // A day rate has nowhere to go: the stored schema has hour, week, month, year and
+    // total, and calling $500/day a monthly figure understated it by twenty times in the
+    // queue. Saying nothing leaves the pay neutral instead of wrong.
+    if (unit === 'day') continue;
+
+    const score = (unit ? 2 : 0) + (PAY_CONTEXT.test(before) || PAY_CONTEXT.test(after) ? 1 : 0);
+    if (!best || score > best.score) best = { match: m, unit, score };
+  }
+
+  if (!best) return null;
+
+  const [, prefix, rawMin, kMin, rawMax, kMax] = best.match;
+  const min = amount(rawMin!, kMin);
+  const max = rawMax ? amount(rawMax, kMax) : undefined;
+
+  const period: ParsedComp['period'] =
+    best.unit ??
+    // No unit given: infer from magnitude. Interns are quoted hourly far more
+    // often than annually, and the two ranges don't overlap in practice.
+    (min < 200 ? 'hour' : min < 20_000 ? 'month' : 'year');
+
+  const raw = best.match[0]
+    .trim()
+    .replace(/[\s/]*\b(?:per|an?)$/i, '')
+    .replace(/[\s/]+$/, '');
+
+  return {
+    min,
+    max,
+    currency: (prefix && DOLLAR_PREFIX[prefix.toLowerCase()]) || 'USD',
+    period,
+    raw,
+  };
 }
 
 // ---------------------------------------------------------------- application demands

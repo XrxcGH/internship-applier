@@ -2,8 +2,12 @@
  * Anthropic client with cost accounting — see docs/02-architecture.md.
  *
  * Every call is recorded in `llm_call` so the cost panel is real and a bad output can
- * be traced back to the prompt that produced it. Keys come from the OS keychain or, in
- * development, the environment.
+ * be traced back to the prompt that produced it.
+ *
+ * The API key comes from the environment — ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, which
+ * .env supplies at startup. Nothing stores it: there is no key field in the interface and no
+ * keychain entry for it, so telling someone to "add one in Settings" sent them looking for a
+ * box that does not exist. The keychain holds the field-encryption key and nothing else.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { ulid } from 'ulid';
@@ -55,8 +59,9 @@ let client: Anthropic | null = null;
 export class MissingApiKeyError extends Error {
   constructor() {
     super(
-      'No Anthropic API key configured. Add one in Settings, or set ANTHROPIC_API_KEY for ' +
-        'development. Resume extraction and answer drafting need it; everything else works without it.',
+      'No Anthropic API key configured. Set ANTHROPIC_API_KEY in the .env file at the root of ' +
+        'this project and restart the server. Resume extraction and answer drafting need it; ' +
+        'everything else works without it.',
     );
     this.name = 'MissingApiKeyError';
   }
