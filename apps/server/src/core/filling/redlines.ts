@@ -44,37 +44,116 @@ export interface RedlinePattern {
 }
 
 /**
- * Fields that LOOK like redlines but are legitimately fillable, checked first.
+ * The only categories an allowlist entry is permitted to cancel.
  *
- * Without this, "Are you legally authorized to work in the United States?" gets caught by
- * a citizenship pattern and the user has to answer their own eligibility question by hand
- * on every application. Work authorization is on the profile, it drives the matching
- * rules, and answering it is the entire point of the tool.
+ * `attestation`, `consent`, `eeo_demographic` and `ai_disclosure` are missing from this
+ * union deliberately, and their absence is enforced by the compiler rather than by anyone
+ * remembering the rule. Those four are the categories where the answer is the user's own
+ * statement to make, so no phrasing coincidence in a label is ever a reason to fill one.
  */
-const ALLOWLIST: RegExp[] = [
-  /\b(legally )?authoriz(ed|ation) to work\b/i,
-  /\b(require|need)( ?s)? sponsorship\b/i,
-  /\bwill you (now or in the future )?require\b/i,
-  /\bwork (authorization|eligibility|permit|visa) status\b/i,
-  /\bare you eligible to work\b/i,
-  // Graduation and start dates read like "date" patterns but are ordinary facts.
-  /\b(expected |anticipated )?graduation date\b/i,
-  /\b(earliest |available )?start date\b/i,
-  // What you are ASKING for is answerable from the profile. What you were PAID is
-  // history, which is a different question and restricted in several states. This
-  // allowlist entry is what keeps the history pattern below free to be broad.
-  /\b(salary|compensation|pay|wage)\s*(expectation|requirement|range|desired|expected)s?\b/i,
-  /\b(desired|expected|target|requested)\s+(salary|compensation|pay|rate)s?\b/i,
+type RescuableCategory = Extract<RedlineCategory, 'government_id' | 'financial' | 'credential'>;
+
+interface AllowlistEntry {
+  test: RegExp;
+  /** The redline categories this phrase may cancel, and nothing beyond them. */
+  rescues: readonly RescuableCategory[];
+  /** When this also matches, the entry does not apply at all. */
+  unless?: RegExp;
+}
+
+/**
+ * A history question does not stop being one because an expectation word appears later in
+ * the sentence. "What is your current salary and your expected salary range?" asks for both,
+ * and the part that matters is the first half.
+ *
+ * The lookahead is what separates the two senses when they share the same words: "current
+ * salary expectations" is what you are asking for now, while "current salary" followed by
+ * anything else — "range", "and", a full stop — is what you are being paid now.
+ */
+const PAID_IN_THE_PAST =
+  /\b(current|previous|prior|last|most recent|former)\s+(salar(y|ies)|compensation|pay|wage)s?\b(?!\s+(expectation|requirement|desired|expected))/i;
+
+/**
+ * Phrases that LOOK like redlines but are legitimately fillable, each paired with the
+ * categories it is allowed to excuse.
+ *
+ * The pairing is the entire point of this list, and it was learned the hard way. This used
+ * to be a plain array of regexes consulted before the redline table, and one hit anywhere in
+ * a label cancelled every pattern below. So the checkbox "I certify that I am legally
+ * authorized to work in the United States" — ordinary closing boilerplate on a US
+ * application form — was not treated as an attestation at all. It was read as a
+ * work-authorization question, answered from the profile, and ticked "Yes": a machine
+ * signing a sworn statement in the applicant's name. "I authorize this background check and
+ * confirm my work authorization status" was ticked the same way, granting consent to an
+ * investigation off the back of an unrelated question, and "Signature: I certify I am
+ * legally authorized to work in the US" had the user's legal name typed into it.
+ *
+ * The list is also much shorter than it was, because most of it was excusing nothing. It used
+ * to carry entries for "authorized to work", "require sponsorship", "are you eligible to
+ * work", "graduation date" and "start date", and the justification written above them was
+ * that a citizenship pattern would otherwise swallow them. There is no citizenship pattern in
+ * this file and there never was: run those five phrasings past every regex below and not one
+ * of them matches. So the entries rescued nothing while making every pattern in the table
+ * cancellable by any label that happened to mention work authorization. They are gone, and
+ * the suite asserts those phrasings stay fillable, which is where that guarantee belongs.
+ */
+const ALLOWLIST: AllowlistEntry[] = [
+  // "Work permit status" asks whether the applicant has one; the identity-document pattern
+  // reads it as a request for the permit itself. The `unless` is there because an eligibility
+  // question does not ask for a number — once a label names a number, a document or a copy,
+  // it is asking for the document and this entry steps out of the way. Without it,
+  // "Work authorization status / Alien registration number" was excused along with the phrase.
+  {
+    test: /\bwork (authorization|eligibility|permit|visa) status\b/i,
+    rescues: ['government_id'],
+    unless: /\b(numbers?|documents?|cop(y|ies)|upload|scan|expir)/i,
+  },
+  // What you are ASKING for is answerable from the profile. What you were PAID is history,
+  // which is a different question and restricted in several states.
+  //
+  // A bare "range" is not enough to establish the forward-looking sense, and while it was
+  // listed here "Current salary range" and "Previous compensation range" — the commonest
+  // wording of the restricted question — were allowlisted and filled in with the user's
+  // minimum acceptable stipend, presented to an employer as what they are paid today. The
+  // unambiguous words stay; "range" now has to arrive attached to one of them, as it does in
+  // "Desired salary range".
+  {
+    test: /\b(salary|compensation|pay|wage)\s*(expectation|requirement|desired|expected)s?\b/i,
+    rescues: ['financial'],
+    unless: PAID_IN_THE_PAST,
+  },
+  {
+    test: /\b(desired|expected|target|requested)\s+(salary|compensation|pay|rate)s?\b/i,
+    rescues: ['financial'],
+    unless: PAID_IN_THE_PAST,
+  },
   // A username qualified by a public platform is a profile link, not a credential. The
   // credential pattern has to catch a bare "Username" on a sign-up form, so the
   // distinction has to be made here.
-  /\b(github|gitlab|linkedin|twitter|x|behance|dribbble|portfolio|stack ?overflow|kaggle|leetcode)\b.{0,12}\b(username|handle|profile|url|id)s?\b/i,
+  {
+    test: /\b(github|gitlab|linkedin|twitter|x|behance|dribbble|portfolio|stack ?overflow|kaggle|leetcode)\b.{0,12}\b(username|handle|profile|url|id)s?\b/i,
+    rescues: ['credential'],
+  },
 ];
 
-/** True when a label is explicitly fine to fill despite resembling a redline. */
-export function isAllowlisted(normalized: string): boolean {
-  return ALLOWLIST.some((r) => r.test(normalized));
+/**
+ * True when the label carries a phrase that is explicitly fine to fill AND that phrase is
+ * allowed to excuse this particular category. A phrase that excuses `financial` says nothing
+ * about an attestation in the same label.
+ */
+export function isRescued(normalized: string, category: RedlineCategory): boolean {
+  return ALLOWLIST.some(
+    (a) =>
+      (a.rescues as readonly RedlineCategory[]).includes(category) &&
+      !a.unless?.test(normalized) &&
+      a.test.test(normalized),
+  );
 }
+
+// The words that name the tool and the words that name its involvement, kept apart so the
+// pattern below can require them in either order.
+const AI_TERM = String.raw`(ai|a i|artificial intelligence|chatgpt|copilot|gemini|claude|llms?|(large )?language models?|generative)`;
+const AI_ACTION = String.raw`(use|used|using|usage|assist|generat|writ|wrote|help|author(ed|ing)|disclos|involv)`;
 
 export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── Government and identity numbers ────────────────────────────────────────
@@ -150,8 +229,10 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   {
     category: 'financial',
     // Matches in either order, because forms phrase this both as "Current salary" and as
-    // "What was your salary at your last position?". Safe to be broad here only because
-    // the allowlist has already claimed expectation and desired-compensation phrasings.
+    // "What was your salary at your last position?". It can afford to be this broad because
+    // the expectation phrasings in the allowlist can pull a label back out of `financial`
+    // — and only out of `financial`, so a label that pairs a salary question with an
+    // attestation still stops here.
     test: /\bsalary histor(y|ies)\b|\b(current|previous|prior|last|most recent|former)\s+(salar(y|ies)|compensation|pay|wage)s?\b|\b(salary|compensation|pay|wage|earn(ed|ings)?|paid)\b.{0,40}\b(last|previous|prior|current|most recent|former|history)\b/i,
     note: 'Salary history. Asking this is restricted in several US states, and it is yours to answer or decline.',
   },
@@ -171,7 +252,15 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     category: 'attestation',
     // Forms phrase these in the first AND third person ("The applicant certifies"), and
     // several jurisdictions use their own noun for it.
-    test: /\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear)/i,
+    //
+    // THE VERB LIST IS THE WEAK PART OF THIS RULE, so it is worth saying why each word is
+    // here. "confirm" was missing, and "By checking this box I confirm I am authorized to
+    // work in the US" is at least as common on US forms as the "certify" wording — it was
+    // classified work_auth at 0.94 and ticked "Yes", which is the tool making a legal
+    // statement in someone's name. "verify", "warrant" and "represent" are the same shape.
+    // Anything of the form "I <verb> that ..." where the verb commits the applicant to the
+    // truth of something belongs here; when adding one, add its test alongside.
+    test: /\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear|confirm|verif|warrant|represent)/i,
     note: 'A statement you are making personally. Only you can make it.',
   },
   {
@@ -255,7 +344,22 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── AI disclosure: skipped AND raised ──────────────────────────────────────
   {
     category: 'ai_disclosure',
-    test: /\b(ai|a\.i\.|artificial intelligence|chatgpt|llm|language model|generative)\b.{0,40}\b(use|used|assist|generat|write|wrote|help)|\b(use|used)\b.{0,20}\b(ai|artificial intelligence|chatgpt)\b/i,
+    // Both word orders, because a form is as likely to put the verb first. The AI term used
+    // to have to come before the verb — anything else needed the single word "use" or "used"
+    // in front of it — so "Was any part of this written with the help of ChatGPT?" and "Did
+    // AI help write this?" matched nothing. Half the natural phrasings of the one question
+    // this category exists for were being handed to the answer-drafting engine instead of
+    // raised, which is the tool writing the applicant's answer about whether the tool wrote
+    // their answers.
+    //
+    // The verbs carry their noun forms too ("AI usage disclosure" is a bare section heading
+    // with no verb in it anywhere), and the term list spells "a i" rather than "a.i.":
+    // `normalizeField` strips the full stops before any pattern sees the string, so the
+    // punctuated spelling could never have matched.
+    test: new RegExp(
+      String.raw`\b${AI_TERM}\b.{0,40}\b${AI_ACTION}|\b${AI_ACTION}\w*\b.{0,40}\b${AI_TERM}\b`,
+      'i',
+    ),
     note: 'This asks whether AI helped with your application. Answer it yourself, honestly. This tool will not answer it for you.',
   },
 ];
@@ -299,8 +403,10 @@ export function normalizeField(parts: {
 /**
  * The decision. Returns a match when the field must not be filled.
  *
- * The allowlist is consulted first and wins, because those phrases genuinely overlap with
- * redline vocabulary and the tool would be much less useful without them.
+ * Every pattern is tested, and the allowlist is asked about each match one category at a
+ * time. That ordering matters: a phrase that legitimately excuses a bank-details pattern has
+ * no bearing on an attestation in the same label, and the loop keeps going after a rescue so
+ * a later, un-rescuable match is still found.
  */
 export function checkRedline(parts: {
   label?: string;
@@ -321,12 +427,10 @@ export function checkRedline(parts: {
     };
   }
 
-  if (isAllowlisted(normalized)) return null;
-
   for (const p of REDLINE_PATTERNS) {
-    if (p.test.test(normalized)) {
-      return { category: p.category, note: p.note, matched: p.test.source };
-    }
+    if (!p.test.test(normalized)) continue;
+    if (isRescued(normalized, p.category)) continue;
+    return { category: p.category, note: p.note, matched: p.test.source };
   }
   return null;
 }

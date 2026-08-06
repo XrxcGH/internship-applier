@@ -22,6 +22,7 @@ import type { FormField } from '@ia/shared';
 import { logger } from '../../infra/logger';
 import { keyDelay } from './browser';
 import { FILLABLE_CONTROLS } from './selectors';
+import { parseFrameKey } from './formMap';
 import type { FillAction, FillPlan } from './plan';
 
 export interface FieldResult {
@@ -39,10 +40,31 @@ export interface FillResult {
   failed: number;
 }
 
-/** Resolves the frame a field lives in, falling back to the main one. */
-function frameFor(page: Page, field: FormField): Frame {
+/**
+ * Resolves the frame a field lives in, or nothing at all.
+ *
+ * Matching on the URL alone was wrong twice over. Frames share URLs far more often than it
+ * sounds — every `srcdoc` iframe reports `about:srcdoc`, every blank one `about:blank` — so
+ * a page with two essay editors sent both answers into the first one, leaving the second
+ * empty and reporting both filled. And when the recorded frame had gone away, falling back
+ * to the main document did not mean "fill nothing"; with an index locator it meant `.nth(N)`
+ * in a completely different document, which is how an approved essay was once typed into a
+ * Social Security Number box that the redline pass had deliberately left alone.
+ *
+ * So: the recorded position must still hold the recorded URL, or exactly one frame must
+ * carry that URL and no other. Anything else is a field this tool cannot locate, and saying
+ * so is the only honest outcome — read-back cannot help here, because it re-reads whatever
+ * wrong element was resolved and finds the value sitting in it.
+ */
+function frameFor(page: Page, field: FormField): Frame | undefined {
   if (!field.frame) return page.mainFrame();
-  return page.frames().find((f) => f.url() === field.frame) ?? page.mainFrame();
+  const { index, url } = parseFrameKey(field.frame);
+  // The position is counted over the whole list, the way the scanner numbered it.
+  const all = page.frames();
+  const at = all[index];
+  if (at && !at.isDetached() && at.url() === url) return at;
+  const sameUrl = all.filter((f) => !f.isDetached() && f.url() === url);
+  return sameUrl.length === 1 ? sameUrl[0] : undefined;
 }
 
 /**
@@ -87,6 +109,57 @@ function accepted(intended: string, actual: string): boolean {
   return a === b || b.startsWith(a) || a.startsWith(b);
 }
 
+/** The words of a label, so "No, not now or in the future" starts with the word "no". */
+function wordsOf(s: string): string[] {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/** Does this label begin with the intended answer, as whole words rather than letters? */
+function beginsWith(label: string, value: string): boolean {
+  const l = wordsOf(label);
+  const v = wordsOf(value);
+  if (v.length === 0 || l.length < v.length) return false;
+  return v.every((w, i) => l[i] === w);
+}
+
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * Which option a value means — docs/07-form-automation.md § Filling.
+ *
+ * Order matters here more than anywhere else in this file. Matching a prose label by
+ * substring before trying the option's own value is how "US" selected Australia (the label
+ * "Australia" contains "us"), "WA" selected Delaware, and "VA" selected Nevada — twenty-one
+ * of the fifty state codes and eighteen of fifty-one country codes went to the wrong entry.
+ * Worse, it is how "No" selected "Yes, now or in the future", because that phrase contains
+ * the letters of "no": a candidate who needs no sponsorship was recorded as needing it, and
+ * one not authorized to work was recorded as authorized, on the two questions that decide an
+ * application on their own.
+ *
+ * So the value attribute is tried first, then the whole label, and only then prose — and the
+ * prose pass matches whole leading WORDS, never letters, and refuses when two options fit.
+ * An option carrying an empty value is the "Select an option" placeholder; choosing it does
+ * not fill a field, it blanks one. When nothing clears the bar the field is left for the
+ * user, which is a far better outcome than a confident wrong answer under their name.
+ */
+export function chooseOption<T extends SelectOption>(options: T[], value: string): T | undefined {
+  const real = options.filter((o) => o.value.trim() !== '');
+  const byValue = real.find((o) => comparable(o.value) === comparable(value));
+  if (byValue) return byValue;
+  const byLabel = real.find((o) => comparable(o.label) === comparable(value));
+  if (byLabel) return byLabel;
+  // A one-character answer carries too little to identify an option by its opening word.
+  if (comparable(value).length < 2) return undefined;
+  const leading = real.filter((o) => beginsWith(o.label, value));
+  return leading.length === 1 ? leading[0] : undefined;
+}
+
 async function readValue(loc: Locator, field: FormField): Promise<string> {
   try {
     if (field.control === 'checkbox' || field.control === 'radio') {
@@ -109,6 +182,13 @@ function escapeRegExp(s: string): string {
 async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
   const { field, value } = action;
   const frame = frameFor(page, field);
+  if (!frame) {
+    return {
+      field,
+      status: 'failed',
+      note: 'The part of the page this field lives in is no longer there. Fill it in yourself.',
+    };
+  }
   const loc = locate(frame, field);
 
   /**
@@ -149,12 +229,8 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
 
       case 'select':
       case 'multiselect': {
-        // Match an option by label first, then by value; forms label options in prose.
         const options = field.options ?? [];
-        const wanted =
-          options.find((o) => comparable(o.label) === comparable(value)) ??
-          options.find((o) => comparable(o.label).includes(comparable(value))) ??
-          options.find((o) => comparable(o.value) === comparable(value));
+        const wanted = chooseOption(options, value);
         if (!wanted) {
           return {
             field,
@@ -163,9 +239,33 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
           };
         }
         await loc.selectOption(wanted.value);
-        // Read-back is the option's value attribute, not the prose we matched on.
-        expected = wanted.value;
-        break;
+
+        /**
+         * Report the prose the page now displays, not the value that was asked for.
+         *
+         * A select reads back its option's VALUE attribute, which on real ATS forms is a
+         * code rather than the words next to it, so the report used to substitute the
+         * planned value whenever the two differed. That made the one field a reader most
+         * needs to check look like the one they can trust: the page said "Australia" and
+         * the report said "US", with a green tick beside it. Resolving the page's value
+         * back through the option list and printing THAT means a wrong choice is visible
+         * to the person reviewing the form, which is the only thing that can catch it —
+         * re-reading a select cannot tell a bad match apart from a good one, because the
+         * page simply holds whatever it was told.
+         */
+        const held = await readValue(loc, field);
+        const shown = options.find((o) => o.value === held)?.label ?? held;
+        if (held.trim() === wanted.value.trim()) {
+          return { field, status: 'ok', readBack: shown };
+        }
+        return {
+          field,
+          status: 'mismatch',
+          readBack: shown,
+          note: shown
+            ? `The page shows "${shown}" instead. Check this one.`
+            : 'The page did not keep this value. Fill it in yourself.',
+        };
       }
 
       case 'radio': {

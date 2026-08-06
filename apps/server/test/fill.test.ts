@@ -12,7 +12,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ApplicationAnswer, ConfirmedProfile } from '@ia/shared';
+import type { Page } from 'playwright';
+import type { ApplicationAnswer, ConfirmedProfile, FormField } from '@ia/shared';
 import {
   resetSubmissions,
   startFixtureServer,
@@ -20,9 +21,14 @@ import {
   type FixtureServer,
 } from '@ia/fixtures';
 import { openSession, type BrowserSession } from '../src/core/filling/browser';
-import { buildFormMap } from '../src/core/filling/formMap';
+import { buildFormMap, frameKey } from '../src/core/filling/formMap';
 import { buildFillPlan, summarizePlan } from '../src/core/filling/plan';
-import { describeFill, executePlan } from '../src/core/filling/fill';
+import {
+  chooseOption,
+  describeFill,
+  executePlan,
+  type SelectOption,
+} from '../src/core/filling/fill';
 
 let fixture: FixtureServer;
 let session: BrowserSession;
@@ -269,6 +275,304 @@ describe('redlines, on a live page', () => {
     expect(notes).toMatch(/yours to give|only you can make it|type this yourself/i);
     expect(summarizePlan(plan)).toMatch(/left for you/);
   }, 90_000);
+});
+
+/**
+ * Dropdowns, without a browser, because the interesting part is the matching.
+ *
+ * The fixture's only fillable select offers "Yes" and "No" and has no substring collisions
+ * in it, which is why a rule that matched prose labels by substring passed the whole suite
+ * while sending twenty-one of the fifty US state codes to the wrong state. These lists are
+ * the ordinary ones an application actually shows.
+ */
+const COUNTRIES: SelectOption[] = [
+  { value: '', label: 'Please select' },
+  { value: 'AU', label: 'Australia' },
+  { value: 'BD', label: 'Bangladesh' },
+  { value: 'BR', label: 'Brazil' },
+  { value: 'DE', label: 'Germany' },
+  { value: 'IE', label: 'Ireland' },
+  { value: 'IL', label: 'Israel' },
+  { value: 'US', label: 'United States' },
+  { value: 'VN', label: 'Vietnam' },
+];
+
+/**
+ * Sixteen states rather than fifty, chosen because eight of these codes went somewhere
+ * else: IA and OR to California, LA and MA to Alabama, NE to Connecticut, VA to Nevada,
+ * WA to Delaware — and CT to "Select a state", which does not fill a required field, it
+ * blanks one. The four states beginning with "New" are here so that ambiguity has
+ * something to be ambiguous about.
+ */
+const STATES: SelectOption[] = [
+  { value: '', label: 'Select a state' },
+  { value: 'AL', label: 'Alabama' },
+  { value: 'CA', label: 'California' },
+  { value: 'CT', label: 'Connecticut' },
+  { value: 'DE', label: 'Delaware' },
+  { value: 'IA', label: 'Iowa' },
+  { value: 'LA', label: 'Louisiana' },
+  { value: 'MA', label: 'Massachusetts' },
+  { value: 'NE', label: 'Nebraska' },
+  { value: 'NV', label: 'Nevada' },
+  { value: 'NH', label: 'New Hampshire' },
+  { value: 'NJ', label: 'New Jersey' },
+  { value: 'NM', label: 'New Mexico' },
+  { value: 'NY', label: 'New York' },
+  { value: 'OR', label: 'Oregon' },
+  { value: 'VA', label: 'Virginia' },
+  { value: 'WA', label: 'Washington' },
+];
+
+const SPONSORSHIP: SelectOption[] = [
+  { value: '', label: 'Select an option' },
+  { value: '1', label: 'Yes, now or in the future' },
+  { value: '2', label: 'No, not now or in the future' },
+];
+
+describe('choosing an option in a dropdown', () => {
+  /**
+   * "US" is the profile's default country, and "Australia" contains the letters u-s. The
+   * substring rule reached that label before it ever looked at the option carrying the
+   * value "US", so the out-of-the-box profile selected the wrong country.
+   */
+  it('prefers an option that carries the value over a label that merely contains it', () => {
+    expect(chooseOption(COUNTRIES, 'US')?.label).toBe('United States');
+    expect(chooseOption(COUNTRIES, 'DE')?.label).toBe('Germany');
+    expect(chooseOption(COUNTRIES, 'IE')?.label).toBe('Ireland');
+    expect(chooseOption(COUNTRIES, 'IL')?.label).toBe('Israel');
+    // And the same question asked with the full name still works.
+    expect(chooseOption(COUNTRIES, 'United States')?.value).toBe('US');
+  });
+
+  it('sends every state code to its own state', () => {
+    const codes = STATES.map((s) => s.value).filter(Boolean);
+    const wrong = codes.filter((code) => chooseOption(STATES, code)?.value !== code);
+    expect(wrong).toEqual([]);
+  });
+
+  /**
+   * The one that decides applications. "No, not now or in the future" contains "no", and so
+   * does "Yes, now or in the future" — a candidate who needs no sponsorship was recorded as
+   * needing it, and one not authorized to work was recorded as authorized. Whole leading
+   * words are what tell the two apart.
+   */
+  it('answers a prose sponsorship question on the side the profile meant', () => {
+    expect(chooseOption(SPONSORSHIP, 'No')?.label).toBe('No, not now or in the future');
+    expect(chooseOption(SPONSORSHIP, 'Yes')?.label).toBe('Yes, now or in the future');
+  });
+
+  it('never chooses the placeholder, which would blank the field rather than fill it', () => {
+    expect(chooseOption(SPONSORSHIP, 'Select an option')).toBeUndefined();
+    expect(chooseOption(COUNTRIES, 'Please select')).toBeUndefined();
+  });
+
+  it('refuses when two options fit equally well', () => {
+    expect(chooseOption(STATES, 'New')).toBeUndefined();
+  });
+
+  it('will not identify an option from a single character', () => {
+    const levels: SelectOption[] = [
+      { value: 'a', label: 'A Levels' },
+      { value: 'b', label: 'Baccalaureate' },
+    ];
+    expect(chooseOption(levels, 'A')?.value).toBe('a'); // an exact value still counts
+    expect(chooseOption(levels, 'X')).toBeUndefined();
+  });
+
+  it('leaves a value it cannot place for the user', () => {
+    expect(chooseOption(STATES, 'Ontario')).toBeUndefined();
+  });
+});
+
+/** A `<select>` with no browser: it keeps the value it is given, or refuses it. */
+function selectStub(options: SelectOption[], behaviour: { ignores?: boolean } = {}) {
+  let held = '';
+  const locator = {
+    waitFor: () => Promise.resolve(),
+    selectOption: (v: string) => {
+      if (behaviour.ignores) return Promise.resolve();
+      const hit = options.find((o) => o.value === v);
+      if (!hit) return Promise.reject(new Error(`no option with value "${v}"`));
+      held = hit.value;
+      return Promise.resolve();
+    },
+    inputValue: () => Promise.resolve(held),
+  };
+  return {
+    locator,
+    get held() {
+      return held;
+    },
+  };
+}
+
+/** A text box with no browser, reachable by a plain selector or by index. */
+function textStub() {
+  let held = '';
+  const locator = {
+    nth: () => locator,
+    waitFor: () => Promise.resolve(),
+    click: () => Promise.resolve(),
+    fill: (v: string) => {
+      held = v;
+      return Promise.resolve();
+    },
+    pressSequentially: (v: string) => {
+      held += v;
+      return Promise.resolve();
+    },
+    inputValue: () => Promise.resolve(held),
+  };
+  return {
+    locator,
+    get held() {
+      return held;
+    },
+  };
+}
+
+function fieldOf(over: Partial<FormField>): FormField {
+  return {
+    id: 'f1',
+    locator: '#control',
+    label: 'A field',
+    control: 'select',
+    required: false,
+    semantic: 'country',
+    confidence: 1,
+    ...over,
+  } as FormField;
+}
+
+function pageOfFrames(frames: { url: string; locator: unknown }[]): Page {
+  const built = frames.map((f) => ({
+    url: () => f.url,
+    isDetached: () => false,
+    locator: () => f.locator,
+  }));
+  return { mainFrame: () => built[0], frames: () => built } as unknown as Page;
+}
+
+async function fillOnce(page: Page, field: FormField, value: string) {
+  const result = await executePlan(page, {
+    actions: [{ field, value, source: 'profile' }],
+    skips: [],
+  });
+  return result.results[0]!;
+}
+
+/**
+ * What the user is shown about a dropdown after it has been set.
+ *
+ * Re-reading a select cannot tell a good choice from a bad one — the page holds whatever it
+ * was told — so the report used to print the value that was ASKED for whenever it differed
+ * from the option code. The page said "Australia" and the report said "US", with a tick
+ * beside it, on the one field a reader most needed to look at.
+ */
+describe('a dropdown reports the words the page is now showing', () => {
+  it('shows the option label rather than the value that was planned', async () => {
+    const select = selectStub(COUNTRIES);
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: select.locator }]);
+    const r = await fillOnce(page, fieldOf({ label: 'Country', options: COUNTRIES }), 'US');
+
+    expect(select.held).toBe('US');
+    expect(r.status).toBe('ok');
+    expect(r.readBack).toBe('United States');
+  });
+
+  it('reports a mismatch when the page does not keep the choice', async () => {
+    const select = selectStub(COUNTRIES, { ignores: true });
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: select.locator }]);
+    const r = await fillOnce(page, fieldOf({ label: 'Country', options: COUNTRIES }), 'US');
+
+    expect(r.status).toBe('mismatch');
+    expect(r.readBack).toBe('Please select');
+    expect(r.note).toMatch(/Please select/);
+  });
+
+  it('leaves the dropdown untouched when nothing matches', async () => {
+    const select = selectStub(STATES);
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: select.locator }]);
+    const r = await fillOnce(page, fieldOf({ label: 'State', options: STATES }), 'Ontario');
+
+    expect(r.status).toBe('skipped');
+    expect(r.note).toMatch(/Choose it yourself/);
+    expect(select.held).toBe('');
+  });
+});
+
+/**
+ * Which document a value goes into.
+ *
+ * A URL is not a frame's identity: every `srcdoc` iframe reports `about:srcdoc` and every
+ * blank one `about:blank`, so a page with two essay editors sent both answers into the
+ * first, left the second empty, and reported both filled. And when the recorded frame had
+ * gone, falling back to the main document meant an index locator resolved in a completely
+ * different page — which is how an approved essay was typed into a Social Security Number
+ * box the redline pass had deliberately left alone.
+ */
+describe('the frame a field was found in', () => {
+  it('tells two frames with the same URL apart', async () => {
+    const main = textStub();
+    const editorA = textStub();
+    const editorB = textStub();
+    const page = pageOfFrames([
+      { url: 'http://form.test/', locator: main.locator },
+      { url: 'about:srcdoc', locator: editorA.locator },
+      { url: 'about:srcdoc', locator: editorB.locator },
+    ]);
+
+    // Neither editor has an id, so both fall back to the same index locator. The frame is
+    // the only thing that distinguishes them.
+    const q1 = fieldOf({
+      id: 'q1',
+      label: 'Question 1',
+      control: 'textarea',
+      semantic: 'essay',
+      locator: '__index__0',
+      frame: frameKey(1, 'about:srcdoc'),
+    });
+    const q2 = fieldOf({
+      id: 'q2',
+      label: 'Question 2',
+      control: 'textarea',
+      semantic: 'essay',
+      locator: '__index__0',
+      frame: frameKey(2, 'about:srcdoc'),
+    });
+
+    const result = await executePlan(page, {
+      actions: [
+        { field: q1, value: 'answer one', source: 'answer' },
+        { field: q2, value: 'answer two', source: 'answer' },
+      ],
+      skips: [],
+    });
+
+    expect(result.results.map((r) => r.status)).toEqual(['ok', 'ok']);
+    expect(editorA.held).toBe('answer one');
+    expect(editorB.held).toBe('answer two');
+  });
+
+  it('says so rather than typing into a different document when the frame is gone', async () => {
+    const main = textStub();
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: main.locator }]);
+    const essay = fieldOf({
+      label: 'Tell us about a project',
+      control: 'textarea',
+      semantic: 'essay',
+      locator: '__index__0',
+      frame: frameKey(1, 'about:srcdoc'),
+    });
+
+    const r = await fillOnce(page, essay, 'I built a tide chart that works offline.');
+
+    expect(r.status).toBe('failed');
+    expect(r.note).toMatch(/no longer there/i);
+    // The main document, where the fallback used to land, is untouched.
+    expect(main.held).toBe('');
+  });
 });
 
 describe('gate G4 — the whole point', () => {

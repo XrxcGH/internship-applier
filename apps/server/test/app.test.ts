@@ -42,6 +42,56 @@ describe('health', () => {
 });
 
 /**
+ * Who this server will answer to.
+ *
+ * Listening on 127.0.0.1 is not by itself a boundary: a site can point its own DNS name at
+ * 127.0.0.1, and once the browser re-resolves it, that site's pages are same origin with
+ * this server. The socket really does come from loopback and CORS never engages, so before
+ * the Host header was checked, such a page could fetch a token from the exempt
+ * /api/session and go straight on to the privacy export or the delete-everything route.
+ *
+ * Built without `skipAuth` because this is not the token check and must not be switched
+ * off with it.
+ */
+describe('Host pinning', () => {
+  let strict: FastifyInstance;
+
+  beforeAll(async () => {
+    strict = await buildApp();
+    await strict.ready();
+  });
+
+  afterAll(async () => {
+    await strict.close();
+  });
+
+  const get = (url: string, host: string) =>
+    strict.inject({ method: 'GET', url, headers: { host }, remoteAddress: '127.0.0.1' });
+
+  it('refuses a request addressed to somebody else, token route included', async () => {
+    for (const url of ['/api/session', '/api/privacy/export', '/api/privacy/delete-preview']) {
+      const res = await get(url, 'evil.example:8787');
+      expect(res.statusCode, url).toBe(403);
+      expect(res.body, url).not.toMatch(/token/);
+    }
+  });
+
+  it('is not fooled by a name that merely ends in one of ours', async () => {
+    for (const host of ['evil.localhost:8787', 'notlocalhost:8787', '127.0.0.1.evil.example']) {
+      expect((await get('/api/session', host)).statusCode, host).toBe(403);
+    }
+  });
+
+  it('lets the real interface through, on either port it can arrive from', async () => {
+    // 5173 is the Vite dev proxy, which forwards with changeOrigin: false; 8787 is this
+    // server handing out the built UI itself.
+    for (const host of ['127.0.0.1:8787', 'localhost:8787', '127.0.0.1:5173', '[::1]:8787']) {
+      expect((await get('/api/session', host)).statusCode, host).toBe(200);
+    }
+  });
+});
+
+/**
  * Gate G4 (docs/07-form-automation.md): the tool fills forms, the user submits them.
  * This is a release gate, not a style check — it asserts that no route capable of
  * submitting an application can exist in the codebase.

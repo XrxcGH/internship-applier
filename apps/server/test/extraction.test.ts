@@ -110,6 +110,187 @@ describe('deterministic extraction', () => {
     expect(soft.find((r) => r.kind === 'experience_years')?.necessity).toBe('preferred');
   });
 
+  const necessityOf = (kind: string, text: string) =>
+    deterministicRequirements(text).find((r) => r.kind === kind)?.necessity;
+
+  /**
+   * A softener sits after the phrase at least as often as before it, and postings park
+   * their wishes under a heading and write the bullets underneath as flat statements.
+   * Every one of these produced a hard experience requirement, which hid the internship
+   * from a student with none while the quote shown beside the rejection said it was
+   * optional.
+   */
+  it('reads a softener that follows the phrase, not only one in front of it', () => {
+    expect(necessityOf('experience_years', '3+ years of professional experience is a plus.')).toBe(
+      'preferred',
+    );
+    expect(necessityOf('experience_years', '2 years of relevant experience preferred.')).toBe(
+      'preferred',
+    );
+    expect(
+      necessityOf('experience_years', '4 years of experience, though this is not required.'),
+    ).toBe('preferred');
+  });
+
+  it('reads "preferred" and "preferably", not just the bare stem "prefer"', () => {
+    expect(necessityOf('experience_years', 'Preferred: 3 years of professional experience.')).toBe(
+      'preferred',
+    );
+    expect(necessityOf('experience_years', 'Preferably 2 years of industry experience.')).toBe(
+      'preferred',
+    );
+  });
+
+  it('reads the heading a bullet sits under, however far above it', () => {
+    const posting = [
+      'Preferred qualifications:',
+      '- Familiarity with Kubernetes and Docker containers in a production environment.',
+      '- Experience with distributed tracing and observability tooling of any kind.',
+      '- 3 years of professional experience.',
+    ].join('\n');
+    expect(necessityOf('experience_years', posting)).toBe('preferred');
+  });
+
+  it('still reads a genuinely stated experience requirement as required', () => {
+    expect(
+      necessityOf('experience_years', 'Requirements:\n- 3 years of professional experience.'),
+    ).toBe('required');
+    expect(necessityOf('experience_years', 'Candidates must have 5 years of experience.')).toBe(
+      'required',
+    );
+  });
+
+  /**
+   * A degree level is as often a wish as a rule, and hardcoding every one as required
+   * hard-failed undergraduates on postings that had just told them to apply anyway.
+   */
+  it('marks a degree level the posting only prefers as preferred', () => {
+    expect(necessityOf('education_level', "Master's degree preferred.")).toBe('preferred');
+    expect(necessityOf('education_level', 'PhD candidates preferred but not required.')).toBe(
+      'preferred',
+    );
+    expect(
+      necessityOf('education_level', 'We welcome all levels; graduate students preferred.'),
+    ).toBe('preferred');
+    expect(necessityOf('education_level', "A Bachelor's degree in CS is required.")).toBe(
+      'required',
+    );
+  });
+
+  /**
+   * "With or without sponsorship" contains "without sponsorship" and was read as a
+   * refusal, so a posting that went out of its way to invite people who need a visa was
+   * hidden from precisely those people. Both directions matter here: the `without` branch
+   * has to keep matching, because "authorized to work in the US without sponsorship" is a
+   * genuine refusal and just as common.
+   */
+  const refusesSponsorship = (text: string) =>
+    deterministicRequirements(text).some(
+      (r) =>
+        r.kind === 'work_auth' &&
+        (r.value as { sponsorshipUnavailable?: boolean }).sponsorshipUnavailable === true,
+    );
+
+  it('does not read an invitation to visa holders as a refusal to sponsor', () => {
+    const invitations = [
+      'We will consider qualified applicants with or without the need for visa sponsorship.',
+      'This position is open to candidates with or without sponsorship.',
+      'Open to students with or without the need for sponsorship, now or in the future.',
+      'Applicants with or without sponsorship needs are encouraged to apply.',
+    ];
+    for (const text of invitations) expect(refusesSponsorship(text), text).toBe(false);
+  });
+
+  it('still finds a genuine refusal to sponsor', () => {
+    const refusals = [
+      'We do not provide visa sponsorship.',
+      'You must be authorized to work in the US without sponsorship.',
+      'Candidates must be able to work without the need for sponsorship now or in the future.',
+      'We are unable to offer visa sponsorship for this role.',
+      'No visa sponsorship is available.',
+    ];
+    for (const text of refusals) expect(refusesSponsorship(text), text).toBe(true);
+  });
+
+  /**
+   * "U.S. citizenship or permanent residency is required" welcomes green-card holders, but
+   * a citizenship requirement can only carry a list of countries, so recording it as
+   * US-only told a lawful permanent resident they did not qualify for a posting that names
+   * them in the same breath. What the posting is really saying is that you must already be
+   * able to work here, which the rules deliberately never fail anyone on.
+   */
+  const citizenshipCountriesFor = (text: string) =>
+    deterministicRequirements(text).find(
+      (r) => r.kind === 'citizenship' && (r.value as { countries?: string[] }).countries,
+    );
+
+  it('does not demand citizenship of a posting that also accepts permanent residents', () => {
+    for (const text of [
+      'U.S. citizenship or permanent residency is required for this role.',
+      'Applicants must be a U.S. citizen or permanent resident.',
+      'US citizenship or green card required.',
+      'Candidates must hold U.S. citizenship or lawful permanent residence.',
+    ]) {
+      expect(citizenshipCountriesFor(text), text).toBeUndefined();
+      expect(
+        deterministicRequirements(text).some(
+          (r) =>
+            r.kind === 'work_auth' &&
+            (r.value as { requiresExistingAuthorization?: boolean }).requiresExistingAuthorization,
+        ),
+        text,
+      ).toBe(true);
+    }
+  });
+
+  it('still demands citizenship when that is all the posting accepts', () => {
+    expect(citizenshipCountriesFor('U.S. citizenship is required.')?.value).toEqual({
+      countries: ['US'],
+    });
+    expect(citizenshipCountriesFor('U.S. citizenship is not required.')).toBeUndefined();
+  });
+
+  /**
+   * The enrolment phrase survives its own negation — "you do not need to be currently
+   * enrolled" contains it — so a recent graduate was filtered out by the exact sentence
+   * written to invite them. The guard reads only as far back as the start of the clause,
+   * because a "not" belonging to an earlier clause must not throw away a real requirement.
+   */
+  const requiresEnrollment = (text: string) =>
+    deterministicRequirements(text).some((r) => r.kind === 'enrollment');
+
+  it('does not invent an enrolment requirement from a sentence waiving one', () => {
+    const waived = [
+      'You do not need to be currently enrolled in a degree program.',
+      'Applicants need not be currently enrolled in a degree program.',
+      'Recent graduates are welcome; you do not have to be enrolled in a program.',
+      'This role is open to candidates not enrolled in a university program.',
+    ];
+    for (const text of waived) expect(requiresEnrollment(text), text).toBe(false);
+  });
+
+  it('still finds a real enrolment requirement after an unrelated negation', () => {
+    const stated = [
+      'Candidates must be currently enrolled in a degree program.',
+      'We do not offer relocation; candidates must be currently enrolled in a degree program.',
+      'Interns must be enrolled in an accredited university and will not be considered otherwise.',
+    ];
+    for (const text of stated) expect(requiresEnrollment(text), text).toBe(true);
+  });
+
+  /** Each window a posting names is an alternative, so all of them have to reach the rules. */
+  it('keeps every graduation window a posting states', () => {
+    const windows = deterministicRequirements(
+      'Juniors graduating between December 2026 and June 2027 are eligible. ' +
+        'Sophomores graduating between December 2027 and June 2028 are also eligible.',
+    ).filter((r) => r.kind === 'graduation_window');
+
+    expect(windows.map((w) => w.value)).toEqual([
+      { from: '2026-12', to: '2027-06' },
+      { from: '2027-12', to: '2028-06' },
+    ]);
+  });
+
   /**
    * A clearance requirement is one of the few things that can genuinely disqualify a
    * student, so both directions of this matter: inventing one contradicts the quote shown
@@ -181,6 +362,20 @@ describe('end-to-end extraction without a model', () => {
       useModel: false,
     });
     expect(result.requirements).toEqual([]);
+  });
+
+  /**
+   * The guards can only discard or soften, never invent, so a posting whose only
+   * sponsorship sentence is an invitation must come out of the whole pipeline with no
+   * work-authorization requirement attached to it at all.
+   */
+  it('extracts no sponsorship requirement from a posting that invites visa holders', async () => {
+    const welcoming =
+      'Software Engineering Intern, Summer 2027.\n' +
+      'We will consider qualified applicants with or without the need for visa sponsorship.';
+    const result = await extractRequirements('p4', welcoming, { useModel: false });
+    expect(result.requirements.filter((r) => r.kind === 'work_auth')).toEqual([]);
+    expect(result.dropped).toEqual([]);
   });
 
   it('does not emit the same requirement twice', async () => {

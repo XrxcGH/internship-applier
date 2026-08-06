@@ -22,6 +22,35 @@ export interface BuildOptions {
   skipAuth?: boolean;
 }
 
+/**
+ * The names this server will answer to.
+ *
+ * Binding to 127.0.0.1 does not keep a web page out. Any site can point one of its own DNS
+ * names at 127.0.0.1 and wait for the browser to re-resolve it; from then on that site's
+ * pages are same origin with this server. The connection genuinely arrives from loopback,
+ * so the check below it passes, and nothing is cross-origin any more, so CORS never
+ * engages — which is how a stray tab could fetch a token from the exempt /api/session and
+ * then read the privacy export or delete the database, resumes and encryption key outright.
+ * The Host header is the one part of such a request that still carries the attacker's own
+ * name, so it is the thing worth checking.
+ *
+ * The port deliberately is not checked. The Vite dev proxy forwards with
+ * `changeOrigin: false`, so in development the Host that arrives is 127.0.0.1:5173 while
+ * the built-UI mode sends 127.0.0.1:8787, and both are the same user at the same machine.
+ */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+function hostnameOf(host: string): string {
+  const value = host.trim().toLowerCase();
+  // `[::1]:8787` — an IPv6 literal in a Host header is always bracketed when a port follows.
+  if (value.startsWith('[')) {
+    const close = value.indexOf(']');
+    return close === -1 ? value : value.slice(1, close);
+  }
+  // A bare IPv6 literal has several colons and no port; everything else has at most one.
+  return value.split(':').length > 2 ? value : (value.split(':')[0] ?? '');
+}
+
 export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     // pino's exported Logger type and Fastify's bundled FastifyBaseLogger drift between
@@ -41,7 +70,9 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
 
   await app.register(multipart, { limits: { fileSize: 12 * 1024 * 1024, files: 1 } });
 
-  // Loopback-only guard. Belt-and-braces alongside binding to 127.0.0.1.
+  // Who is allowed to talk to this server: the connection has to come from loopback, and
+  // the request has to have been addressed to it. Belt-and-braces alongside binding to
+  // 127.0.0.1, which on its own stops neither a local script nor a rebound web page.
   app.addHook('onRequest', async (req, reply) => {
     const ip = req.ip;
     if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
@@ -49,6 +80,21 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
         error: { code: 'INTERNAL', message: 'This API accepts loopback connections only.' },
       });
     }
+
+    // A missing Host is as suspect as a foreign one. Nothing that reaches this server
+    // legitimately omits it, and treating an absent header as permission is how a check
+    // like this quietly stops working. Kept out of `skipAuth` on purpose: it is not the
+    // token check, and the tests should be running against the real thing.
+    const host = req.headers.host;
+    if (typeof host !== 'string' || !LOOPBACK_HOSTS.has(hostnameOf(host))) {
+      return reply.code(403).send({
+        error: {
+          code: 'INTERNAL',
+          message: 'This API answers to localhost only, and this request asked for something else.',
+        },
+      });
+    }
+
     if (opts.skipAuth || config.isTest) return;
 
     // The token guards the API, not the interface. When this server also serves the built
@@ -59,12 +105,14 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
 
     // Exempt: the liveness probe and the bootstrap that hands the UI its token.
     //
-    // What this exemption is and is not worth. CORS keeps a stray page in another browser
-    // tab from reading /api/session, which is the case the token was added for. It does
-    // nothing to a local script: curl can fetch the token here and then call every guarded
-    // route. That is not a hole this exemption opened — a process running as this user can
-    // read data/app.db and the keyfile directly, so the token was never a boundary against
-    // it. docs/10 says the same thing rather than the stronger claim it used to make.
+    // What this exemption is and is not worth. A stray page in another browser tab cannot
+    // read /api/session, which is the case the token was added for — CORS stops the
+    // ordinary cross-origin fetch, and the Host check above stops the DNS-rebinding version
+    // that CORS cannot see. It does nothing to a local script: curl can fetch the token
+    // here and then call every guarded route. That is not a hole this exemption opened — a
+    // process running as this user can read data/app.db and the keyfile directly, so the
+    // token was never a boundary against it. docs/10 says the same thing rather than the
+    // stronger claim it used to make.
     if (req.url === '/api/health' || req.url === '/api/session') return;
 
     // A missing header is `undefined` and a header sent twice can arrive as an array;

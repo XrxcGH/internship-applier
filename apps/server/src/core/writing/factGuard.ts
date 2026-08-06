@@ -157,16 +157,37 @@ export function extractDurations(text: string): DurationClaim[] {
   return out;
 }
 
+/** The denominator of "3.62/4.0" or "3.62 out of 4", and the tail of "on a 4.0 scale". */
+const GPA_SCALE_TAIL = /\b(\d\.\d{1,2})\s*(?:\/|out of)\s*(?:4|4\.0|5|5\.0)\b/gi;
+const GPA_SCALE_PHRASE = /\bon\s+a\s+\d(?:\.\d{1,2})?[\s-]*(?:point\s*)?scale\b/gi;
+
+/**
+ * Every number this returns is a GPA the draft CLAIMS, so a scale must never come back.
+ *
+ * The scale is blanked out — padded with spaces, so no other match shifts — before the two
+ * value-reading patterns run. Without that, "I graduated with a 3.62/4.0 GPA" hands the
+ * number-leading pattern a clean "4.0 GPA" on the far side of the slash, and the draft
+ * reads as claiming a 4.0 alongside the 3.62. That used to be papered over at comparison
+ * time by treating the scale as an acceptable value, which exempted it everywhere rather
+ * than only where it was a denominator: an invented "I hold a perfect 4.0 GPA" on a 3.62
+ * profile came back green, with the profile line that says 3.62 attached beside it as its
+ * supporting quote. On a 4.0 scale that was the one wrong GPA the guard let through, and
+ * it is the one a person inflating their record would actually type.
+ */
 export function extractGpas(text: string): number[] {
   const out: number[] = [];
+  const masked = text
+    .replace(GPA_SCALE_TAIL, (m, value: string) => value.padEnd(m.length, ' '))
+    .replace(GPA_SCALE_PHRASE, (m) => ' '.repeat(m.length));
+
   // "GPA: 3.62", "my GPA is a 3.9"
-  for (const m of text.matchAll(/\bgpa\b[^0-9]{0,12}(\d(?:\.\d{1,2})?)/gi)) out.push(Number(m[1]));
-  // "3.9 GPA", "3.9 cumulative GPA" — the number can lead.
-  for (const m of text.matchAll(/\b(\d\.\d{1,2})\s+(?:\w+\s+){0,2}gpa\b/gi)) out.push(Number(m[1]));
-  // "3.45/4.0", "3.45 out of 4"
-  for (const m of text.matchAll(/\b(\d\.\d{1,2})\s*(?:\/|out of)\s*(?:4|4\.0|5|5\.0)\b/gi)) {
+  for (const m of masked.matchAll(/\bgpa\b[^0-9]{0,12}(\d(?:\.\d{1,2})?)/gi))
     out.push(Number(m[1]));
-  }
+  // "3.9 GPA", "3.9 cumulative GPA" — the number can lead.
+  for (const m of masked.matchAll(/\b(\d\.\d{1,2})\s+(?:\w+\s+){0,2}gpa\b/gi))
+    out.push(Number(m[1]));
+  // "3.45/4.0", "3.45 out of 4" — the numerator only, read from the unmasked text.
+  for (const m of text.matchAll(GPA_SCALE_TAIL)) out.push(Number(m[1]));
   return [...new Set(out)];
 }
 
@@ -230,22 +251,39 @@ export function extractProperNouns(text: string): string[] {
   for (const m of text.matchAll(NAME_RUN)) {
     let words = m[0].split(/\s+/);
 
-    // A lone -ly word opening a sentence is a sentence adverb: "Honestly, I..." /
-    // "Eventually I...". This does mean a company whose name ends in -ly gets missed at
-    // position 0 — accepted, because the alternative flags a stock English opener in
-    // every other draft, and the same name is still caught anywhere else in the sentence.
-    if (m.index === 0 && words.length === 1 && /ly$/i.test(trimEdges(words[0]!))) continue;
+    // Contraction, possessive and punctuation tails come off before the ordinary-word
+    // check, or "I've" survives it as a name (see `withoutTail`) and so does any ordinary
+    // word ending a sentence: "I started there in June." reached the check as "June." —
+    // which is not in the list below — and was reported as an invented organisation.
+    words = words.map((w) => trimEdges(withoutTail(w)));
 
-    // Contraction and possessive tails come off before the ordinary-word check, or
-    // "I've" survives it as a name. See `withoutTail`.
-    words = words.map(withoutTail);
-
-    while (words.length > 0 && COMMON_CAPITALS.has(normalize(words[0]!))) words = words.slice(1);
+    let peeledFromFront = 0;
+    while (words.length > 0 && COMMON_CAPITALS.has(normalize(words[0]!))) {
+      words = words.slice(1);
+      peeledFromFront++;
+    }
     while (words.length > 0 && COMMON_CAPITALS.has(normalize(words[words.length - 1]!))) {
       words = words.slice(0, -1);
     }
 
-    const name = words.map(trimEdges).filter(Boolean).join(' ').trim();
+    // A lone capitalised word that opens the sentence is not a name. English capitalises
+    // the first word of every sentence, so "Growing up, I fixed computers for my
+    // neighbours" arrived as a claim about an employer called Growing, matched nothing on
+    // the profile, and could not be approved at G3 — where there is no override. The words
+    // that can open a sentence are the whole language, so the list below was never going
+    // to finish: Getting, Debugging, Throughout, Beyond, Nothing, Everything and hundreds
+    // more each blocked an honest draft. Checked after the peel, because "Everything I
+    // know about SQL" is a two-word run that becomes the same lone opener once the "I"
+    // comes off, and only when nothing was peeled off the FRONT, since "The Learning
+    // Center" leaves a word that is not the one the sentence started with.
+    //
+    // What this gives up: a one-word employer mentioned ONLY as the first word of a
+    // sentence. A real name almost always arrives as a multi-word run ("Kestrel
+    // Analytics") or sits somewhere other than position 0 ("a team of six at Palantir"),
+    // and both are still caught.
+    if (m.index === 0 && peeledFromFront === 0 && words.length === 1) continue;
+
+    const name = words.filter(Boolean).join(' ').trim();
     if (name.length > 2 && normalize(name).length > 1) out.add(name);
   }
   return [...out];
@@ -294,6 +332,25 @@ const OPINION_MARKER =
 const ACTION_CLAIM =
   /\b(?:i|we)\s+(?:\w+ly\s+)?(?:have\s+|had\s+|also\s+)?(?:built|wrote|created|designed|developed|led|managed|shipped|launched|implemented|architected|founded|ran|organized|organised|published|presented|won|earned|received|completed|deployed|maintained|migrated|automated|scaled|reduced|increased|improved|taught|tutored|mentored|interned|worked|studied|researched|analyzed|analysed|tested|debugged|refactored|optimized|optimised|contributed|coded|programmed)\b/i;
 
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * "I interned at Acme", "I worked for Acme", "I spent two years at Acme" — the writer
+ * placing their own history inside an organisation.
+ *
+ * Every verb here is past tense, and the only prepositions accepted are "at" and "for",
+ * because the sentences this must NOT match are the ordinary content of a why-this-company
+ * answer: "I want to intern at Acme", "I would love to work for Acme", "I have admired
+ * Acme for years", "I worked with the Acme API on a side project". Those are wishes and
+ * mentions, not claims of employment.
+ */
+const affiliationFrame = (name: string): RegExp =>
+  new RegExp(
+    String.raw`\b(?:i|we)\b[\w\s,'’-]{0,30}?\b(?:interned|worked|studied|spent|joined|served|hired)\b[\w\s,'’-]{0,25}?\b(?:at|for)\s+` +
+      escapeRegExp(name),
+    'i',
+  );
+
 export interface DeterministicResult {
   verdict: ClaimVerdict | null;
   reason?: string;
@@ -304,10 +361,22 @@ export interface DeterministicResult {
 /**
  * Returns a verdict only when it can prove something. `null` means "nothing checkable
  * here" and defers to the lexical pass — silence is never approval.
+ *
+ * `contextNames` are the company being applied to and the title of the role. The answer is
+ * allowed to NAME them even though they are nowhere on the profile. Without that, every
+ * answer that mentioned the employer it was addressed to came back with a blocking
+ * `"Stripe" does not appear anywhere on your profile` — and naming the company is the most
+ * ordinary thing a "why this company" answer can do. There is no override at G3, and the
+ * only way to satisfy the message it offered ("add the fact to your profile") would have
+ * been to invent a job there, which is the exact harm this file exists to prevent.
+ *
+ * Mentioning is all they buy. "I interned at Stripe" is still red, because that is a claim
+ * about the writer's history and the profile does not contain it — see `affiliationFrame`.
  */
 export function checkClaimDeterministically(
   claim: string,
   evidence: Evidence[],
+  contextNames: string[] = [],
 ): DeterministicResult {
   const normEvidence = normalize(evidence.map((e) => e.text).join(' \n '));
 
@@ -319,6 +388,10 @@ export function checkClaimDeterministically(
       if (norm) knownNames.add(norm);
     }
   }
+
+  // Names the application supplies. Kept apart from the profile's own, because they are
+  // mentionable but not claimable.
+  const contextNorms = contextNames.map(normalize).filter((n) => n.length > 1);
 
   const claimedNames = extractProperNouns(claim)
     .map((raw) => ({ raw, norm: normalize(raw) }))
@@ -375,19 +448,10 @@ export function checkClaimDeterministically(
         reason: 'The draft states a GPA, but there is no GPA on your profile to check it against.',
       };
     }
-    /**
-     * The scale counts as a known number, not a second claimed GPA.
-     *
-     * "I graduated with a 3.8/4.0 GPA" extracts BOTH 3.8 and 4 — the third pattern reads
-     * the value correctly, and the number-leading pattern independently matches "4.0 GPA"
-     * on the far side of the slash. Comparing every extracted number against the value
-     * alone meant the scale could never be satisfied, so the most natural way of stating
-     * a GPA produced a blocking "the draft says GPA 4; your profile says 3.8" on a
-     * sentence that quotes the profile exactly. Another false red with no override at G3.
-     */
-    const wrong = gpas.find(
-      (g) => !known.some((k) => Math.abs(k.value - g) < 0.005 || Math.abs(k.scale - g) < 0.005),
-    );
+    // Every extracted number has to match a GPA the profile holds. The scale gets no
+    // exemption here — "a perfect 4.0" against a 3.62 profile is a fabrication like any
+    // other. It is `extractGpas` that keeps a denominator from ever arriving as a claim.
+    const wrong = gpas.find((g) => !known.some((k) => Math.abs(k.value - g) < 0.005));
     if (wrong !== undefined) {
       const k = known[0]!;
       return {
@@ -400,13 +464,26 @@ export function checkClaimDeterministically(
 
   // ── organisations, schools, products. The invented-employer case.
   for (const { raw, norm } of claimedNames) {
-    const known = [...knownNames].some((k) => k === norm || k.includes(norm) || norm.includes(k));
-    if (!known && !containsPhrase(normEvidence, norm)) {
+    const matches = (pool: string[]): boolean =>
+      pool.some((k) => k === norm || k.includes(norm) || norm.includes(k));
+
+    if (matches([...knownNames]) || containsPhrase(normEvidence, norm)) continue;
+
+    // The company being applied to may be named freely, but not worked at.
+    if (matches(contextNorms)) {
+      if (!affiliationFrame(raw).test(claim)) continue;
       return {
         verdict: 'unsupported',
-        reason: `"${raw}" does not appear anywhere on your profile.`,
+        reason:
+          `"${raw}" is the employer you are applying to, and your profile has no ` +
+          `experience there. Say what draws you to them instead.`,
       };
     }
+
+    return {
+      verdict: 'unsupported',
+      reason: `"${raw}" does not appear anywhere on your profile.`,
+    };
   }
 
   // ── skills claimed but not held.
@@ -499,12 +576,20 @@ function summarize(claims: CheckedClaim[]): GuardResult {
 
 /**
  * The deterministic pass. Always runs, needs no API key, and its rejections are final.
+ *
+ * `contextNames` is the company and role the answer is being written for — see
+ * `checkClaimDeterministically`. Callers that know them must pass them, or an answer that
+ * names the employer it is addressed to cannot be approved.
  */
-export function guardDraft(draft: string, evidence: Evidence[]): GuardResult {
+export function guardDraft(
+  draft: string,
+  evidence: Evidence[],
+  contextNames: string[] = [],
+): GuardResult {
   const checked: CheckedClaim[] = [];
 
   for (const c of splitClaims(draft)) {
-    const det = checkClaimDeterministically(c.text, evidence);
+    const det = checkClaimDeterministically(c.text, evidence, contextNames);
     if (det.verdict) {
       checked.push({
         claim: c.text,

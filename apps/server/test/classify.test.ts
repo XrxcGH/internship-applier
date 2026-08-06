@@ -158,5 +158,107 @@ describe('essay detection by shape, not keyword', () => {
     expect(classifyField({ label: 'Cover letter', type: 'textarea' }).semantic).toBe(
       'cover_letter_upload',
     );
+    expect(classifyField({ label: 'Paste your resume below', type: 'textarea' }).semantic).toBe(
+      'resume_upload',
+    );
+  });
+
+  /**
+   * The ordering assertion that matters most, because getting it wrong is silent.
+   *
+   * An essay prompt is allowed to MENTION anything. When the rule table ran first, every
+   * prompt containing a word from it was answered with that word's value: a 600-character
+   * box asking about a leadership role in college received the string "Cornell University",
+   * and the answer the user had written and approved for that question was dropped without
+   * a skip or a note.
+   */
+  it('is not fooled by a keyword the essay question merely mentions', () => {
+    const PROMPTS = [
+      'Why are you interested in interning at LinkedIn?',
+      'Describe a project you are proud of. Feel free to include a GitHub link.',
+      'Share a link to something you have built (GitHub, portfolio, etc.) and describe it.',
+      'Why did you choose your university and major?',
+      'Why did you choose your major?',
+      'Describe a leadership role you have held in college.',
+      'What have you learned outside of school that prepares you for this role?',
+      'What is the most interesting class you have taken at university?',
+      'Please describe any relevant coursework or school activities.',
+      'What excites you about working at our college sports startup?',
+      'Tell us about your salary expectations and why.',
+    ];
+    for (const label of PROMPTS) {
+      expect(classifyField({ label, control: 'textarea' }).semantic, label).toBe('essay');
+      // Rich text boxes carry no `type` at all, so they have to be checked separately.
+      expect(classifyField({ label, control: 'richtext' }).semantic, label).toBe('essay');
+    }
+  });
+
+  it('leaves a wordy question on a short control to the rules', () => {
+    // A long label is the weakest essay signal, and a dropdown asking this in seventy-six
+    // characters is still a yes/no the profile can answer.
+    const sponsorship =
+      'Will you now or in the future require sponsorship for employment visa status?';
+    expect(sponsorship.length).toBeGreaterThan(60);
+    expect(classifyField({ label: sponsorship, control: 'select' }).semantic).toBe(
+      'sponsorship_needed',
+    );
+    expect(
+      classifyField({
+        label: 'Are you legally authorized to work in the United States? Please answer yes or no.',
+        control: 'select',
+      }).semantic,
+    ).toBe('work_auth');
+  });
+});
+
+/**
+ * Where someone was born, and where they hold citizenship, are not where they get their post.
+ *
+ * The city and country rules matched the word anywhere in the label, so "City of birth" was
+ * filled with the city the user currently lives in and "Country of Citizenship" with the
+ * country of their home address — for a permanent resident, a false statement about their
+ * immigration status, entered at high confidence and reported back as a field successfully
+ * filled. `unknown` is the right answer: nothing in the profile answers these, so the box is
+ * left empty and handed to the user.
+ */
+describe('origin questions are not the mailing address', () => {
+  const NOT_ADDRESS = [
+    'City of birth',
+    'Country of birth',
+    'Birth city',
+    'Birth country',
+    'Town of birth',
+    'City/Town of Birth',
+    'State of birth',
+    'Country of Citizenship',
+    'What is your country of citizenship?',
+    'Country of nationality',
+    'Dual citizenship country',
+    'Country of national origin',
+  ];
+
+  for (const label of NOT_ADDRESS) {
+    it(`leaves "${label}" for the user`, () => {
+      const c = of(label);
+      expect(c.semantic, label).toBe('unknown');
+      expect(isActionable(c), label).toBe(false);
+    });
+  }
+
+  it('is not talked round by an address autocomplete token', () => {
+    // A form that declares `autocomplete="country"` on a birthplace box has answered a
+    // different question than the one printed above it.
+    const c = classifyField({ label: 'Country of birth', autocomplete: 'country' });
+    expect(c.semantic).toBe('unknown');
+    expect(isActionable(c)).toBe(false);
+  });
+
+  it('still fills an ordinary address', () => {
+    expect(of('City').semantic).toBe('city');
+    expect(of('Country').semantic).toBe('country');
+    expect(of('State / Province').semantic).toBe('region');
+    expect(of('Zip code').semantic).toBe('postal');
+    expect(of('Street address').semantic).toBe('address_line1');
+    expect(classifyField({ label: 'Country', autocomplete: 'country' }).via).toBe('autocomplete');
   });
 });

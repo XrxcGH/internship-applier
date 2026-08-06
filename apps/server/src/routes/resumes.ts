@@ -7,7 +7,8 @@ import { ulid } from 'ulid';
 import { config } from '../config';
 import { db, schema } from '../infra/db/client';
 import { encryptField } from '../infra/crypto/fieldCrypto';
-import { hasApiKey, MissingApiKeyError } from '../infra/llm/client';
+import { hasApiKey } from '../infra/llm/client';
+import { describeAccess } from '../infra/llm';
 import { extractText, mimeFromFilename, SUPPORTED_MIME } from '../core/ingestion/extractText';
 import { extractResume } from '../core/ingestion/extractProfile';
 import { toDraftProfile } from '../core/ingestion/toProfile';
@@ -93,9 +94,36 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
    * the user confirms at gate G1.
    */
   app.post<{ Params: { id: string } }>('/api/resumes/:id/extract', async (req, reply) => {
+    /**
+     * Reading a resume is the one call that does not go through the backend abstraction:
+     * core/ingestion/extractProfile talks to the Anthropic SDK directly, so an API key is
+     * genuinely required here even on a machine where the Claude Code CLI is installed and
+     * drafting works perfectly.
+     *
+     * The refusal has to say that, because the rest of the app does not. A CLI user sees a
+     * model-access screen reporting "connected" with no limitations, uploads a resume, and
+     * is told to "Add one in Settings" — where there is no key field. With no extraction
+     * there is no profile, with no profile there is no G1 confirmation, and everything
+     * downstream is gated on that, so the whole tool stops with a sentence that cannot be
+     * acted on. Naming the file to edit is the least this can do until extraction moves
+     * onto the same seam as drafting.
+     */
     if (!hasApiKey()) {
+      const access = await describeAccess();
+      const cliNote =
+        access.provider === 'claude_cli'
+          ? 'The Claude Code CLI is set up and covers answer drafting, but it cannot read a ' +
+            'resume yet — that call still goes to the Anthropic API. '
+          : '';
       return reply.code(400).send({
-        error: { code: 'NO_MODEL_ACCESS', message: new MissingApiKeyError().message },
+        error: {
+          code: 'NO_MODEL_ACCESS',
+          message:
+            `${cliNote}Reading a resume needs an Anthropic API key. Set ANTHROPIC_API_KEY in ` +
+            'the .env file at the root of this repository and restart the server; Settings ' +
+            'has no field for it yet. Everything else — matching, eligibility, the writing ' +
+            'checks — works without one.',
+        },
       });
     }
 

@@ -5,16 +5,30 @@
  * it, so the UI can say "found on Greenhouse and Adzuna" and a source going dark doesn't
  * silently lose postings.
  */
-import { normalizeCompany, normalizeTitle } from './normalize';
+import { fingerprintTitle, normalizeCompany, normalizeTitle } from './normalize';
 import type { NormalizedPosting } from './sources/types';
 
+/**
+ * The stage-2 key, built from the CAUTIOUS title form.
+ *
+ * Stage 2 merges on this alone, with no different-source guard, so every token the title
+ * normaliser throws away costs the user a posting outright — "Machine Learning Intern I"
+ * and "Machine Learning Intern II" collapsed onto one row, and one of two real openings
+ * simply never appeared in the queue. `normalizeTitle` is deliberately aggressive because
+ * stage 3 wants it that way, and stage 3 can afford it: it merges only across different
+ * sources. This key cannot, so it uses `fingerprintTitle`, which keeps anything that could
+ * distinguish two requisitions.
+ *
+ * Erring this way costs almost nothing. The worst case is a duplicate the user can see and
+ * ignore; the other direction hides a job they will never know existed.
+ */
 export function fingerprint(p: {
   company: string;
   title: string;
   locations: Array<{ city?: string }>;
 }): string {
   const loc = p.locations[0]?.city?.toLowerCase().trim() ?? '';
-  return [normalizeCompany(p.company), normalizeTitle(p.title), loc].join('|');
+  return [normalizeCompany(p.company), fingerprintTitle(p.title), loc].join('|');
 }
 
 export interface Deduped {

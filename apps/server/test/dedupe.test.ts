@@ -29,10 +29,10 @@ function posting(over: Partial<NormalizedPosting> = {}): NormalizedPosting {
 }
 
 describe('fingerprint', () => {
-  it('ignores suffix noise and legal suffixes', () => {
+  it('ignores requisition ids, casing and legal suffixes', () => {
     const a = fingerprint({
       company: 'Acme, Inc.',
-      title: 'Software Engineer Intern (Summer 2027)',
+      title: 'Software Engineer Intern',
       locations: [{ city: 'Boston' }],
     });
     const b = fingerprint({
@@ -41,6 +41,41 @@ describe('fingerprint', () => {
       locations: [{ city: 'boston' }],
     });
     expect(a).toBe(b);
+  });
+
+  /**
+   * This used to assert that "(Summer 2027)" collapsed away too, which is the behaviour the
+   * key must NOT have. Stage 2 merges on this alone, with no different-source guard, so a
+   * Summer and a Fall requisition sharing a title would become one row and the user would
+   * be shown whichever arrived first — possibly the one they are ineligible for, with the
+   * one they could take never appearing at all.
+   */
+  it('keeps two requisitions apart when only the term distinguishes them', () => {
+    const summer = fingerprint({
+      company: 'Acme',
+      title: 'Software Engineer Intern (Summer 2027)',
+      locations: [{ city: 'Boston' }],
+    });
+    const fall = fingerprint({
+      company: 'Acme',
+      title: 'Software Engineer Intern (Fall 2027)',
+      locations: [{ city: 'Boston' }],
+    });
+    expect(summer).not.toBe(fall);
+  });
+
+  it('keeps numbered levels of the same role apart', () => {
+    const one = fingerprint({
+      company: 'Acme',
+      title: 'Machine Learning Intern I',
+      locations: [{ city: 'Boston' }],
+    });
+    const two = fingerprint({
+      company: 'Acme',
+      title: 'Machine Learning Intern II',
+      locations: [{ city: 'Boston' }],
+    });
+    expect(one).not.toBe(two);
   });
 });
 

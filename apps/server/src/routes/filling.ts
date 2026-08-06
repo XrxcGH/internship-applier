@@ -9,12 +9,14 @@
  * application must be approved (G3) before a single key is pressed, and that check is here
  * on the server rather than in the browser.
  */
+import { existsSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { ApplicationAnswer, ApplicationStatus, ConfirmedProfile } from '@ia/shared';
 import { MarkSubmittedRequest } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
+import { decryptField } from '../infra/crypto/fieldCrypto';
 import { logger } from '../infra/logger';
 import { getProfile } from '../core/profile/repository';
 import { canTransition } from '../core/tracking/status';
@@ -42,8 +44,10 @@ type LoadResult =
  *
  * Returns the refusal rather than throwing so each caller can answer with the right status
  * code and the user gets told which gate stopped them.
+ *
+ * Exported so the gates and the resume lookup can be checked without opening a browser.
  */
-function load(applicationId: string): LoadResult {
+export function load(applicationId: string): LoadResult {
   const row = db
     .select()
     .from(schema.application)
@@ -102,9 +106,39 @@ function load(applicationId: string): LoadResult {
       applyUrl: row.application.applyUrl,
       answers,
       profile: profile as ConfirmedProfile,
-      resumePath: resume?.path,
+      resumePath: resume ? readableResumePath(resume.id, resume.path) : undefined,
     },
   };
+}
+
+/**
+ * The path a resume can actually be attached from, or nothing.
+ *
+ * `resume_document.path` is stored encrypted with the row id as its additional data, like
+ * every other piece of PII in the database. Handing that column straight to the run meant
+ * the filler was asked to attach a file named `v1:RUBjO4-OGVlnZuT4:...` — which is not a
+ * path that exists and, with three colons in it, not even a legal one on Windows. Every
+ * resume upload field on every form therefore came back red with a raw ENOENT for a note,
+ * and there was no way for a user to get a resume attached at all.
+ *
+ * A path that cannot be produced for any reason — a row encrypted under a key that is gone,
+ * a file the user deleted from data/resumes by hand — yields nothing rather than a broken
+ * path, so the plan reports the honest "No resume file is attached to this application."
+ * skip instead of failing the field with a message about the internals.
+ */
+function readableResumePath(id: string, storedPath: string): string | undefined {
+  let decoded: string;
+  try {
+    decoded = decryptField(storedPath, id);
+  } catch (err) {
+    logger.warn({ err, resumeId: id }, 'could not decrypt the stored resume path');
+    return undefined;
+  }
+  if (!existsSync(decoded)) {
+    logger.warn({ resumeId: id }, 'the stored resume is no longer on disk');
+    return undefined;
+  }
+  return decoded;
 }
 
 function refuse(

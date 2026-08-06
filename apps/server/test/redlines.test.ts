@@ -264,6 +264,214 @@ describe('must still be filled', () => {
     expect(redline('Salary expectation')).toBeNull();
     expect(redline('Desired compensation')).toBeNull();
     expect(redline('Current salary')?.category).toBe('financial');
+    // "Range" attached to an unambiguous expectation word is still an expectation question,
+    // and so is an expectation question about what you want at the moment.
+    expect(redline('Desired salary range')).toBeNull();
+    expect(redline('Expected salary range')).toBeNull();
+    expect(redline('Target pay rate')).toBeNull();
+    expect(redline('What are your current salary expectations?')).toBeNull();
+    expect(redline('Current salary expectation')).toBeNull();
+    expect(redline('What salary range are you currently seeking?')).toBeNull();
+  });
+
+  it('still fills a work permit STATUS question, which is about eligibility', () => {
+    // The identity-document pattern cannot tell "do you hold one?" from "give us the
+    // document", and this is the one work-eligibility phrasing that needs the distinction
+    // made for it.
+    expect(redline('Work permit status')).toBeNull();
+    expect(redline('Work visa status')).toBeNull();
+  });
+});
+
+/**
+ * The reach of the allowlist, pinned in both directions.
+ *
+ * Every label in the first block pairs a phrase the allowlist claims with vocabulary it has
+ * no business excusing. The allowlist used to be consulted before the redline table and
+ * cancel all of it, so the checkbox "I certify that I am legally authorized to work in the
+ * United States" — ordinary closing boilerplate on a US application form — was not read as an
+ * attestation at all. It was classified as a work-authorization question and ticked "Yes",
+ * which is a machine swearing a legal statement in the applicant's name.
+ *
+ * The second block is the other half and matters just as much: the plain phrasings the
+ * allowlist exists for have to stay fillable. A fix that overshoots hands the user their own
+ * eligibility question to answer by hand on every application, which is how the ordering that
+ * caused all this got written in the first place.
+ */
+/**
+ * The verb list is the soft spot in the attestation rule, so it gets its own block.
+ *
+ * Scoping the allowlist fixed the "I certify …" checkboxes, but the rule still only
+ * recognises the statement by its verb — and "confirm" was not on the list, so "By checking
+ * this box I confirm I am authorized to work in the US" classified as an ordinary
+ * work-authorization question at 0.94 and got ticked. Same harm as the case that was fixed,
+ * reached through a phrasing that is at least as common.
+ */
+describe('every way of saying "I swear this is true"', () => {
+  const ATTESTATIONS = [
+    'By checking this box I confirm I am authorized to work in the US',
+    'I verify that the information above is accurate',
+    'I warrant that all statements are true',
+    'I represent that I am eligible for employment',
+    'I certify that I am legally authorized to work in the United States',
+    'I acknowledge that false statements may result in dismissal',
+    'The applicant affirms that the above is correct',
+    'I declare under penalty of perjury that this is true',
+  ];
+
+  for (const label of ATTESTATIONS) {
+    it(`refuses to answer for the user: "${label.slice(0, 48)}…"`, () => {
+      expect(checkRedline({ label })?.category).toBe('attestation');
+    });
+  }
+
+  /** Widening the verbs must not start catching ordinary questions. */
+  it('leaves ordinary fields alone', () => {
+    for (const label of [
+      'Confirm your email address',
+      'Professional certifications',
+      'Are you legally authorized to work in the United States?',
+      'Declared major',
+    ]) {
+      expect(checkRedline({ label }), label).toBeNull();
+    }
+  });
+});
+
+describe('an allowlisted phrase cancels only its own category', () => {
+  const COMBINED: Array<[string, string]> = [
+    ['I certify that I am legally authorized to work in the United States', 'attestation'],
+    ['I certify under penalty of perjury that I am authorized to work in the US', 'attestation'],
+    ['I attest that I am legally authorized to work in the United States', 'attestation'],
+    ['Signature: I certify I am legally authorized to work in the US', 'attestation'],
+    ['I authorize this background check and confirm my work authorization status', 'consent'],
+    ['I consent to a background check and am authorized to work in the US', 'consent'],
+    // Stacked labels, where the allowlisted phrase is only one clause of several.
+    [
+      'I agree to receive marketing emails and I certify I am authorized to work in the US',
+      'attestation',
+    ],
+    ['Race / ethnicity (used only to confirm work authorization status)', 'eeo_demographic'],
+    // Identity numbers asked alongside an eligibility question.
+    ['Are you legally authorized to work in the US? Enter your SSN to verify', 'government_id'],
+    ['Work authorization status / Alien registration number', 'government_id'],
+    ['Do you require sponsorship? Passport number', 'government_id'],
+    ['Expected graduation date and date of birth', 'government_id'],
+    // Salary history dressed as an expectation question.
+    ['What is your current salary and your expected salary range?', 'financial'],
+  ];
+
+  for (const [label, category] of COMBINED) {
+    it(`catches "${label}"`, () => {
+      expect(redline(label)?.category, label).toBe(category);
+    });
+  }
+
+  it('still leaves the plain phrasings alone', () => {
+    for (const label of [
+      'Are you legally authorized to work in the United States?',
+      'Will you now or in the future require sponsorship for employment visa status?',
+      'Do you require sponsorship?',
+      'Work authorization status',
+      'Are you eligible to work in the UK?',
+      'Expected graduation date',
+      'Earliest start date',
+      'Salary expectation',
+      'Desired compensation',
+      'GitHub username',
+      'LinkedIn profile URL',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+  });
+
+  it('keeps checking the rest of the table after a rescue', () => {
+    // "GitHub username" is excused from the credential pattern, and that is all it is
+    // excused from — the attestation in the same label still has to stop the fill.
+    expect(redline('GitHub username')).toBeNull();
+    expect(redline('I certify that this GitHub username is mine')?.category).toBe('attestation');
+  });
+});
+
+/**
+ * Salary HISTORY, which is the question the redline is actually about.
+ *
+ * Every label here was allowlisted and filled in with the user's minimum acceptable stipend —
+ * their lowest number, handed to an employer as a statement of what they are paid today —
+ * because the allowlist accepted a bare "range" as proof that the question was
+ * forward-looking. Asking these is restricted in several US states, which is the whole reason
+ * the redline exists.
+ */
+describe('salary history is caught however it is phrased', () => {
+  const HISTORY = [
+    'What is your current salary range?',
+    'Current salary range',
+    'Previous salary range',
+    'Last salary range',
+    'Previous compensation range',
+    'Current pay range',
+    'Current wage range',
+    'Salary range at your most recent position',
+    'What was the salary range at your most recent position?',
+  ];
+
+  for (const label of HISTORY) {
+    it(`catches "${label}"`, () => {
+      expect(redline(label)?.category, label).toBe('financial');
+      expect(redline(label)!.note, label).toMatch(/salary history/i);
+    });
+  }
+});
+
+/**
+ * AI disclosure, in the word order forms actually use.
+ *
+ * The pattern required the AI term to come before the verb, so "Did AI help write this?" was
+ * caught and "Was any part of this written with the help of AI?" — the same question, verb
+ * first — was not. A missed one is worse than an ordinary missed redline: instead of being
+ * raised for the user to answer, it reaches the essay path and is offered to the
+ * answer-drafting engine, so the tool ends up writing the applicant's statement about whether
+ * the tool wrote anything.
+ */
+describe('AI disclosure is caught in either word order', () => {
+  const ASKED = [
+    // AI term first — the order that already worked, kept so the widening cannot lose it.
+    'Did AI help write this?',
+    'Did you use AI to write any part of this application?',
+    'Was artificial intelligence used to generate this response?',
+    'Did you use ChatGPT for this application?',
+    // Verb first.
+    'Was any part of this written with the help of AI?',
+    'Was any part of this application written with the help of ChatGPT?',
+    'Did you receive help from AI tools in preparing your responses?',
+    'Was this essay generated by AI?',
+    'Did you receive assistance from a large language model?',
+    // No verb at all, just the noun.
+    'AI usage disclosure',
+  ];
+
+  for (const label of ASKED) {
+    it(`catches "${label}"`, () => {
+      expect(redline(label)?.category, label).toBe('ai_disclosure');
+      expect(redline(label)!.note, label).toMatch(/answer it yourself/i);
+    });
+  }
+
+  it('does not fire on ordinary labels that share the vocabulary', () => {
+    // The widened verb list reaches "assistant", "writing" and "usage", and the widened term
+    // list reaches any word ending in "ai". Both halves have to be present to match.
+    for (const label of [
+      'Have you used Git before?',
+      'What software have you used?',
+      'Describe your writing experience.',
+      'Research assistant',
+      'Teaching assistant',
+      'Programming languages used',
+      'Dubai',
+      'Mumbai',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
   });
 });
 

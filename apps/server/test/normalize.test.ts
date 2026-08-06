@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canonicalUrl,
+  fingerprintTitle,
   normalizeCompany,
   normalizeTitle,
   parseCompensation,
@@ -80,8 +81,48 @@ describe('work arrangement', () => {
     );
   });
 
-  it('does not read a negation as remote', () => {
-    expect(parseWorkArrangement('This role is not remote.')).toBe('onsite');
+  /**
+   * Real postings phrase this a dozen ways, and every one of them used to come back
+   * `remote`. For a student who has remote turned off that is a filtered-out posting with
+   * the explanation "This posting is remote and you have remote turned off." — the literal
+   * opposite of what the posting says — and for everyone else it is a row labelled
+   * "Remote" with the stated city discarded.
+   */
+  it('does not read a negation as remote, however it is worded', () => {
+    for (const text of [
+      'This role is not remote.',
+      'no remote work',
+      'Remote work is not available for this position',
+      'Remote work is not offered.',
+      'We do not offer remote work for this internship.',
+      'This is an in-office role. Remote work is not available.',
+      'Please note: remote work is not permitted.',
+      'This position is not eligible for remote work.',
+      'Candidates must work on-site; we are unable to accommodate remote arrangements.',
+      'This role is 100% onsite in our New York office. This is not a remote internship.',
+      'This is not a fully remote role; you will be in office 5 days',
+    ]) {
+      expect(parseWorkArrangement(text), text).toBe('onsite');
+    }
+  });
+
+  /** "hybrid" appearing inside the list of things on offer is not an offer of hybrid. */
+  it('does not read a negation as hybrid', () => {
+    expect(parseWorkArrangement('No remote or hybrid options are available.')).toBe('onsite');
+  });
+
+  /**
+   * The negation window stops at clause punctuation, so a "not" about something else in a
+   * later sentence cannot cost a genuinely remote posting its arrangement.
+   */
+  it('does not let an unrelated negation cancel a real remote offer', () => {
+    expect(parseWorkArrangement('Fully remote. You will not be required to relocate.')).toBe(
+      'remote',
+    );
+    expect(parseWorkArrangement('This role is remote and is not restricted to any state.')).toBe(
+      'remote',
+    );
+    expect(parseWorkArrangement('This is a hybrid role, not a remote one.')).toBe('hybrid');
   });
 
   it('reads hybrid days', () => {
@@ -144,6 +185,88 @@ describe('identity normalisation', () => {
       'software engineer intern',
     );
     expect(normalizeTitle('Software Engineer II')).toBe('software engineer');
+  });
+
+  /**
+   * On a Greenhouse board the team name in brackets is often the only difference between
+   * two separate requisitions. Deleting it made them the same title, dedupe treated the
+   * second as a copy, and the user never saw that the other opening existed.
+   */
+  it('keeps a bracketed team name, because it is what tells two openings apart', () => {
+    expect(normalizeTitle('Software Engineer Intern (Backend)')).not.toBe(
+      normalizeTitle('Software Engineer Intern (Frontend)'),
+    );
+    expect(normalizeTitle('Research Intern [Ads]')).not.toBe(
+      normalizeTitle('Research Intern [Payments]'),
+    );
+    expect(normalizeTitle('Software Engineer Intern (Backend)')).toBe(
+      'software engineer intern backend',
+    );
+  });
+
+  /**
+   * The dedupe fingerprint merges on this key alone, so it has to hold on to every token
+   * that could mean a second opening — a level, or a term. A Summer and a Fall requisition
+   * merging is not just a lost row: the survivor is the Summer one, and a student who is
+   * only free in the fall is then told they are ineligible for a job that was open to them.
+   */
+  it('keeps levels and terms in the identity form, which stage-2 dedupe merges on', () => {
+    expect(fingerprintTitle('Machine Learning Intern I')).not.toBe(
+      fingerprintTitle('Machine Learning Intern II'),
+    );
+    expect(fingerprintTitle('Software Engineer Intern - Summer 2026')).not.toBe(
+      fingerprintTitle('Software Engineer Intern - Fall 2026'),
+    );
+    expect(fingerprintTitle('Software Engineer Intern (Backend)')).not.toBe(
+      fingerprintTitle('Software Engineer Intern (Frontend)'),
+    );
+  });
+
+  /**
+   * Boards write the term inside brackets at least as often as after a dash, so a rule that
+   * only protects the dashed form protects the rarer half. "(Summer 2026)" and "(Fall 2026)"
+   * are two openings a year apart, and "(II)" and "(III)" are two levels.
+   */
+  it('keeps a level or a term that is written inside the brackets', () => {
+    expect(fingerprintTitle('Software Engineer Intern (Summer 2026)')).not.toBe(
+      fingerprintTitle('Software Engineer Intern (Fall 2026)'),
+    );
+    expect(fingerprintTitle('Data Science Intern [Summer 2026]')).not.toBe(
+      fingerprintTitle('Data Science Intern [Summer 2027]'),
+    );
+    expect(fingerprintTitle('Software Engineer Intern (II)')).not.toBe(
+      fingerprintTitle('Software Engineer Intern (III)'),
+    );
+    expect(fingerprintTitle('Software Engineer Intern (Summer 2026)')).toBe(
+      'software engineer intern summer 2026',
+    );
+  });
+
+  /**
+   * A requisition id is the one part of a title that belongs to the listing rather than to
+   * the job, so it is the only thing the identity form is allowed to throw away — otherwise
+   * one board's "Req #9931" would be enough to make the same opening look like two.
+   */
+  it('still drops requisition ids from the identity form, bracketed or not', () => {
+    expect(fingerprintTitle('Software Engineer Intern - Req #9931')).toBe(
+      'software engineer intern',
+    );
+    expect(fingerprintTitle('Software Engineer Intern (Req #9931)')).toBe(
+      'software engineer intern',
+    );
+    expect(fingerprintTitle('Software Engineer Intern (Job ID 4471)')).toBe(
+      'software engineer intern',
+    );
+  });
+
+  /**
+   * Two boards spelling one job differently are a different source by definition, so the
+   * pair that has to collapse is stage 3's problem, and stage 3 uses the aggressive form.
+   */
+  it('collapses two spellings of one job in the token-matching form', () => {
+    expect(normalizeTitle('Software Engineer Intern (Summer 2027)')).toBe(
+      normalizeTitle('Software Engineer Intern - Req #9931'),
+    );
   });
 
   it('collapses company suffixes', () => {

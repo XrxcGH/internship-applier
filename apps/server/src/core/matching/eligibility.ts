@@ -79,6 +79,33 @@ function firstOfKind(reqs: JobRequirement[], kind: string): JobRequirement | und
     )[0];
 }
 
+/**
+ * What a requirement the posting did not insist on is allowed to do to a verdict.
+ *
+ * A posting that says "a Master's is preferred" has already told the user they may apply
+ * without one, and failing them on it hid postings that had explicitly welcomed them —
+ * "PhD candidates preferred but not required" disqualified an undergraduate on a sentence
+ * that says the opposite. Wording nobody could read confidently arrives as `unclear`, and
+ * the extraction prompt promises the model that unclear is non-blocking; that promise held
+ * for the experience rule and for no other, so a model that hedged honestly still cost the
+ * user the posting.
+ *
+ * A preference passes. An ambiguity is a question for the user to settle, which is exactly
+ * what `unknown` is for. Returns null when the posting really does state the requirement,
+ * and the rule should go on to do its own work.
+ */
+function softRequirement(rule: string, req: JobRequirement, what: string): RuleResult | null {
+  if (req.necessity === 'preferred') {
+    return pass(rule, `${what} is listed as preferred, not required.`, { requirementId: req.id });
+  }
+  if (req.necessity === 'unclear') {
+    return unknown(rule, `${what} is worded too ambiguously to judge — check the posting.`, {
+      requirementId: req.id,
+    });
+  }
+  return null;
+}
+
 function typedValue<T>(req: JobRequirement): T | null {
   const v = validateValue(req.kind, req.value);
   return v.ok ? (v.value as T) : null;
@@ -93,6 +120,9 @@ function toYearMonth(d: Date): string {
 export function ageMinimum({ profile, requirements }: RuleInput): RuleResult {
   const req = firstOfKind(requirements, 'age');
   if (!req) return na('age_minimum', 'The posting does not state a minimum age.');
+
+  const soft = softRequirement('age_minimum', req, 'A minimum age');
+  if (soft) return soft;
 
   const value = typedValue<{ min: number }>(req);
   if (!value) {
@@ -143,17 +173,33 @@ export function educationLevel({ profile, requirements }: RuleInput): RuleResult
   // confidence and hard-failed an undergraduate the posting had explicitly welcomed.
   // Every level a posting names is an alternative, so they are pooled and meeting any one
   // of them is enough.
+  //
+  // Only the levels the posting insists on are pooled into `wanted`. A level it merely
+  // prefers must never subtract from one it requires, and on its own it cannot disqualify
+  // anybody — see softRequirement.
   const wanted = new Map<string, JobRequirement>();
+  const merelyLiked = new Map<string, JobRequirement>();
+  let parsedAny = false;
+
   for (const r of reqs) {
-    for (const level of typedValue<{ levels: string[] }>(r)?.levels ?? []) {
-      if (!wanted.has(level)) wanted.set(level, r);
-    }
+    const levels = typedValue<{ levels: string[] }>(r)?.levels ?? [];
+    if (levels.length > 0) parsedAny = true;
+    const into = r.necessity === 'required' ? wanted : merelyLiked;
+    for (const level of levels) if (!into.has(level)) into.set(level, r);
   }
 
-  if (wanted.size === 0) {
+  if (!parsedAny) {
     return unknown('education_level', 'An education requirement could not be parsed.', {
       requirementId: reqs[0]!.id,
     });
+  }
+
+  if (wanted.size === 0) {
+    // An ambiguous clause outranks a merely preferred one: if any of them could not be
+    // read confidently, the honest answer is a question rather than a clean pass.
+    const soft = [...merelyLiked.values()];
+    const speaksFor = soft.find((r) => r.necessity === 'unclear') ?? soft[0]!;
+    return softRequirement('education_level', speaksFor, 'A degree level')!;
   }
 
   const openToAny = wanted.get('any');
@@ -191,13 +237,26 @@ export function educationLevel({ profile, requirements }: RuleInput): RuleResult
 }
 
 export function graduationWindow({ profile, requirements }: RuleInput): RuleResult {
-  const req = firstOfKind(requirements, 'graduation_window');
-  if (!req) return na('graduation_window', 'The posting does not state a graduation window.');
+  // A posting routinely names more than one window — "juniors graduating between December
+  // 2026 and June 2027, sophomores graduating between December 2027 and June 2028" — and
+  // each one is an alternative, not an extra condition. Consulting only whichever sorted
+  // first told a sophomore who matched the second sentence that she graduated outside the
+  // window, quoting the sentence written for juniors. Every window is read, and matching
+  // any one of them is enough.
+  const reqs = requirements.filter((r) => r.kind === 'graduation_window');
+  if (reqs.length === 0) {
+    return na('graduation_window', 'The posting does not state a graduation window.');
+  }
 
-  const value = typedValue<{ from?: string; to?: string }>(req);
-  if (!value || (!value.from && !value.to)) {
+  const parsed: Array<{ req: JobRequirement; from?: string; to?: string }> = [];
+  for (const r of reqs) {
+    const value = typedValue<{ from?: string; to?: string }>(r);
+    if (value && (value.from || value.to)) parsed.push({ req: r, ...value });
+  }
+
+  if (parsed.length === 0) {
     return unknown('graduation_window', 'A graduation window is mentioned but unparseable.', {
-      requirementId: req.id,
+      requirementId: reqs[0]!.id,
     });
   }
 
@@ -206,24 +265,35 @@ export function graduationWindow({ profile, requirements }: RuleInput): RuleResu
     return unknown(
       'graduation_window',
       'This posting restricts graduation dates, but yours is not on file.',
-      { requirementId: req.id, profileRef: 'derived.expectedGraduation' },
+      { requirementId: parsed[0]!.req.id, profileRef: 'derived.expectedGraduation' },
     );
   }
 
-  const tooEarly = value.from !== undefined && grad < value.from;
-  const tooLate = value.to !== undefined && grad > value.to;
-  const window = `${value.from ?? 'any'} to ${value.to ?? 'any'}`;
+  const label = (w: { from?: string; to?: string }) => `${w.from ?? 'any'} to ${w.to ?? 'any'}`;
+  const inside = (w: { from?: string; to?: string }) =>
+    !(w.from !== undefined && grad < w.from) && !(w.to !== undefined && grad > w.to);
 
-  return tooEarly || tooLate
-    ? fail(
-        'graduation_window',
-        `You graduate ${grad}; this posting wants graduation between ${window}.`,
-        { requirementId: req.id, profileRef: 'derived.expectedGraduation' },
-      )
-    : pass('graduation_window', `You graduate ${grad}, inside the ${window} window.`, {
-        requirementId: req.id,
-        profileRef: 'derived.expectedGraduation',
-      });
+  const met = parsed.find(inside);
+  if (met) {
+    return pass('graduation_window', `You graduate ${grad}, inside the ${label(met)} window.`, {
+      requirementId: met.req.id,
+      profileRef: 'derived.expectedGraduation',
+    });
+  }
+
+  const binding = parsed.filter((w) => w.req.necessity === 'required');
+  if (binding.length === 0) {
+    const speaksFor = parsed.find((w) => w.req.necessity === 'unclear') ?? parsed[0]!;
+    return softRequirement('graduation_window', speaksFor.req, 'A graduation window')!;
+  }
+
+  // Naming every window the user was actually measured against, so the sentence cannot
+  // quote one date range while the posting offered another.
+  return fail(
+    'graduation_window',
+    `You graduate ${grad}; this posting wants graduation between ${binding.map(label).join(' or ')}.`,
+    { requirementId: binding[0]!.req.id, profileRef: 'derived.expectedGraduation' },
+  );
 }
 
 export function enrollment({ profile, requirements, now }: RuleInput): RuleResult {
@@ -238,6 +308,13 @@ export function enrollment({ profile, requirements, now }: RuleInput): RuleResul
   }
   if (!value.required)
     return pass('enrollment', 'Enrolment is not required.', { requirementId: req.id });
+
+  // Whether enrolment is needed at all is settled first, because a posting that says it is
+  // not should pass however tentatively it said so. Only then does how firmly the posting
+  // asks for it matter: "preferably still enrolled" was read as a rule and filtered recent
+  // graduates out of postings that had merely expressed a wish.
+  const soft = softRequirement('enrollment', req, 'Active enrolment');
+  if (soft) return soft;
 
   const grad = profile.derived.expectedGraduation;
   if (!grad) {
@@ -299,23 +376,49 @@ export function workAuthorization({ profile, requirements }: RuleInput): RuleRes
   // A posting can say both "must be authorized to work in the US" and "we do not sponsor".
   // Judging it on whichever of the two sorted first told a user who needs sponsorship that
   // the posting "does not rule it out" while one of its own sentences did exactly that, so
-  // every clause is read and any refusal decides.
+  // every clause is read and any refusal the posting states decides.
   //
   // Requiring existing authorization is deliberately not a blocker by itself: plenty of
   // employers write that line and sponsor anyway, and treating it as a refusal would hide
   // postings the user could actually get.
-  const refuses = parsed.find((p) => p.value.sponsorshipUnavailable);
+  //
+  // Only a refusal the posting actually states closes the door. A clause that merely says
+  // the employer would rather not sponsor, or one nobody could read confidently, used to
+  // hard-fail every applicant who needs a visa on wording that never ruled them out — and
+  // this is the rule where that costs the most, because these are the postings a
+  // sponsorship-dependent student most needs to see.
+  const refusals = parsed.filter((p) => p.value.sponsorshipUnavailable);
+  const stated = refusals.find((p) => p.req.necessity === 'required');
+  if (stated) {
+    return fail(
+      'work_authorization',
+      'You need sponsorship and this posting states it is not available.',
+      { requirementId: stated.req.id, profileRef: 'workAuthorization.needsSponsorship' },
+    );
+  }
 
-  return refuses
-    ? fail(
-        'work_authorization',
-        'You need sponsorship and this posting states it is not available.',
-        { requirementId: refuses.req.id, profileRef: 'workAuthorization.needsSponsorship' },
-      )
-    : pass('work_authorization', 'You need sponsorship; the posting does not rule it out.', {
-        requirementId: parsed[0]!.req.id,
-        profileRef: 'workAuthorization.needsSponsorship',
-      });
+  const hedged = refusals.find((p) => p.req.necessity === 'unclear');
+  if (hedged) {
+    return unknown(
+      'work_authorization',
+      'You need sponsorship, and the posting is too vague about whether it offers any — check it.',
+      { requirementId: hedged.req.id, profileRef: 'workAuthorization.needsSponsorship' },
+    );
+  }
+
+  const wished = refusals[0];
+  if (wished) {
+    return pass(
+      'work_authorization',
+      'You need sponsorship; the posting would rather you did not, but it does not rule it out.',
+      { requirementId: wished.req.id, profileRef: 'workAuthorization.needsSponsorship' },
+    );
+  }
+
+  return pass('work_authorization', 'You need sponsorship; the posting does not rule it out.', {
+    requirementId: parsed[0]!.req.id,
+    profileRef: 'workAuthorization.needsSponsorship',
+  });
 }
 
 export function citizenship({ profile, requirements }: RuleInput): RuleResult {
@@ -328,8 +431,13 @@ export function citizenship({ profile, requirements }: RuleInput): RuleResult {
   // reading only one of them dropped the clearance advisory on the floor — the user was
   // told the citizenship requirement was met and never heard about the clearance at all.
   // Countries are pooled across the clauses, which can only widen who qualifies.
+  //
+  // Only the countries a posting insists on are pooled. "U.S. citizens preferred" is
+  // ordinary wording on defence-adjacent postings and it hard-failed everyone who is not
+  // one, on a sentence that had not actually ruled them out.
   const countries: string[] = [];
   let countriesFrom: JobRequirement | undefined;
+  const merelyLiked: JobRequirement[] = [];
   let clearanceFrom: JobRequirement | undefined;
   let parsedAny = false;
 
@@ -338,8 +446,12 @@ export function citizenship({ profile, requirements }: RuleInput): RuleResult {
     if (!value) continue;
     parsedAny = true;
     if (value.countries?.length) {
-      countries.push(...value.countries);
-      countriesFrom ??= r;
+      if (r.necessity === 'required') {
+        countries.push(...value.countries);
+        countriesFrom ??= r;
+      } else {
+        merelyLiked.push(r);
+      }
     }
     if (value.clearanceRequired) clearanceFrom ??= r;
   }
@@ -376,6 +488,13 @@ export function citizenship({ profile, requirements }: RuleInput): RuleResult {
       'This posting requires a security clearance. The tool cannot verify that — check yourself.',
       { requirementId: clearanceFrom.id },
     );
+  }
+
+  if (!countriesFrom && merelyLiked.length > 0) {
+    // An ambiguous clause outranks a merely preferred one: if any of them could not be
+    // read confidently, the honest answer is a question rather than a clean pass.
+    const speaksFor = merelyLiked.find((r) => r.necessity === 'unclear') ?? merelyLiked[0]!;
+    return softRequirement('citizenship', speaksFor, 'A citizenship requirement')!;
   }
 
   return pass('citizenship', 'Citizenship requirement met.', { requirementId: reqs[0]!.id });
@@ -660,11 +779,11 @@ const EXPERIENCE_TOLERANCE_YEARS = 1;
 export function experienceCeiling({ profile, requirements }: RuleInput): RuleResult {
   const req = firstOfKind(requirements, 'experience_years');
   if (!req) return na('experience_ceiling', 'No professional-experience requirement stated.');
-  if (req.necessity !== 'required') {
-    return pass('experience_ceiling', 'Experience is listed as preferred, not required.', {
-      requirementId: req.id,
-    });
-  }
+
+  // Wording that could not be read confidently used to be reported as "listed as
+  // preferred" — a claim about the posting that it never made. It is a question now.
+  const soft = softRequirement('experience_ceiling', req, 'Professional experience');
+  if (soft) return soft;
 
   const value = typedValue<{ min: number }>(req);
   if (!value) {

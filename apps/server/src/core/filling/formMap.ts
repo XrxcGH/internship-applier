@@ -23,6 +23,7 @@
 import type { Frame, Page } from 'playwright';
 import type { FormField } from '@ia/shared';
 import { ulid } from 'ulid';
+import { logger } from '../../infra/logger';
 import { classifyField, type FieldDescriptor } from './classify';
 import { checkRedline } from './redlines';
 
@@ -241,25 +242,28 @@ const SCAN = (): unknown => {
   /**
    * Every fillable control, in COMPOSED ORDER — the order Playwright will see them in.
    *
-   * This used to collect a root's light-DOM matches first and only then descend into its
-   * shadow roots, which produced a different ordering from the one Playwright's selector
-   * engine produces when it pierces open shadow roots in tree order. Measured on a page
-   * with one shadow-hosted input among three light-DOM controls, the scanner produced
-   * [light1, light2, image, shadowInput] and `.nth(0..3)` produced
-   * [shadowInput, light1, light2, image] — so on any frame containing a shadow-DOM
-   * control, every index locator in that frame addressed the wrong element.
+   * An index locator is nothing but a position, and there is no label re-verification at
+   * fill time, so a disagreement between this walk and `.nth()` means a wrong element that
+   * accepts the typed value is reported "ok". Positions are also numbered here, before the
+   * redline pass has removed anything, so a slip does not stop at putting the portfolio URL
+   * in the GitHub box: it can land a value on a control the redline pass deliberately
+   * refused to touch.
    *
-   * That mattered more than it sounds: there is no label re-verification at fill time (a
-   * comment below used to promise one), so a wrong element that accepts the typed value
-   * is reported "ok". Walking once, descending at each host's own position, keeps the two
-   * orderings in step.
+   * Two orderings have been wrong here already. Collecting a whole root's light-DOM matches
+   * before descending into any shadow root put every shadow control at the end, when
+   * Playwright puts it where its host sits. Descending into a host's shadow root at the
+   * host's own position fixed that for a host with nothing inside it in the light DOM — and
+   * only for that host. Give the host slotted children, which is the ordinary shape of a
+   * real web component, and the two orders cross again: Playwright walks the host's own
+   * children first and reaches the shadow root afterwards. That is the order below, and it
+   * is the one to preserve.
    */
   const collect = (node: Document | ShadowRoot | Element, out: HTMLElement[]): void => {
     for (const child of Array.from(node.children ?? [])) {
       const el = child as HTMLElement;
       if (el.matches(SELECTOR)) out.push(el);
-      if (el.shadowRoot) collect(el.shadowRoot, out);
       collect(el, out);
+      if (el.shadowRoot) collect(el.shadowRoot, out);
     }
   };
 
@@ -301,6 +305,84 @@ const SCAN = (): unknown => {
 };
 /* c8 ignore stop */
 
+/**
+ * Helpers the browser has to be handed along with the scanner, as source text.
+ *
+ * SCAN is written as a closed-over-nothing function so Playwright can serialize it into the
+ * page — but Playwright serializes the function's own source and nothing else, and the
+ * compiler puts things next to it. Both ways the server actually starts (`npm start` and
+ * `npm run dev`) go through tsx, whose esbuild transform keeps function names: every named
+ * arrow in SCAN — `text`, `labelFor`, `collect` and the rest — is rewritten to
+ * `__name(fn, "fn")`, and `__name` is declared once at MODULE scope, which the page never
+ * receives. SCAN threw `__name is not defined` on the first line of every frame of every
+ * page, scanFrame swallowed it as a lost frame, and the run told the user "0 fields found:
+ * 0 fillable, 0 left for you, 0 not recognized" about a form with twenty inputs. Nothing was
+ * typed and nothing was submitted, but the entire form-filling feature had never once run
+ * outside the tests — and the tests passed because vitest transforms without keepNames.
+ *
+ * Declaring the helper alongside the scanner fixes it for any number of nested helpers, so
+ * adding one to SCAN cannot bring this back. It is declared INSIDE the wrapper rather than
+ * on `globalThis` because the page belongs to whoever's application form this is and adding
+ * globals to it is not ours to do. If some future compiler injects a helper that is not
+ * listed here, `scanExpression` refuses to build rather than letting the page fail quietly;
+ * adding the name and its source text below is the whole repair.
+ */
+const PAGE_HELPERS: Record<string, string> = {
+  __name: '(fn) => fn',
+};
+
+/**
+ * Compiler helpers the serialized scanner calls that the page would not have.
+ *
+ * An injected helper is always CALLED, never merely mentioned, which is what separates it
+ * from the `__index__` that appears inside a locator string.
+ */
+export function unshimmedHelpers(source: string): string[] {
+  const missing = new Set<string>();
+  for (const m of source.matchAll(/\b(__[A-Za-z][\w$]*)\s*\(/g)) {
+    const name = m[1]!;
+    if (!(name in PAGE_HELPERS)) missing.add(name);
+  }
+  return [...missing].sort();
+}
+
+/** The scanner as one expression the page can run with nothing else in scope. */
+export function scanExpression(): string {
+  const source = SCAN.toString();
+  const missing = unshimmedHelpers(source);
+  if (missing.length > 0) {
+    throw new Error(
+      `The page scanner was compiled against helpers the browser cannot see: ` +
+        `${missing.join(', ')}. Add them to PAGE_HELPERS in formMap.ts.`,
+    );
+  }
+  const preamble = Object.entries(PAGE_HELPERS)
+    .map(([name, impl]) => `const ${name} = ${impl};`)
+    .join(' ');
+  return `(() => { ${preamble} return (${source})(); })()`;
+}
+
+/**
+ * How a frame is addressed once the page has been read.
+ *
+ * The URL alone is not an identity. Every `srcdoc` iframe reports `about:srcdoc` and every
+ * blank one reports `about:blank`, so a page with two essay editors collapsed both onto the
+ * first: the second answer overwrote the first, the second editor stayed empty, and both
+ * were reported filled. Carrying the frame's position alongside its URL tells those apart,
+ * and a position that no longer holds the same URL is treated as a frame that is gone
+ * rather than quietly retargeted.
+ */
+export function frameKey(index: number, url: string): string {
+  return `${String(index)}|${url}`;
+}
+
+/** Reads back what `frameKey` wrote. */
+export function parseFrameKey(key: string): { index: number; url: string } {
+  const at = key.indexOf('|');
+  if (at < 0) return { index: -1, url: key };
+  return { index: Number(key.slice(0, at)), url: key.slice(at + 1) };
+}
+
 export interface FormMap {
   url: string;
   fields: FormField[];
@@ -309,13 +391,29 @@ export interface FormMap {
   redlined: FormField[];
 }
 
+/**
+ * Playwright's own words for "that frame is not there any more".
+ *
+ * A frame navigating or detaching mid-scan is normal on a form that re-renders while it is
+ * being read, and losing one is survivable. Anything else is a fault in this file, and
+ * returning an empty list for it is precisely how a scanner that had never worked outside
+ * the tests looked like a page with no fields on it.
+ */
+const FRAME_GONE =
+  /execution context was destroyed|frame (was |got )?detached|target (page, context or browser )?(has been )?closed|navigating and changing the content|cannot find context/i;
+
 async function scanFrame(frame: Frame): Promise<RawField[]> {
+  const expression = scanExpression();
   try {
-    return (await frame.evaluate(SCAN)) as RawField[];
-  } catch {
-    // A frame can navigate or be cross-origin mid-scan. Losing one frame is survivable;
-    // failing the whole run because of it is not.
-    return [];
+    return (await frame.evaluate(expression)) as RawField[];
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (FRAME_GONE.test(message)) {
+      logger.warn({ frame: frame.url(), err: message }, 'frame went away while it was read');
+      return [];
+    }
+    logger.error({ frame: frame.url(), err: message }, 'the page scanner failed');
+    throw err;
   }
 }
 
@@ -381,7 +479,8 @@ function groupRadios(raw: RawField[]): RawField[] {
 export async function buildFormMap(page: Page): Promise<FormMap> {
   const fields: FormField[] = [];
 
-  for (const frame of page.frames()) {
+  const frames = page.frames();
+  for (const [frameIndex, frame] of frames.entries()) {
     const raw = groupRadios(await scanFrame(frame));
     const isMain = frame === page.mainFrame();
 
@@ -406,7 +505,7 @@ export async function buildFormMap(page: Page): Promise<FormMap> {
         semantic: classification.semantic,
         redlineCategory: red?.category,
         confidence: classification.confidence,
-        frame: isMain ? undefined : frame.url(),
+        frame: isMain ? undefined : frameKey(frameIndex, frame.url()),
       });
     });
   }

@@ -17,7 +17,9 @@
  *
  * WHY `autocomplete` WINS. When a form says `autocomplete="family-name"` it is telling us
  * what the field is, in a standard vocabulary, on purpose. That beats any guess made from
- * prose. Regexes only run when the attribute is absent or unrecognized.
+ * prose. Regexes only run when the attribute is absent or unrecognized — or, in the single
+ * case spelled out at NOT_A_MAILING_ADDRESS, when the label is asking about someone's
+ * origins and the token can only describe where they get their post.
  *
  * UNRECOGNIZED IS A REAL ANSWER. Anything below the confidence floor is treated as
  * `unknown` by the planner, left blank, and surfaced for the user. A wrong guess in a job
@@ -84,7 +86,43 @@ interface Rule {
   test: RegExp;
   /** Rules matching a strong, unambiguous phrase are trusted more. */
   confidence: number;
+  /** When this matches too, the rule does not apply and matching carries on. */
+  unless?: RegExp;
 }
+
+/**
+ * Qualifiers that mean an address word is not asking where the user lives.
+ *
+ * "City of birth", "Country of birth" and "Country of citizenship" all contain the word the
+ * city and country rules look for, and the address on the profile answers none of them. A
+ * student who moved to Columbus for school had Columbus entered as the city they were born
+ * in, and a permanent resident whose only citizenship is Indian had "US" — read straight off
+ * their home address — typed into a citizenship box at 0.92 confidence. That is a false
+ * statement about someone's immigration status on an employer's form, and it came back to
+ * them in the review as a field filled successfully, with no reason to look at it twice.
+ *
+ * These fall through to `unknown` rather than to a redline, and the difference is not
+ * cosmetic. A redline is a refusal to fill something the tool could fill; this is the tool
+ * not having the answer. There is no birthplace anywhere in the profile, so `unknown` is the
+ * honest result — the planner leaves the box empty and shows it to the user, which is the
+ * treatment a box labelled "Place of birth" already got, purely because no rule happened to
+ * match those words. If a birthplace is ever collected, it belongs on the redline list beside
+ * the other origin questions rather than in this table. Citizenship is the one that could be
+ * answered honestly one day, because the profile does carry `citizenships` — but it would
+ * have to come from that field, and only when it names exactly one country. Never from an
+ * address.
+ */
+const NOT_A_MAILING_ADDRESS =
+  /\bbirth\b|\bborn\b|\bcitizen(ship)?s?\b|\bnationalit(y|ies)\b|\bnational origin\b/i;
+
+/** The semantics whose value is read off the profile's address, whatever named them. */
+const FROM_MAILING_ADDRESS = new Set<FieldSemantic>([
+  'address_line1',
+  'city',
+  'region',
+  'postal',
+  'country',
+]);
 
 /**
  * Ordered narrow to broad. The first match wins, so anything that could be a prefix of a
@@ -112,15 +150,33 @@ const RULES: Rule[] = [
   },
 
   // ── Address. Region before city, because "state" is the more distinctive word.
+  //    Every rule here answers from the profile's mailing address, so every one of them
+  //    carries the same disqualifier: see NOT_A_MAILING_ADDRESS above.
   {
     semantic: 'address_line1',
     test: /\b(street|mailing|home|current) address\b|\baddress ?(line ?)?1\b|\baddr1\b/i,
     confidence: 0.9,
+    unless: NOT_A_MAILING_ADDRESS,
   },
-  { semantic: 'postal', test: /\b(zip|postal)( ?code)?\b|\bpostcode\b/i, confidence: 0.95 },
-  { semantic: 'region', test: /\b(state|province|region|county)\b/i, confidence: 0.85 },
-  { semantic: 'city', test: /\b(city|town|locality)\b/i, confidence: 0.9 },
-  { semantic: 'country', test: /\bcountry\b/i, confidence: 0.92 },
+  {
+    semantic: 'postal',
+    test: /\b(zip|postal)( ?code)?\b|\bpostcode\b/i,
+    confidence: 0.95,
+    unless: NOT_A_MAILING_ADDRESS,
+  },
+  {
+    semantic: 'region',
+    test: /\b(state|province|region|county)\b/i,
+    confidence: 0.85,
+    unless: NOT_A_MAILING_ADDRESS,
+  },
+  {
+    semantic: 'city',
+    test: /\b(city|town|locality)\b/i,
+    confidence: 0.9,
+    unless: NOT_A_MAILING_ADDRESS,
+  },
+  { semantic: 'country', test: /\bcountry\b/i, confidence: 0.92, unless: NOT_A_MAILING_ADDRESS },
 
   // ── Links. Specific hosts before the generic "website".
   { semantic: 'linkedin', test: /\blinked ?in\b/i, confidence: 0.98 },
@@ -220,22 +276,35 @@ const RULES: Rule[] = [
 /**
  * Free-text questions that route to the writing engine.
  *
- * Recognized by shape rather than keyword: a long-form control with an interrogative or
- * imperative label is an essay, whatever it happens to ask about. A keyword list would
- * never keep up with what companies invent.
+ * Recognized by shape rather than keyword: a long-form control whose label asks something is
+ * an essay, whatever it happens to ask about. A keyword list would never keep up with what
+ * companies invent.
+ *
+ * THE SHAPE TEST RUNS BEFORE THE RULE TABLE, and that ordering is the whole point. When the
+ * rules went first, any essay prompt that merely MENTIONED a word in the table was answered
+ * with the value behind that word: "Describe a leadership role you have held in college."
+ * had the string "Cornell University" typed into a 600-character box, "Why did you choose
+ * your major?" got "Computer Science", and "Share a link to something you have built
+ * (GitHub, portfolio, etc.) and describe it." got a bare profile URL. The answer the user had
+ * written and approved for that exact question was dropped without a word, and the field came
+ * back in the review as successfully filled — so the wrong answer was also the one nobody was
+ * asked to look at.
+ *
+ * A label that NAMES a field is still a field, which is why the test needs the question and
+ * not just the big box. "Cover letter" over a textarea asks nothing, so it stays
+ * cover_letter_upload and a pasted letter still lands there.
  */
-function looksLikeEssay(d: FieldDescriptor, normalized: string): boolean {
-  const longForm =
-    d.type === 'textarea' ||
-    d.control === 'textarea' ||
-    d.control === 'richtext' ||
-    (d.label?.length ?? 0) > 60;
-  const asks =
+function isLongFormControl(d: FieldDescriptor): boolean {
+  return d.type === 'textarea' || d.control === 'textarea' || d.control === 'richtext';
+}
+
+function asksSomething(d: FieldDescriptor, normalized: string): boolean {
+  return (
     /\?/.test(d.label ?? '') ||
     /\b(tell us|describe|explain|why|what|how|share|walk us through|in your own words)\b/i.test(
       normalized,
-    );
-  return longForm && asks;
+    )
+  );
 }
 
 /** Stage 1. No model, no network. */
@@ -243,11 +312,6 @@ export function classifyField(d: FieldDescriptor): Classification {
   // Refusal outranks recognition. Always.
   const red = checkRedline(d);
   if (red) return { semantic: 'REDLINE', confidence: 1, via: 'redline' };
-
-  const auto = d.autocomplete?.trim().toLowerCase();
-  if (auto && AUTOCOMPLETE[auto]) {
-    return { semantic: AUTOCOMPLETE[auto], confidence: 0.99, via: 'autocomplete' };
-  }
 
   // The placeholder joins the haystack here but not in the redline check: it is a weaker
   // signal, and a placeholder reading "e.g. 123-45-6789" should not be the only thing
@@ -259,14 +323,34 @@ export function classifyField(d: FieldDescriptor): Classification {
     autocomplete: d.autocomplete,
   });
 
+  const auto = d.autocomplete?.trim().toLowerCase();
+  const declared = auto ? AUTOCOMPLETE[auto] : undefined;
+  // The one place a declared token is not the last word. `autocomplete="country"` is the
+  // browser's vocabulary for the country of a postal address, so a form that puts it on a
+  // "Country of birth" box has answered a different question than the one on screen — and
+  // trusting it would type the user's home country into their birthplace by the same route
+  // the label rules used to.
+  if (declared && !(FROM_MAILING_ADDRESS.has(declared) && NOT_A_MAILING_ADDRESS.test(normalized))) {
+    return { semantic: declared, confidence: 0.99, via: 'autocomplete' };
+  }
+
   if (!normalized) return { semantic: 'unknown', confidence: 0, via: 'none' };
 
+  if (isLongFormControl(d) && asksSomething(d, normalized)) {
+    return { semantic: 'essay', confidence: 0.85, via: 'rule' };
+  }
+
   for (const r of RULES) {
-    if (r.test.test(normalized))
+    if (r.test.test(normalized) && !r.unless?.test(normalized))
       return { semantic: r.semantic, confidence: r.confidence, via: 'rule' };
   }
 
-  if (looksLikeEssay(d, normalized)) {
+  // A label longer than a line is the weakest of the essay signals, and it stays BELOW the
+  // rule table on purpose. Plenty of dropdowns and radio groups ask a wordy question — "Will
+  // you now or in the future require sponsorship for employment visa status?" is seventy
+  // characters of yes/no — and if length alone outranked the rules, the profile's answer to
+  // exactly that question would be replaced by a demand for an essay the user never wrote.
+  if ((d.label?.length ?? 0) > 60 && asksSomething(d, normalized)) {
     return { semantic: 'essay', confidence: 0.85, via: 'rule' };
   }
 

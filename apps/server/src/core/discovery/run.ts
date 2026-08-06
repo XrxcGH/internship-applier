@@ -270,7 +270,12 @@ function persist(unique: ReturnType<typeof dedupe>['unique']): PersistResult {
 
     if (existing[0]) {
       db.update(schema.jobPosting)
-        .set({ lastSeenAt: now, isOpen: true })
+        // The fingerprint is rewritten, not just the timestamps. Its definition became more
+        // cautious — it used to erase the tokens that tell "Intern I" from "Intern II" —
+        // and rows stored under the old key would otherwise keep matching two distinct
+        // requisitions onto one row forever. Recomputing on every sighting means the table
+        // heals itself as postings are seen again, with no data migration to get wrong.
+        .set({ lastSeenAt: now, isOpen: true, fingerprint: fp })
         .where(eq(schema.jobPosting.id, existing[0].id))
         .run();
       linkSources(existing[0].id, entry.sources, p.externalId);

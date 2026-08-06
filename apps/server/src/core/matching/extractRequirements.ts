@@ -122,6 +122,76 @@ function clauseBounds(text: string, index: number, length: number): [number, num
   return [start, end];
 }
 
+/** The words employers use to say "we would like this, but you can apply without it". */
+const SOFTENER =
+  /\b(?:prefer\w*|nice[- ]to[- ]have|bonus|desirable|desired|ideal\w*|plus|optional|not required|not necessary|not mandatory)\b/i;
+
+/**
+ * The text a softener has to appear in to be talking about this requirement.
+ *
+ * The sentence, clipped to the line, because both boundaries matter. A bullet list writes
+ * one requirement per line with no full stops, so the sentence alone would run "Kubernetes
+ * is a plus" into the next bullet; a paragraph puts several requirements on one line, so
+ * the line alone would let a "plus" from an earlier sentence soften a later hard one.
+ */
+function softenerWindow(text: string, index: number, length: number): string {
+  const before = Math.max(0, index - 1);
+  const start = Math.max(text.lastIndexOf('\n', before) + 1, text.lastIndexOf('.', before) + 1);
+  const lineEnd = text.indexOf('\n', index + length);
+  const sentenceEnd = text.indexOf('.', index + length);
+  let end = text.length;
+  if (lineEnd !== -1) end = Math.min(end, lineEnd);
+  if (sentenceEnd !== -1) end = Math.min(end, sentenceEnd + 1);
+  return text.slice(start, Math.max(end, index + length));
+}
+
+/** A line that introduces the bullets under it rather than stating a requirement itself. */
+function isHeadingLine(line: string): boolean {
+  if (/:\s*$/.test(line)) return true;
+  return line.length <= 60 && !/^[-*•]/.test(line) && !/[.!?,;]$/.test(line);
+}
+
+/**
+ * The heading that governs the requirement at `index`, if there is one nearby.
+ *
+ * Postings park their nice-to-haves under "Preferred qualifications:" or "Nice to have"
+ * and then write the bullets underneath as flat statements. Reading only the bullet, a
+ * posting whose preferred section asked for three years of experience produced a hard
+ * three-year requirement and hid an internship from a student with none.
+ */
+function governingHeading(text: string, index: number): string | null {
+  const lineStart = text.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
+  const before = text.slice(Math.max(0, lineStart - 600), lineStart);
+  const lines = before
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (isHeadingLine(lines[i]!)) return lines[i]!;
+  }
+  return null;
+}
+
+/**
+ * Whether the posting states this requirement as a wish rather than a rule.
+ *
+ * The softener has to be looked for on BOTH sides of the phrase and in the heading above
+ * it. Scanning only the 120 characters in front of the match missed "3+ years experience
+ * is a plus", "5 years preferred", "2 years, though not required" and every bullet under a
+ * "Preferred qualifications:" heading — each of which became a hard requirement that
+ * filtered the posting out of the queue while the quote shown beside the rejection said
+ * the experience was optional.
+ */
+function statedAsPreferred(text: string, index: number, length: number): boolean {
+  if (SOFTENER.test(softenerWindow(text, index, length))) return true;
+  const heading = governingHeading(text, index);
+  return heading !== null && SOFTENER.test(heading);
+}
+
+/** The ways a posting names someone who is settled here but is not a citizen. */
+const ACCEPTS_SETTLED_NON_CITIZENS =
+  /\bpermanent\s+residen(?:t|ts|cy|ce)\b|\bgreen[\s-]?card\b|\bU\.?S\.?\s+national\b/i;
+
 export function deterministicRequirements(description: string): Candidate[] {
   const out: Candidate[] = [];
   const push = (c: Omit<Candidate, 'sourceQuote'>, m: RegExpMatchArray) => {
@@ -145,9 +215,25 @@ export function deterministicRequirements(description: string): Candidate[] {
   }
 
   // Sponsorship — the phrasing is remarkably standardised across employers.
+  //
+  // "with or without sponsorship" is the one construction that has to be carved out by
+  // hand. It contains "without sponsorship" and was read as a refusal, so a posting that
+  // went out of its way to invite people who need a visa was hidden from precisely those
+  // people, under a sentence claiming sponsorship was unavailable printed next to the
+  // employer's own words saying the opposite. The `without` branch stays, because
+  // "authorized to work in the US without sponsorship" is a genuine refusal and just as
+  // common.
+  //
+  // The check reads the raw text in front of the match rather than the clause, because
+  // `or` is itself a clause break: for "with or without ..." the clause starts after the
+  // "or" and the invitation is already out of view. Only the offending match is skipped —
+  // a posting can carry both an inclusive line and a real refusal.
   for (const m of description.matchAll(
     /\b(?:not?(?:\s+be)?\s+(?:able to\s+)?(?:provide|offer|sponsor)|unable to (?:provide|offer|sponsor)|without(?: the need for)?)\s*(?:visa\s+)?sponsorship\b|\bdoes not (?:provide|offer) (?:visa )?sponsorship\b|\bno (?:visa )?sponsorship\b/gi,
   )) {
+    const at = m.index ?? 0;
+    const lead = description.slice(Math.max(0, at - 40), at);
+    if (/\b(?:with|either)\s+(?:or\s+)?$/i.test(lead)) continue;
     push(
       {
         kind: 'work_auth',
@@ -199,6 +285,28 @@ export function deterministicRequirements(description: string): Candidate[] {
     ) {
       continue;
     }
+
+    // "U.S. citizenship or permanent residency is required" welcomes green-card holders,
+    // but a citizenship requirement can only carry a list of countries, so recording it as
+    // US-only told a lawful permanent resident they did not qualify for a posting that
+    // names them in the same breath. The alternative always sits on the far side of an
+    // "or", which ends the clause, so the whole sentence is searched for it. What such a
+    // posting is really saying is "you must already be able to work here" — that is a
+    // work-authorization fact, and it is one the rules deliberately never fail anyone on.
+    if (ACCEPTS_SETTLED_NON_CITIZENS.test(sentenceAround(description, m.index ?? 0, m[0].length))) {
+      push(
+        {
+          kind: 'work_auth',
+          operator: 'equals',
+          value: { requiresExistingAuthorization: true },
+          necessity: 'required',
+          confidence: 0.7,
+        },
+        m,
+      );
+      continue;
+    }
+
     push(
       {
         kind: 'citizenship',
@@ -261,10 +369,24 @@ export function deterministicRequirements(description: string): Candidate[] {
     }
   }
 
-  // Enrollment
+  // Enrollment.
+  //
+  // Same negation guard as the clearance block, and for the same reason. "You do not need
+  // to be currently enrolled in a degree program to apply" contains the phrase, and
+  // without this it produced a hard enrolment requirement — so a recent graduate was
+  // filtered out by the exact sentence written to invite them, with the sentence itself
+  // stored and displayed beside the rejection.
+  //
+  // Only the lead-in is examined, and only back to the start of the clause. Reading to the
+  // last full stop instead threw away real requirements: "We do not offer relocation;
+  // candidates must be currently enrolled" and "Interns must be enrolled in an accredited
+  // university and will not be considered otherwise" both state one.
   for (const m of description.matchAll(
     /\b(?:currently\s+)?(?:enrolled|pursuing|matriculated)\s+(?:in|at)\b|\bmust be a (?:current|full[- ]time)\s+student\b|\breturn(?:ing)? to school\b/gi,
   )) {
+    const [from] = clauseBounds(description, m.index ?? 0, m[0].length);
+    const lead = description.slice(from, m.index ?? 0);
+    if (/\b(?:no|not|without)\b/i.test(lead)) continue;
     push(
       {
         kind: 'enrollment',
@@ -286,6 +408,9 @@ export function deterministicRequirements(description: string): Candidate[] {
     [/\b(?:master'?s?|M\.?S\.?|M\.?Eng\.?|graduate)\s+(?:degree|program|student)/gi, 'master'],
     [/\b(?:Ph\.?D\.?|doctoral|doctorate)\s+(?:degree|program|student|candidate)?/gi, 'doctorate'],
   ];
+  // A degree level is as often a wish as a rule — "Master's preferred", "PhD candidates
+  // preferred but not required" — and hardcoding every one of them as required hard-failed
+  // undergraduates on postings that had just told them to apply anyway.
   for (const [re, level] of DEGREES) {
     for (const m of description.matchAll(re)) {
       push(
@@ -293,7 +418,9 @@ export function deterministicRequirements(description: string): Candidate[] {
           kind: 'education_level',
           operator: 'one_of',
           value: { levels: [level] },
-          necessity: 'required',
+          necessity: statedAsPreferred(description, m.index ?? 0, m[0].length)
+            ? 'preferred'
+            : 'required',
           confidence: 0.65,
         },
         m,
@@ -308,14 +435,14 @@ export function deterministicRequirements(description: string): Candidate[] {
   )) {
     const min = Number(m[1]);
     if (min >= 1 && min <= 20) {
-      const context = description.slice(Math.max(0, (m.index ?? 0) - 120), m.index ?? 0);
-      const preferred = /\b(prefer|nice to have|bonus|plus|ideally|a plus)\b/i.test(context);
       push(
         {
           kind: 'experience_years',
           operator: 'min',
           value: { min },
-          necessity: preferred ? 'preferred' : 'required',
+          necessity: statedAsPreferred(description, m.index ?? 0, m[0].length)
+            ? 'preferred'
+            : 'required',
           confidence: 0.8,
         },
         m,
@@ -431,6 +558,9 @@ function dedupeKey(c: Candidate): string {
   return `${c.kind}|${JSON.stringify(c.value)}`;
 }
 
+/** How much weight a necessity carries. Lower binds the user less. */
+const NECESSITY_RANK: Record<string, number> = { required: 2, preferred: 1, unclear: 0 };
+
 export async function extractRequirements(
   postingId: string,
   description: string,
@@ -458,13 +588,26 @@ export async function extractRequirements(
 
   // Guard 2 — the value must validate for its kind. A malformed value degrades to
   // `other`/`unclear` (which is non-blocking) rather than being trusted or discarded.
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   const requirements: JobRequirement[] = [];
 
   for (const c of kept) {
     const key = dedupeKey(c);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const already = seen.get(key);
+    if (already !== undefined) {
+      // Both passes found the same requirement and disagreed about how binding it is. The
+      // regex pass is pushed first and used to win by arriving first, so a model that had
+      // correctly read "Master's preferred" was discarded in favour of the regex's
+      // "required" and the user was failed on a degree the posting did not insist on. The
+      // softer reading wins instead: only wording that is unambiguously binding on both
+      // readings should be able to cost someone a posting.
+      const existing = requirements[already]!;
+      if ((NECESSITY_RANK[c.necessity] ?? 2) < (NECESSITY_RANK[existing.necessity] ?? 2)) {
+        existing.necessity = c.necessity;
+      }
+      continue;
+    }
+    seen.set(key, requirements.length);
 
     const checked = validateValue(c.kind, c.value);
     const usable = checked.ok;

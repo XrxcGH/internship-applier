@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   continueFill,
   discardFill,
@@ -42,6 +42,38 @@ function ordered(fields: FillFieldResult[]): FillFieldResult[] {
   return [...fields].sort((a, b) => rank[a.status] - rank[b.status]);
 }
 
+/**
+ * True while the server is driving the page right now — still opening it, or typing into it.
+ *
+ * No control on this screen may offer to start work while this is true. The run lives on the
+ * server, so switching to the tracker and back, or reloading the tab, brought this screen up
+ * fresh in the middle of a fill and showed "Fill the form" over a form that was already being
+ * typed into. Pressing it started a second run against the same page, and two runs do not take
+ * turns: typing goes character by character into whatever is focused, so the second run stole
+ * focus mid-word and the rest of the first run's value landed in the wrong box. Read-back does
+ * not catch it either — it accepts a value that starts with what was intended, so a name cut
+ * off after three letters still reports as filled and the review says "18 filled" over a form
+ * holding fragments.
+ *
+ * `reading` is the one state that means two different things: a run that has finished reading
+ * stays in it. A summary only exists once the form map is built, so it is what separates "still
+ * reading the page" from "read it, waiting for you".
+ */
+function working(run: FillRunView): boolean {
+  if (run.state === 'opening' || run.state === 'filling') return true;
+  return run.state === 'reading' && run.summary === null;
+}
+
+/** What it is doing, in the words of someone watching the browser do it. */
+function workingLabel(run: FillRunView): string {
+  return run.state === 'filling'
+    ? 'Typing your answers into the form.'
+    : 'Opening the application page and reading the form.';
+}
+
+/** How often to re-ask the server whether the run has finished, in milliseconds. */
+const POLL_MS = 1500;
+
 export function FillReview({
   applicationId,
   applyUrl,
@@ -58,6 +90,15 @@ export function FillReview({
   const [run, setRun] = useState<FillRunView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Whether the first "is a run already open?" answer has come back yet.
+   *
+   * Without it the screen assumed "no run" for the length of that request and painted the
+   * opening card, so someone reopening this panel over a live browser was shown "Open and
+   * read the form" for a moment. Starting a run discards the one already open, so a click
+   * landing in that moment closed the browser the user had just signed into.
+   */
+  const [checked, setChecked] = useState(false);
   /**
    * Remembered locally, because marking submitted clears the run.
    *
@@ -78,17 +119,57 @@ export function FillReview({
    */
   useEffect(() => {
     let cancelled = false;
+    setChecked(false);
     getFill(applicationId)
       .then((r) => {
         if (!cancelled) setRun(r);
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setChecked(true);
       });
     return () => {
       cancelled = true;
     };
   }, [applicationId]);
+
+  /**
+   * Follows a run this screen is not the one driving.
+   *
+   * The work happens on the server, so when the browser is filling a form that some earlier
+   * mount of this screen started, nothing here would ever hear that it finished: the panel sat
+   * on "typing your answers in" until the user reloaded the tab by hand. Asking again every
+   * second and a half costs a local request and ends by itself the moment the run settles.
+   */
+  const settled = useRef(onChanged);
+  useEffect(() => {
+    settled.current = onChanged;
+  });
+  const follow = run !== null && busy === null && working(run);
+  useEffect(() => {
+    if (!follow) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      getFill(applicationId)
+        .then((r) => {
+          if (cancelled) return;
+          setRun(r);
+          // A finished fill moves the application to awaiting_submit on the server, so the
+          // rest of the panel is out of date the instant the run stops working.
+          if (!r || !working(r)) settled.current();
+        })
+        .catch(() => {
+          // A single dropped poll is not worth an error banner over a run that is still
+          // going. The next tick asks again, and a real failure surfaces as a failed run.
+        });
+    }, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [follow, applicationId]);
 
   const act = async (key: string, fn: () => Promise<FillRunView | null>): Promise<void> => {
     setBusy(key);
@@ -97,6 +178,18 @@ export function FillReview({
       setRun(await fn());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      // A request that fails does not mean the work never started. "Fill the form" holds the
+      // connection open for the entire fill, so a dropped connection or a timeout lands here
+      // while the browser is still typing — and this screen was left holding the run exactly
+      // as it was before the click, which is the state whose card offers "Fill the form".
+      // Someone who had just been told the fill failed pressed it again, and a second run
+      // started typing into the same page as the first. Ask the server what really happened.
+      await getFill(applicationId)
+        .then((r) => setRun(r))
+        .catch(() => {
+          // Nothing to fall back to: if the server cannot be reached, no control on this
+          // screen can start work either, and the banner above already says what went wrong.
+        });
     } finally {
       setBusy(null);
       onChanged();
@@ -118,7 +211,9 @@ export function FillReview({
     <div className="space-y-5">
       {error && <Notice tone="redline">{error}</Notice>}
 
-      {!run && submittedAt !== null && (
+      {!checked && <p className="text-faint u-data">Checking for an open browser…</p>}
+
+      {checked && !run && submittedAt !== null && (
         <div className="u-tint-verified rounded px-5 py-5">
           <p className="a-stamp u-data text-verified mb-2 text-lg tracking-widest uppercase">
             submitted
@@ -130,7 +225,7 @@ export function FillReview({
         </div>
       )}
 
-      {!run && submittedAt === null && (
+      {checked && !run && submittedAt === null && (
         <div className="u-card-flat px-5 py-5">
           <p className="text-dim u-prose">
             This opens the application page in a browser you can watch, reads the form, and shows
@@ -190,21 +285,17 @@ export function FillReview({
         </Notice>
       )}
 
-      {/* A failed run is excluded rather than lumped in with the states that are still
-          going: it has nothing to fill, and offering "Fill the form" for it put a button
-          on screen whose only outcome was a second error. */}
-      {run && !run.intervention && run.state !== 'done' && run.state !== 'failed' && (
+      {/* A run that is mid-flight gets a card with nothing on it to press twice. The only
+          control is the way out, because stopping is the one thing a person watching the
+          browser type into the wrong box actually needs. */}
+      {run && !run.intervention && working(run) && (
         <div className="u-card-flat px-5 py-5">
-          <p className="u-eyebrow mb-2">What it found</p>
-          <p className="text-dim">{run.summary ?? run.message}</p>
+          <p className="u-eyebrow mb-2">Working</p>
+          <p className="text-dim">
+            {workingLabel(run)} The browser is open in front of you — watch it there. This screen
+            updates on its own when it is finished.
+          </p>
           <div className="mt-4 flex flex-wrap gap-3">
-            <Button
-              variant="solid"
-              disabled={busy !== null}
-              onClick={() => void act('continue', () => continueFill(applicationId))}
-            >
-              {busy === 'continue' ? 'Filling…' : 'Fill the form'}
-            </Button>
             <Button
               disabled={busy !== null}
               onClick={() =>
@@ -214,11 +305,45 @@ export function FillReview({
                 })
               }
             >
-              Close the browser
+              {busy === 'discard' ? 'Closing…' : 'Close the browser and stop'}
             </Button>
           </div>
         </div>
       )}
+
+      {/* A failed run is excluded rather than lumped in with the states that are still
+          going: it has nothing to fill, and offering "Fill the form" for it put a button
+          on screen whose only outcome was a second error. */}
+      {run &&
+        !run.intervention &&
+        !working(run) &&
+        run.state !== 'done' &&
+        run.state !== 'failed' && (
+          <div className="u-card-flat px-5 py-5">
+            <p className="u-eyebrow mb-2">What it found</p>
+            <p className="text-dim">{run.summary ?? run.message}</p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button
+                variant="solid"
+                disabled={busy !== null}
+                onClick={() => void act('continue', () => continueFill(applicationId))}
+              >
+                {busy === 'continue' ? 'Filling…' : 'Fill the form'}
+              </Button>
+              <Button
+                disabled={busy !== null}
+                onClick={() =>
+                  void act('discard', async () => {
+                    await discardFill(applicationId);
+                    return null;
+                  })
+                }
+              >
+                {busy === 'discard' ? 'Closing…' : 'Close the browser'}
+              </Button>
+            </div>
+          </div>
+        )}
 
       {run?.state === 'done' && run.counts && (
         <>
@@ -289,7 +414,7 @@ export function FillReview({
                   })
                 }
               >
-                Close the browser
+                {busy === 'discard' ? 'Closing…' : 'Close the browser'}
               </Button>
             </div>
           </div>

@@ -4,15 +4,21 @@
  * Nothing here opens a browser: these assert that the server REFUSES before it would. The
  * behavioural fill tests live in fill.test.ts against the fixture.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import type { CandidateProfile } from '@ia/shared';
+import type { CandidateProfile, FormField } from '@ia/shared';
 import { ulid } from 'ulid';
 import { buildApp } from '../src/app';
 import { eq } from 'drizzle-orm';
+import { config } from '../src/config';
 import { db, schema } from '../src/infra/db/client';
 import { runMigrations } from '../src/infra/db/migrate';
+import { encryptField, isEncrypted } from '../src/infra/crypto/fieldCrypto';
 import { confirmProfile, saveProfile } from '../src/core/profile/repository';
+import { buildFillPlan } from '../src/core/filling/plan';
+import { load } from '../src/routes/filling';
 
 let app: FastifyInstance;
 let applicationId: string;
@@ -185,6 +191,95 @@ describe('no run, no fill', () => {
   it('reports no open run rather than inventing one', async () => {
     const res = await app.inject({ method: 'GET', url: `/api/applications/${applicationId}/fill` });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+/**
+ * What the run is told to attach.
+ *
+ * `resume_document.path` is encrypted at rest, and the loader used to pass that column
+ * through untouched: the filler was handed `v1:RUBjO4-OGVlnZuT4:...` as a filename, so
+ * every resume upload field on every form came back red with a raw ENOENT, and nobody
+ * could get a resume attached at all. These run against the loader rather than the route
+ * because the route opens a browser.
+ */
+describe('the resume a fill run attaches', () => {
+  function addResume({ onDisk = true } = {}) {
+    const id = ulid();
+    mkdirSync(config.paths.resumes, { recursive: true });
+    const stored = path.join(config.paths.resumes, `${id}.txt`);
+    if (onDisk) writeFileSync(stored, 'Rosa Alvarez\nRutgers University\n');
+    // Stored exactly the way POST /api/resumes stores it, ciphertext and all.
+    db.insert(schema.resumeDocument)
+      .values({
+        id,
+        filename: 'rosa.txt',
+        path: encryptField(stored, id),
+        mime: 'text/plain',
+        bytes: 30,
+        sha256: 'a'.repeat(64),
+        isPrimary: true,
+      })
+      .run();
+    return stored;
+  }
+
+  function loadOk() {
+    const result = load(applicationId);
+    if (!result.ok) throw new Error(`load refused: ${result.code} ${result.message}`);
+    return result.data;
+  }
+
+  const RESUME_FIELD: FormField = {
+    id: 'f_resume',
+    locator: '#resume',
+    label: 'Resume',
+    control: 'file',
+    required: true,
+    semantic: 'resume_upload',
+    confidence: 0.95,
+  };
+
+  afterEach(() => {
+    db.delete(schema.resumeDocument).run();
+  });
+
+  it('is a file that exists on disk, not the encrypted column', () => {
+    const stored = addResume();
+    const { resumePath } = loadOk();
+
+    expect(resumePath).toBe(stored);
+    expect(isEncrypted(resumePath ?? '')).toBe(false);
+    expect(existsSync(resumePath ?? '')).toBe(true);
+  });
+
+  function planFor(field: FormField) {
+    const data = loadOk();
+    return buildFillPlan({
+      fields: [field],
+      profile: data.profile,
+      answers: data.answers,
+      resumePath: data.resumePath,
+    });
+  }
+
+  it('reaches the plan as the path the browser will be given', () => {
+    const stored = addResume();
+    const plan = planFor(RESUME_FIELD);
+
+    expect(plan.skips).toEqual([]);
+    expect(plan.actions[0]?.filePath).toBe(stored);
+  });
+
+  it('is nothing at all when the file has been deleted from under the row', () => {
+    // Better to say "no resume" than to hand the browser a path it cannot open: the first
+    // is a skip the user can act on, the second is a failed field full of internals.
+    addResume({ onDisk: false });
+
+    expect(loadOk().resumePath).toBeUndefined();
+    const plan = planFor(RESUME_FIELD);
+    expect(plan.actions).toEqual([]);
+    expect(plan.skips[0]?.note).toMatch(/no resume file is attached/i);
   });
 });
 

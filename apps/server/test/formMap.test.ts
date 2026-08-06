@@ -6,13 +6,23 @@
  * the six different places a label can hide, and that when it cannot find one it says
  * `unknown` rather than guessing.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
+import { transformSync } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Page } from 'playwright';
 import { startFixtureServer, submissions, type FixtureServer } from '@ia/fixtures';
 import { openSession, type BrowserSession } from '../src/core/filling/browser';
-import { buildFormMap, summarizeMap, type FormMap } from '../src/core/filling/formMap';
+import {
+  buildFormMap,
+  scanExpression,
+  summarizeMap,
+  unshimmedHelpers,
+  type FormMap,
+} from '../src/core/filling/formMap';
 import { FILLABLE_CONTROLS } from '../src/core/filling/selectors';
 
 let fixture: FixtureServer;
@@ -246,6 +256,163 @@ describe('what is really on the page', () => {
       expect(name ?? '', f.label).not.toBe('');
     }
   });
+
+  /**
+   * A shadow host that ALSO has light-DOM children of its own — the ordinary shape of a
+   * real web component, and the shape the fixture happens not to have.
+   *
+   * Descending into a host's shadow root before walking the host's own children agrees
+   * with Playwright only while the host is empty. Give it slotted children and the two
+   * walks cross: the scanner numbered the shadow input 1 and the slotted one 2, while
+   * `.nth(1)` lands on the slotted input and `.nth(2)` on the shadow one. Two fields then
+   * swap contents — a GitHub URL into the LinkedIn box — and because read-back re-reads
+   * whatever element was resolved, both come back "ok". Indices are handed out before the
+   * redline pass removes anything, so the same slip can tick an attestation checkbox that
+   * was deliberately left alone.
+   *
+   * Every control here is deliberately given no id and no name, because those are the only
+   * fields that fall back to an index locator at all.
+   */
+  it('agrees with Playwright when a shadow host has slotted children too', async () => {
+    // aria-label rather than a <label>, so each control names itself without an id.
+    await session.page.setContent(`
+      <input aria-label="A-first">
+      <div id="host"><input aria-label="C-slotted"></div>
+      <input aria-label="D-last">
+      <script>
+        // Wrapped, and not for tidiness. setContent runs document.write in the SAME JS
+        // realm as whatever this session loaded before, so a top-level \`const\` here
+        // collides with an identically named one on an earlier page — the fixture declares
+        // \`root\` too. The redeclaration is a SyntaxError that aborts this whole script
+        // before attachShadow runs, so the shadow input never exists and the assertion
+        // fails describing a scanner bug that is not there. It passed alone and failed in
+        // suite order, which is the shape that costs an afternoon.
+        (() => {
+          const shadow = document.getElementById('host').attachShadow({ mode: 'open' });
+          shadow.innerHTML = '<input aria-label="B-shadow"><slot></slot>';
+        })();
+      </script>
+    `);
+    const m = await buildFormMap(session.page);
+
+    // The shape is only interesting if the shadow control and the slotted one are BOTH
+    // there and Playwright puts the slotted one first. Document order would be A, B, C, D.
+    expect(m.fields.map((f) => f.label)).toEqual(['A-first', 'C-slotted', 'B-shadow', 'D-last']);
+
+    for (const f of m.fields) {
+      const n = Number(/^__index__(\d+)/.exec(f.locator)?.[1] ?? NaN);
+      expect(Number.isNaN(n), `${f.label} got locator ${f.locator}`).toBe(false);
+      const resolved = session.page.locator(FILLABLE_CONTROLS).nth(n);
+      expect(await resolved.getAttribute('aria-label'), f.label).toBe(f.label);
+    }
+  }, 60_000);
+});
+
+/** A page-like global scope: a DOM, and none of Node's module scope. */
+function bareContext(): Record<string, unknown> {
+  return {
+    document: { children: [], querySelectorAll: () => ({ length: 0 }) },
+    CSS: { escape: (s: string) => s },
+    Node: { TEXT_NODE: 3 },
+    getComputedStyle: () => ({}),
+  };
+}
+
+/**
+ * Compiles formMap.ts with esbuild and asks the result for the expression it would send to
+ * a page. esbuild is what both tsx and vitest run on, so the option is the only variable.
+ */
+function compiledWith(options: { keepNames: boolean }): string {
+  const source = fileURLToPath(new URL('../src/core/filling/formMap.ts', import.meta.url));
+  const { code } = transformSync(readFileSync(source, 'utf8'), {
+    loader: 'ts',
+    format: 'cjs',
+    keepNames: options.keepNames,
+    target: `node${process.versions.node.split('.')[0]!}`,
+  });
+  // Nothing the scanner itself needs comes from these, so one stub answers for all of them.
+  const stub = {
+    logger: { warn: () => {}, error: () => {} },
+    classifyField: () => ({ semantic: 'unknown', confidence: 0 }),
+    checkRedline: () => undefined,
+    ulid: () => 'id',
+  };
+  const mod = { exports: {} as Record<string, unknown> };
+  runInNewContext(code, { module: mod, exports: mod.exports, require: () => stub });
+  return (mod.exports as { scanExpression: () => string }).scanExpression();
+}
+
+/**
+ * Playwright serializes a function into the page and sends nothing else, so anything the
+ * compiler puts NEXT to that function is left behind in Node.
+ *
+ * Both ways the server really starts go through tsx, whose esbuild transform keeps function
+ * names: every named arrow inside the scanner is rewritten to `__name(fn, "fn")`, and
+ * `__name` is declared once at module scope. Handing the function object to `evaluate` meant
+ * the page got a call to something that was not there, the scanner threw on its first line of
+ * every frame of every page, and the run told the user "0 fields found: 0 fillable, 0 left for
+ * you, 0 not recognized" about a form with twenty inputs on it. The whole form-filling feature
+ * had never once run outside the tests, and the tests were green because vitest compiles
+ * without keepNames.
+ *
+ * These tests exist so the next person to add a helper to the scanner finds out here rather
+ * than in a silent production run.
+ */
+describe('the scanner has to survive the trip into the page', () => {
+  it('is handed to the page as source text, not as a function', async () => {
+    const sent: unknown[] = [];
+    const frame = {
+      url: () => 'http://example.test/',
+      evaluate: (arg: unknown) => {
+        sent.push(arg);
+        return Promise.resolve([]);
+      },
+    };
+    const page = {
+      frames: () => [frame],
+      mainFrame: () => frame,
+      url: () => 'http://example.test/',
+    };
+
+    await buildFormMap(page as unknown as Page);
+    expect(sent).toHaveLength(1);
+    // A function object would be serialized by Playwright with its compiled body intact,
+    // helper calls and all. A string is the whole expression, helpers declared inside it.
+    expect(typeof sent[0]).toBe('string');
+  });
+
+  it('spots a compiler helper that the page would not have', () => {
+    expect(unshimmedHelpers('(() => { const f = __async(x => x, "f"); return f(1); })')).toEqual([
+      '__async',
+    ]);
+    // `__index__` is written into locator strings and is never called, so it is not one.
+    expect(unshimmedHelpers('return `__index__${String(i)}`;')).toEqual([]);
+  });
+
+  it('runs with nothing else in scope', () => {
+    expect(() => runInNewContext(scanExpression(), bareContext())).not.toThrow();
+  });
+
+  /**
+   * The one that matters, because vitest's own transform is not the one that ships. This
+   * compiles the scanner the way tsx does — esbuild with keepNames on — and then runs the
+   * expression the page would receive in a context that has a DOM and nothing else.
+   */
+  it('still runs when compiled the way the server actually starts', () => {
+    const production = compiledWith({ keepNames: true });
+    const asVitestSeesIt = compiledWith({ keepNames: false });
+
+    // If this stops being true, keepNames has stopped mattering and the rest is harmless.
+    expect(/__name\(/.test(production)).toBe(true);
+    expect(/__name\(/.test(asVitestSeesIt)).toBe(false);
+
+    expect(() => runInNewContext(production, bareContext())).not.toThrow();
+    // And the declarations the expression carries are what save it: without them the page
+    // gets exactly the ReferenceError that made every real run find zero fields.
+    expect(() =>
+      runInNewContext(production.replace('const __name = (fn) => fn;', ''), bareContext()),
+    ).toThrow(/__name is not defined/);
+  }, 30_000);
 });
 
 describe('summary', () => {

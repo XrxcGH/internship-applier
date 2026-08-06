@@ -177,6 +177,47 @@ describe('education_level', () => {
     );
     expect(statusOf(o, 'education_level')).toBe('pass');
   });
+
+  /**
+   * "PhD candidates preferred but not required" is a sentence written to invite an
+   * undergraduate, and failing them on it hid the posting from the person it was aimed at.
+   */
+  it('does not fail a degree level the posting only prefers', () => {
+    const o = evaluateEligibility(
+      input({
+        requirements: [req('education_level', { levels: ['master'] }, { necessity: 'preferred' })],
+      }),
+    );
+    expect(statusOf(o, 'education_level')).toBe('pass');
+    expect(o.eligibility).toBe('eligible');
+  });
+
+  /**
+   * The extraction prompt tells the model that `unclear` is non-blocking, so a model that
+   * hedges honestly about ambiguous wording must not cost the user the posting.
+   */
+  it('asks rather than fails when the degree wording is ambiguous', () => {
+    const o = evaluateEligibility(
+      input({
+        requirements: [req('education_level', { levels: ['doctorate'] }, { necessity: 'unclear' })],
+      }),
+    );
+    expect(statusOf(o, 'education_level')).toBe('unknown');
+    expect(o.blockers).toEqual([]);
+  });
+
+  /** "Bachelor's required, Master's preferred" is satisfied by the bachelor's alone. */
+  it('does not let a preferred level subtract from a required one', () => {
+    const o = evaluateEligibility(
+      input({
+        requirements: [
+          req('education_level', { levels: ['bachelor'] }),
+          req('education_level', { levels: ['master'] }, { necessity: 'preferred' }),
+        ],
+      }),
+    );
+    expect(statusOf(o, 'education_level')).toBe('pass');
+  });
 });
 
 describe('graduation_window', () => {
@@ -210,6 +251,53 @@ describe('graduation_window', () => {
     );
     expect(statusOf(o, 'graduation_window')).toBe('unknown');
   });
+
+  /**
+   * A posting routinely names one window for juniors and another for sophomores, and each
+   * one is an alternative rather than an extra condition. Reading only whichever sorted
+   * first told a sophomore who matched the second sentence that she graduated outside the
+   * window, quoting the sentence written for juniors. Both orders are checked because the
+   * sort ties here and natural reading order decided it.
+   */
+  it('passes when the user matches any one of several stated windows', () => {
+    const juniors = req('graduation_window', { from: '2026-12', to: '2027-06' });
+    const sophomores = req('graduation_window', { from: '2027-12', to: '2028-06' });
+
+    for (const requirements of [
+      [juniors, sophomores],
+      [sophomores, juniors],
+    ]) {
+      const o = evaluateEligibility(input({ requirements }));
+      expect(statusOf(o, 'graduation_window'), JSON.stringify(requirements.map((r) => r.id))).toBe(
+        'pass',
+      );
+    }
+  });
+
+  /** The sentence cannot quote one date range while the posting offered another. */
+  it('names every window it measured you against when none of them match', () => {
+    const o = evaluateEligibility(
+      input({
+        requirements: [
+          req('graduation_window', { from: '2024-01', to: '2024-06' }),
+          req('graduation_window', { from: '2025-01', to: '2025-06' }),
+        ],
+      }),
+    );
+    expect(statusOf(o, 'graduation_window')).toBe('fail');
+    expect(o.blockers[0]!.because).toContain('2024-01 to 2024-06 or 2025-01 to 2025-06');
+  });
+
+  it('does not fail a graduation window the posting only prefers', () => {
+    const o = evaluateEligibility(
+      input({
+        requirements: [
+          req('graduation_window', { from: '2024-01', to: '2024-06' }, { necessity: 'preferred' }),
+        ],
+      }),
+    );
+    expect(statusOf(o, 'graduation_window')).toBe('pass');
+  });
 });
 
 describe('enrollment', () => {
@@ -226,6 +314,39 @@ describe('enrollment', () => {
       }),
     );
     expect(statusOf(o, 'enrollment')).toBe('fail');
+  });
+
+  /** "Preferably still enrolled" is a wish, and a recent graduate may still apply on it. */
+  it('does not fail a graduate on enrolment the posting only prefers', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ derived: { ...profile().derived, expectedGraduation: '2025-05' } }),
+        requirements: [req('enrollment', { required: true }, { necessity: 'preferred' })],
+      }),
+    );
+    expect(statusOf(o, 'enrollment')).toBe('pass');
+    expect(o.blockers).toEqual([]);
+  });
+
+  it('asks rather than fails when the enrolment wording is ambiguous', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ derived: { ...profile().derived, expectedGraduation: '2025-05' } }),
+        requirements: [req('enrollment', { required: true }, { necessity: 'unclear' })],
+      }),
+    );
+    expect(statusOf(o, 'enrollment')).toBe('unknown');
+  });
+
+  /** A posting saying enrolment is NOT needed passes however tentatively it said so. */
+  it('passes a graduate when the posting says enrolment is not needed', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ derived: { ...profile().derived, expectedGraduation: '2025-05' } }),
+        requirements: [req('enrollment', { required: false }, { necessity: 'unclear' })],
+      }),
+    );
+    expect(statusOf(o, 'enrollment')).toBe('pass');
   });
 });
 
@@ -280,6 +401,48 @@ describe('work_authorization', () => {
     );
     expect(statusOf(o, 'work_authorization')).toBe('unknown');
   });
+
+  /**
+   * These are the postings a sponsorship-dependent student most needs to see, so wording
+   * that stops short of a refusal must never hide one. A clause the posting only leans
+   * towards leaves the door open; one nobody could read confidently is a question.
+   */
+  const needsVisa = () =>
+    profile({
+      workAuthorization: { country: 'US', status: 'requires_sponsorship', needsSponsorship: true },
+    });
+
+  const noSponsorship = (necessity: 'preferred' | 'unclear') =>
+    req('work_auth', { sponsorshipUnavailable: true }, { necessity });
+
+  it('does not fail on a sponsorship refusal the posting only leans towards', () => {
+    const o = evaluateEligibility(
+      input({ profile: needsVisa(), requirements: [noSponsorship('preferred')] }),
+    );
+    expect(statusOf(o, 'work_authorization')).toBe('pass');
+    expect(o.blockers).toEqual([]);
+  });
+
+  it('asks rather than fails when the sponsorship wording is ambiguous', () => {
+    const o = evaluateEligibility(
+      input({ profile: needsVisa(), requirements: [noSponsorship('unclear')] }),
+    );
+    expect(statusOf(o, 'work_authorization')).toBe('unknown');
+  });
+
+  /** One hedged clause must not cancel a refusal the posting states outright elsewhere. */
+  it('still fails when a stated refusal sits alongside a hedged one', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: needsVisa(),
+        requirements: [
+          noSponsorship('unclear'),
+          req('work_auth', { sponsorshipUnavailable: true }),
+        ],
+      }),
+    );
+    expect(statusOf(o, 'work_authorization')).toBe('fail');
+  });
 });
 
 describe('citizenship', () => {
@@ -306,6 +469,46 @@ describe('citizenship', () => {
       input({ requirements: [req('citizenship', { clearanceRequired: true })] }),
     );
     expect(statusOf(o, 'citizenship')).toBe('unknown');
+  });
+
+  /**
+   * "U.S. citizens preferred" is ordinary wording on defence-adjacent postings, and it
+   * hard-failed everyone who is not one on a sentence that had not ruled them out.
+   */
+  it('does not fail a non-citizen on citizenship the posting merely prefers', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ citizenships: ['IN'] }),
+        requirements: [req('citizenship', { countries: ['US'] }, { necessity: 'preferred' })],
+      }),
+    );
+    expect(statusOf(o, 'citizenship')).toBe('pass');
+    expect(o.blockers).toEqual([]);
+  });
+
+  it('asks rather than fails when the citizenship wording is ambiguous', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ citizenships: ['IN'] }),
+        requirements: [req('citizenship', { countries: ['US'] }, { necessity: 'unclear' })],
+      }),
+    );
+    expect(statusOf(o, 'citizenship')).toBe('unknown');
+  });
+
+  /** A preferred country must not widen — or narrow — one the posting actually insists on. */
+  it('still fails on a stated citizenship requirement beside a preferred one', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ citizenships: ['IN'] }),
+        requirements: [
+          req('citizenship', { countries: ['CA'] }, { necessity: 'preferred' }),
+          req('citizenship', { countries: ['US'] }),
+        ],
+      }),
+    );
+    expect(statusOf(o, 'citizenship')).toBe('fail');
+    expect(o.blockers[0]!.because).toContain('US');
   });
 });
 
@@ -715,6 +918,54 @@ describe('properties that must always hold', () => {
     const o = evaluateEligibility(blank);
     expect(o.blockers).toEqual([]);
     expect(o.eligibility).toBe('unknown');
+  });
+
+  /**
+   * A posting that says it would merely like something has already told the user they may
+   * apply without it, and the extraction prompt promises the model that `unclear` is
+   * non-blocking. Both promises were kept by the experience rule and by no other, so
+   * "Master's preferred", "U.S. citizens preferred" and "preferably still enrolled" each
+   * hard-failed the very people the sentence was written to include. This walks every rule
+   * that reads a requirement, against a user who fails all of them on the merits.
+   */
+  it('never fails on a requirement the posting did not insist on', () => {
+    const stated: Array<[string, unknown]> = [
+      ['age', { min: 21 }],
+      ['education_level', { levels: ['doctorate'] }],
+      ['graduation_window', { from: '2029-01', to: '2030-06' }],
+      ['enrollment', { required: true }],
+      ['work_auth', { sponsorshipUnavailable: true }],
+      ['citizenship', { countries: ['JP'] }],
+      ['experience_years', { min: 8 }],
+    ];
+
+    const qualifiesForNothing = profile({
+      citizenships: ['IN'],
+      workAuthorization: { country: 'US', status: 'requires_sponsorship', needsSponsorship: true },
+      derived: {
+        ...profile().derived,
+        age: 16,
+        isMinor: true,
+        academicLevel: 'high_school',
+        expectedGraduation: '2025-05',
+      },
+    });
+
+    for (const [kind, value] of stated) {
+      for (const necessity of ['preferred', 'unclear'] as const) {
+        const o = evaluateEligibility(
+          input({ profile: qualifiesForNothing, requirements: [req(kind, value, { necessity })] }),
+        );
+        expect(o.blockers, `${kind} stated as ${necessity}`).toEqual([]);
+      }
+
+      // The same fact stated as a rule must still be able to disqualify, or the check
+      // above would pass for the wrong reason.
+      const firm = evaluateEligibility(
+        input({ profile: qualifiesForNothing, requirements: [req(kind, value)] }),
+      );
+      expect(firm.blockers.length, `${kind} stated as required`).toBeGreaterThan(0);
+    }
   });
 
   /**
