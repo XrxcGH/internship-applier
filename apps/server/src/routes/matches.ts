@@ -2,9 +2,22 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
+import type { ApplicationStatus } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
 import { isProfileConfirmed } from '../core/profile/repository';
 import { runMatching } from '../core/matching/run';
+import { discardRun } from '../core/filling/run';
+import { SET_BY } from '../core/tracking/status';
+
+/**
+ * The statuses this tool sets for itself, worked out from who is allowed to set each one
+ * rather than listed again here. A hand-written list is how the next status gets added to
+ * the model and missed here, and everything below turns on the difference between an
+ * application the tool has been preparing and one the user has acted on in the world.
+ */
+const TOOL_STATUSES: ReadonlySet<ApplicationStatus> = new Set(
+  (Object.keys(SET_BY) as ApplicationStatus[]).filter((s) => SET_BY[s] === 'tool'),
+);
 
 const ListQuery = z.object({
   eligibility: z.enum(['eligible', 'eligible_and_unknown', 'all']).default('eligible_and_unknown'),
@@ -28,6 +41,9 @@ const DecisionBody = z.object({
 
 export async function matchRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('onRequest', async (req, reply) => {
+    // Safe to compare against a literal path because app.ts has already rewritten the
+    // target to its one canonical spelling. Before it did, `GET /%61pi/matches` routed here
+    // and slipped past this line, so gate G1 was one percent-escape away from being off.
     if (!req.url.startsWith('/api/matches')) return;
     if (!isProfileConfirmed()) {
       return reply.code(409).send({
@@ -208,8 +224,69 @@ export async function matchRoutes(app: FastifyInstance): Promise<void> {
       })
       .run();
 
+    /**
+     * Reversing a G2 approval has to take the application with it.
+     *
+     * Approving a match creates an application; changing that decision to skipped, rejected
+     * or saved used to replace the decision row and stop there, answering
+     * `applicationId: null` while the application it had created went on existing. That
+     * reading of the response was simply false — there was an id, and the client had no way
+     * to learn it — and the consequences were worse than the wrong number. The posting
+     * vanished from the match queue, because that list hides anything decided, while the
+     * application stayed on the tracker and in the applications list, every fill gate still
+     * passed for it, and it could be walked all the way to `submitted`. Gate G2 is the user
+     * saying yes to this posting; once they have said no, nothing downstream may still be
+     * holding a live application for it.
+     *
+     * Work is never deleted out from under someone: an application the user has already
+     * submitted, or moved into a status only they can set, refuses the reversal and says so
+     * rather than being removed. What goes is an application still inside the tool's own
+     * statuses, which is one the user has not acted on in the world.
+     */
     if (parsed.data.action !== 'approved') {
-      return { action: parsed.data.action, applicationId: null };
+      const created = db
+        .select({
+          id: schema.application.id,
+          status: schema.application.status,
+          submittedAt: schema.application.submittedAt,
+        })
+        .from(schema.application)
+        .where(eq(schema.application.matchId, req.params.id))
+        .all()[0];
+
+      if (!created) return { action: parsed.data.action, applicationId: null };
+
+      const undoable =
+        created.submittedAt === null && TOOL_STATUSES.has(created.status as ApplicationStatus);
+      if (!undoable) {
+        return reply.code(409).send({
+          error: {
+            code: 'APPLICATION_IN_PROGRESS',
+            message:
+              `You have already taken application ${created.id} for this posting past the ` +
+              `point this tool can undo — it is ${created.status}. Withdraw it from the ` +
+              'tracker instead; changing the decision here would leave it running.',
+            details: { applicationId: created.id, status: created.status },
+          },
+        });
+      }
+
+      // A fill run holds a real browser window pointed at this employer's form. Closing it
+      // is the same courtesy the tracker pays when an application leaves the tool's hands.
+      await discardRun(created.id);
+
+      // Explicitly, child rows first, rather than trusting ON DELETE CASCADE: SQLite
+      // enforces foreign keys only when the pragma is on, and an orphaned answer would be
+      // invisible work attached to an application nobody can open.
+      db.delete(schema.applicationAnswer)
+        .where(eq(schema.applicationAnswer.applicationId, created.id))
+        .run();
+      db.delete(schema.applicationEvent)
+        .where(eq(schema.applicationEvent.applicationId, created.id))
+        .run();
+      db.delete(schema.application).where(eq(schema.application.id, created.id)).run();
+
+      return { action: parsed.data.action, applicationId: null, deletedApplicationId: created.id };
     }
 
     const existing = db

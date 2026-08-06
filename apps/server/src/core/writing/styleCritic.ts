@@ -40,8 +40,17 @@ export interface StyleReport {
   /** The draft, measured with the same instrument as the user's samples. */
   measured: StyleProfile;
   drift: Drift[];
-  /** 0-1. How close the draft sits to the user's measured voice overall. */
-  match: number;
+  /**
+   * 0-1. How close the draft sits to the user's measured voice overall, or `null` when no
+   * comparison happened at all.
+   *
+   * Null rather than 1, because 1 is a claim. A two-word answer and a draft written before
+   * the user had supplied any samples both used to score a flat 1 — a perfect voice match,
+   * reported by a comparison that never ran. `tooShort` and `noBaseline` were added to say
+   * so, and `describeMatch` reads them, but the number itself went on saying the old thing;
+   * anything that renders the percentage instead of the sentence would show 100%.
+   */
+  match: number | null;
   /** True when the draft is too short to measure honestly. */
   tooShort: boolean;
   /**
@@ -77,11 +86,22 @@ export function critiqueStyle(draft: string, yours: StyleProfile | undefined): S
   const tooShort = sentenceCount < MIN_SENTENCES || words(draft).length < 40;
 
   if (!yours || tooShort) {
-    return { measured, drift: [], match: 1, tooShort, noBaseline: !yours };
+    return { measured, drift: [], match: null, tooShort, noBaseline: !yours };
   }
 
   const drift: Drift[] = [];
+  /**
+   * Every dimension that was measured, including the ones too small to be worth telling
+   * the user about. The overall score divides by this, not by `drift.length`.
+   *
+   * Averaging over the reported drifts alone made the number go UP when a draft got
+   * worse: a draft with one problem at 0.20 scored 0.80, and the same draft with a second
+   * problem at 0.16 added to it scored 0.81. Anything showing that figure as a percentage
+   * would tell a user their answer had improved because it picked up a new tell.
+   */
+  const measuredSeverities: number[] = [];
   const add = (d: Drift): void => {
+    measuredSeverities.push(d.severity);
     if (d.severity > 0.15) drift.push(d);
   };
 
@@ -191,7 +211,8 @@ export function critiqueStyle(draft: string, yours: StyleProfile | undefined): S
   // Worst dimension dominates: one loud tell sinks a draft that is average everywhere
   // else, which is how a reader experiences it.
   const worst = drift.length > 0 ? drift[0]!.severity : 0;
-  const mean = drift.reduce((a, d) => a + d.severity, 0) / Math.max(1, drift.length);
+  const mean =
+    measuredSeverities.reduce((a, s) => a + s, 0) / Math.max(1, measuredSeverities.length);
   return {
     measured,
     drift,

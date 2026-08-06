@@ -174,6 +174,22 @@ const SCAN = (selector: string): unknown => {
   };
 
   /**
+   * One step up the composed tree: the parent element, or the host of the shadow root the
+   * element sits at the top of.
+   *
+   * A shadow root is a document fragment, so `parentElement` is null there and a plain
+   * parent walk ends at the boundary instead of carrying on into the page. Reading the host
+   * is what makes a walk continue across as many nested roots as a component library cares
+   * to build.
+   */
+  const ancestorOf = (el: HTMLElement): HTMLElement | null => {
+    if (el.parentElement) return el.parentElement;
+    const root = el.getRootNode() as { host?: HTMLElement };
+    // A Document is also a root and has no host, which is where the walk genuinely ends.
+    return root.host ?? null;
+  };
+
+  /**
    * Is this control really on screen?
    *
    * A bounding box alone was wrong in both directions, and each direction cost something
@@ -198,6 +214,14 @@ const SCAN = (selector: string): unknown => {
    * rects. Both are as common a honeypot as `left: -9999px`, and because nothing re-reads
    * the label at fill time (see `locatorFor` below) the run signed off "ok" over a form
    * that had just flagged the applicant as a bot.
+   *
+   * AND THE TREE IT WALKS IS THE COMPOSED ONE, host by host, not the light DOM alone.
+   * `parentElement` is null at the top of a shadow tree, because a ShadowRoot is a document
+   * fragment and not an element — so the walk simply stopped there and every control inside
+   * an open shadow root, at any depth, skipped all of these checks. The same two honeypots
+   * wrapped in a custom element came back "Email address" at 0.97 with nothing above them
+   * ever examined, which is the ordinary shape of a design-system input: the fix above was
+   * only ever half a fix while it could not cross a host.
    */
   const isVisible = (el: HTMLElement, rect: DOMRect): boolean => {
     if (rect.width <= 0 || rect.height <= 0) return false;
@@ -214,7 +238,7 @@ const SCAN = (selector: string): unknown => {
     // answered above — the first inherits, so the element's own value is the effective one
     // and a child that sets `visibility: visible` back on is genuinely visible; the second
     // leaves the child with a 0x0 rect.
-    for (let a = el.parentElement; a; a = a.parentElement) {
+    for (let a = ancestorOf(el); a; a = ancestorOf(a)) {
       const s = getComputedStyle(a);
       // Opacity is not inherited and a child cannot undo it, so a fully transparent
       // ancestor hides everything under it however solid the child's own style looks.
@@ -232,19 +256,60 @@ const SCAN = (selector: string): unknown => {
     return true;
   };
 
-  /** A selector that will still find this element later. */
+  /**
+   * How many elements on the page share each id, each name, and each name+value pair.
+   *
+   * Counted in one pass over the COMPOSED tree, which is the only count that answers the
+   * question a locator actually asks. `document.querySelectorAll` does not enter shadow
+   * roots and Playwright's CSS engine does, so the two disagreed in the worst possible
+   * direction: two instances of the same web component, each with `<input id="inner"
+   * name="email">` in its shadow root, were counted as one and handed the locator
+   * `[name="email"]`, which Playwright then resolved to three elements. Every field of that
+   * shape failed with a raw strict-mode error printed at the user as its note, and an id was
+   * never counted at all — `#id` was returned on sight, so two components with the same
+   * internal id could never be filled.
+   *
+   * Ids are counted over EVERY element, not just the fillable ones: a locator that resolves
+   * to a control and a <div> is just as ambiguous as one resolving to two controls.
+   */
+  const idCounts = new Map<string, number>();
+  const nameCounts = new Map<string, number>();
+  const nameValueCounts = new Map<string, number>();
+  const bump = (m: Map<string, number>, key: string): void => {
+    m.set(key, (m.get(key) ?? 0) + 1);
+  };
+  const census = (node: Document | ShadowRoot | Element): void => {
+    for (const child of Array.from(node.children ?? [])) {
+      const el = child as HTMLElement;
+      if (el.id) bump(idCounts, el.id);
+      const name = el.getAttribute('name');
+      if (name !== null) {
+        bump(nameCounts, name);
+        const value = el.getAttribute('value');
+        // Joined through JSON so a name ending in a space cannot be confused with a
+        // value beginning with one.
+        if (value !== null) bump(nameValueCounts, JSON.stringify([name, value]));
+      }
+      census(el);
+      if (el.shadowRoot) census(el.shadowRoot);
+    }
+  };
+
+  /** A selector that will still find this element later, and find only it. */
   const locatorFor = (el: HTMLElement, index: number): string => {
-    if (el.id) return `#${CSS.escape(el.id)}`;
+    if (el.id && idCounts.get(el.id) === 1) return `#${CSS.escape(el.id)}`;
     const name = el.getAttribute('name');
-    if (name && document.querySelectorAll(`[name="${CSS.escape(name)}"]`).length === 1) {
+    if (name !== null && nameCounts.get(name) === 1) {
       return `[name="${CSS.escape(name)}"]`;
     }
     // Radios in a group share a name and are told apart by value, so the name alone can
     // never address one of them.
     const value = el.getAttribute('value');
-    if (name && value) {
-      const pair = `[name="${CSS.escape(name)}"][value="${CSS.escape(value)}"]`;
-      if (document.querySelectorAll(pair).length === 1) return pair;
+    if (name !== null && value !== null) {
+      const pair = JSON.stringify([name, value]);
+      if (nameValueCounts.get(pair) === 1) {
+        return `[name="${CSS.escape(name)}"][value="${CSS.escape(value)}"]`;
+      }
     }
     // Fall back to position among all controls, in the composed order `collect` walks —
     // which is the order Playwright's `.nth()` resolves in.
@@ -300,6 +365,9 @@ const SCAN = (selector: string): unknown => {
 
   const els: HTMLElement[] = [];
   collect(document, els);
+  // Counted before any locator is written, and over the whole page rather than per field,
+  // because "is this id unique?" is a question about everything else on the page.
+  census(document);
 
   return els.map((el, index) => {
     const control = controlOf(el);

@@ -7,7 +7,8 @@
  * this path is supposed to leave a field null rather than guess it; these tests hold that
  * line, because the guess was previously hardcoded in four separate places.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { adzuna, usajobs } from '../src/core/discovery/sources/aggregators';
 import { parseLocation } from '../src/core/discovery/sources/ats';
 import { decodeEntities, stripHtml } from '../src/core/discovery/sources/types';
 
@@ -71,6 +72,37 @@ describe('parseLocation', () => {
   it('trusts an explicit remote flag over the text', () => {
     expect(parseLocation('New York, NY', true).remote).toBe(true);
     expect(parseLocation('Remote', false).remote).toBe(false);
+  });
+});
+
+/**
+ * The note a keyed source leaves when it skips is the only place a user finds out why federal
+ * internships, or half the aggregator coverage, were missing from a run. It used to tell them
+ * to add the key "in Settings" — a screen with no key field and no mention of either source —
+ * so the instruction sent them looking for a box that does not exist and there was no second
+ * one to fall back on.
+ */
+describe('what an unconfigured keyed source tells the user', () => {
+  const keys = ['ADZUNA_APP_ID', 'ADZUNA_APP_KEY', 'USAJOBS_API_KEY', 'USAJOBS_USER_AGENT'];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+
+  afterEach(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it('names the file the keys are read from, and no screen that cannot hold them', async () => {
+    for (const k of keys) delete process.env[k];
+
+    for (const source of [adzuna, usajobs]) {
+      const result = await source.fetch({ board: '' });
+      const note = result.notes.join(' ');
+      expect(result.postings, source.kind).toEqual([]);
+      expect(note, source.kind).toMatch(/\.env/);
+      expect(note, source.kind).not.toMatch(/in Settings/i);
+    }
   });
 });
 

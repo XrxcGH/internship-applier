@@ -43,6 +43,10 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
    * would have nothing to check against.
    */
   app.addHook('onRequest', async (req, reply) => {
+    // Safe to compare against a literal path because app.ts has already rewritten the
+    // target to its one canonical spelling. Before it did, `POST /%61pi/discovery/run`
+    // routed here, slipped past this line, and ran a complete discovery run against a
+    // profile the user had never confirmed.
     if (!req.url.startsWith('/api/discovery')) return;
     if (!isProfileConfirmed()) {
       return reply.code(409).send({

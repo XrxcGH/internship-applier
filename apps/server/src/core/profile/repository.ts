@@ -127,6 +127,23 @@ export function getProfile(): CandidateProfile | null {
   }
 }
 
+/**
+ * The stored id and confirmation stamp, without decrypting anything.
+ *
+ * For callers that only need to keep those two across a save. Going through `getProfile`
+ * for them means a row that does not parse takes down the very request that would have
+ * replaced it — which is how a single unusable field turned into a tool with no way back
+ * in, since re-uploading the resume runs through here first.
+ */
+export function getProfileHeader(): { id: string; confirmedAt: string | null } | null {
+  const row = db
+    .select({ id: schema.profile.id, confirmedAt: schema.profile.confirmedAt })
+    .from(schema.profile)
+    .limit(1)
+    .all()[0];
+  return row ?? null;
+}
+
 export function saveProfile(p: CandidateProfile, now: Date = new Date()): CandidateProfile {
   const existing = db.select({ id: schema.profile.id }).from(schema.profile).limit(1).all();
 
@@ -143,14 +160,42 @@ export function saveProfile(p: CandidateProfile, now: Date = new Date()): Candid
     derived: deriveProfile(p, now),
     updatedAt: now.toISOString(),
   };
-  const row = encryptRow(next);
+  /**
+   * Nothing gets onto disk that cannot be read back.
+   *
+   * The write path was typed and the read path parses strictly, and TypeScript cannot check
+   * what a language model produced at runtime — so an email the schema will not take, a
+   * project URL with no scheme, an employer whose name came back empty, all stored cleanly
+   * and then failed on every subsequent read. The failure surfaced nowhere near its cause
+   * and it was not survivable: the G1 screen that would have fixed the field could not load,
+   * and neither could the re-upload that was supposed to rebuild the profile.
+   *
+   * Parsing here moves that to the moment of the bad write, where the caller can report
+   * which field was wrong and the user still has a working app. Individual repairs upstream
+   * are still worth making — this is the floor, not a substitute for them.
+   */
+  const parsed = CandidateProfile.safeParse(next);
+  if (!parsed.success) {
+    const where = parsed.error.issues
+      .slice(0, 4)
+      .map((i) => i.path.join('.') || '(root)')
+      .join(', ');
+    logger.error({ err: parsed.error.issues }, 'refusing to store a profile that will not parse');
+    throw new Error(
+      'This profile cannot be stored, because it could not be read back afterwards. The ' +
+        `fields at fault: ${where}. Nothing has been changed.`,
+      { cause: parsed.error },
+    );
+  }
+
+  const row = encryptRow(parsed.data);
 
   if (existing[0]) {
     db.update(schema.profile).set(row).where(eq(schema.profile.id, existing[0].id)).run();
   } else {
     db.insert(schema.profile).values(row).run();
   }
-  return next;
+  return parsed.data;
 }
 
 /**

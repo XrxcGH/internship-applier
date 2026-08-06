@@ -227,6 +227,81 @@ describe('G3 — approval is blocked by unverified claims', () => {
 });
 
 /**
+ * Naming the employer you are writing to.
+ *
+ * The company and the role title come from the posting and are nowhere on the profile, so
+ * FactGuard has to be handed them or it reads them as inventions. It was not, on any code
+ * path: every answer that named Northwind Systems came back from G3 with `"Northwind
+ * Systems" does not appear anywhere on your profile`, and since G3 has no override the only
+ * way to satisfy that message was to add a job at Northwind the user never had — which is
+ * the fabrication FactGuard exists to stop. Mentioning is all this buys, which is the second
+ * half of these tests: claiming to have WORKED there is still refused.
+ */
+describe('G3 — the posting supplies names the profile cannot', () => {
+  const approve = (id: string) => app.inject({ method: 'POST', url: `/api/answers/${id}/approve` });
+
+  it('approves an answer that names the company it is addressed to', async () => {
+    const id = await addQuestion('Why do you want to intern here?');
+    await write(
+      id,
+      'What draws me to Northwind Systems is the quality of their developer documentation.',
+    );
+    const res = await approve(id);
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200);
+    expect(res.json().approvedAt).toBeTruthy();
+  });
+
+  it('approves it wherever in the sentence the name falls', async () => {
+    // The company opening the sentence goes down a different branch of the name extractor
+    // (`extractProperNouns` drops a lone capitalised opener), so a fix proved only on a
+    // mid-sentence mention would leave this one blocked.
+    const id = await addQuestion('Why do you want to intern here?');
+    await write(
+      id,
+      'Northwind Systems builds the kind of internal tooling I spent last summer building.',
+    );
+    expect((await approve(id)).statusCode).toBe(200);
+  });
+
+  it('extends the same allowance to the role title', async () => {
+    const id = await addQuestion('Why are you interested in this role?');
+    await write(
+      id,
+      'I am applying for the Software Engineering Intern role because Northwind Systems ' +
+        'works on developer tooling.',
+    );
+    expect((await approve(id)).statusCode).toBe(200);
+  });
+
+  it('still refuses a claim of having worked there', async () => {
+    const id = await addQuestion('Describe your most relevant experience.');
+    await write(id, 'I interned at Northwind Systems last summer and shipped their billing tools.');
+    const res = await approve(id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('UNVERIFIED_CLAIMS');
+    expect(res.json().error.details.claims[0].reason).toMatch(/employer you are applying to/);
+  });
+
+  it('still refuses an employer that is neither on the profile nor on the posting', async () => {
+    const id = await addQuestion('Tell us about a project you are proud of.');
+    await write(id, 'I spent last summer at Google building search infrastructure.');
+    expect((await approve(id)).statusCode).toBe(409);
+  });
+
+  it('stores no blocking flag for the mention when the answer is merely edited', async () => {
+    // The PATCH route re-verifies too, and it was the same call with the same missing
+    // argument. Left unfixed, approval would succeed while the review screen went on
+    // showing a red "does not appear anywhere on your profile" against the same sentence.
+    const id = await addQuestion('Why do you want to intern here?');
+    await write(id, 'What draws me to Northwind Systems is their developer documentation.');
+
+    const after = await app.inject({ method: 'GET', url: `/api/applications/${applicationId}` });
+    const flags = after.json().answers[0].flags as Array<{ type: string }>;
+    expect(flags.filter((f) => f.type === 'unsupported' || f.type === 'overstated')).toEqual([]);
+  });
+});
+
+/**
  * Gate G1, from the approval side.
  *
  * The fact check runs against the confirmed profile, so with no confirmed profile there is

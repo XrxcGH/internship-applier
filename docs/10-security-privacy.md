@@ -53,6 +53,17 @@ A key that IS present but the wrong length is a different case and is handled th
 way: the app refuses to start rather than minting a replacement, because generating a new
 key would abandon everything encrypted under the old one.
 
+**The test suite never touches the real credential store.** `vitest.setup.ts` swaps every
+credential-store module for an in-memory stand-in before any test code can load one, so the
+keys a test run creates and destroys live in a Map that dies with the worker. This is here
+rather than in a testing doc because of what happened without it: `DATA_DIR` isolates every
+file the app writes, but the credential store is keyed by service and account and owes
+nothing to a directory, so the privacy tests — which exercise a real delete-all — deleted
+the developer's own master key and the next test wrote a fresh random one over it. The rule
+it leaves behind: a path is not the only thing that outlives a test run, and anything that
+persists outside the process needs its own isolation rather than being assumed to follow
+`DATA_DIR`. `apps/server/test/isolation.test.ts` asserts both halves.
+
 Why field-level rather than whole-DB (SQLCipher): it keeps `better-sqlite3` as a plain
 dependency, keeps non-sensitive columns queryable and indexable, and makes it explicit at
 the schema level which fields are sensitive. The tradeoff — encrypted fields can't be

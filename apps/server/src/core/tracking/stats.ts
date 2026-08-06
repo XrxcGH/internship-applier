@@ -50,7 +50,7 @@ function rate(numerator: number, denominator: number, what: string): Rate {
 }
 
 export const RESPONDED: ApplicationStatus[] = ['acknowledged', 'interview', 'offer', 'rejected'];
-const ADVANCED: ApplicationStatus[] = ['interview', 'offer'];
+export const ADVANCED: ApplicationStatus[] = ['interview', 'offer'];
 const DECIDED: ApplicationStatus[] = ['interview', 'offer', 'rejected', 'ghosted', 'acknowledged'];
 
 export interface Funnel {
@@ -59,7 +59,10 @@ export interface Funnel {
   awaitingSubmit: number;
   submitted: number;
   responded: number;
+  /** How many are in an interview stage right now. */
   interviewing: number;
+  /** How many ever got that far, whatever happened afterwards. What the rate is built on. */
+  reachedInterview: number;
   offers: number;
   rejected: number;
   ghosted: number;
@@ -92,6 +95,23 @@ function median(xs: number[]): number | null {
   return s.length % 2 ? s[mid]! : Math.round(((s[mid - 1]! + s[mid]!) / 2) * 10) / 10;
 }
 
+/**
+ * Ever got as far as an interview or an offer, rather than sitting in one right now.
+ *
+ * The same rule `everResponded` follows, and it has to be applied everywhere a cumulative
+ * question is being asked — the funnel count, the headline rate and the per-source figures
+ * all ask "how many got that far", and fixing one of the three leaves the other two saying
+ * something different about the same applications.
+ */
+function everAdvanced(a: TrackedApplication): boolean {
+  return (a.advancedAt ?? null) !== null || ADVANCED.includes(a.status);
+}
+
+/** Ever heard back, rather than currently sitting in a status that means it. */
+function everResponded(a: TrackedApplication): boolean {
+  return a.respondedAt !== null || RESPONDED.includes(a.status);
+}
+
 function groupBy(apps: TrackedApplication[], key: (a: TrackedApplication) => string): GroupStat[] {
   const groups = new Map<string, TrackedApplication[]>();
   for (const a of apps) {
@@ -102,8 +122,8 @@ function groupBy(apps: TrackedApplication[], key: (a: TrackedApplication) => str
   return [...groups.entries()]
     .map(([k, list]) => {
       const submitted = list.filter((a) => a.submittedAt).length;
-      const responded = list.filter((a) => RESPONDED.includes(a.status)).length;
-      const advanced = list.filter((a) => ADVANCED.includes(a.status)).length;
+      const responded = list.filter(everResponded).length;
+      const advanced = list.filter(everAdvanced).length;
       return {
         key: k,
         submitted,
@@ -132,8 +152,11 @@ export function computeStats(apps: TrackedApplication[], now = new Date()): Stat
     // followed by long silence reads as ghosted, and counting only the present status would
     // quietly drop it back out of "responded" — the response rate would fall week by week
     // for applications that did, in fact, respond.
-    responded: counted.filter((a) => a.respondedAt !== null || RESPONDED.includes(a.status)).length,
+    responded: counted.filter(everResponded).length,
+    // "Currently talking to them" — a board column, not a rate. `reachedInterview` below is
+    // the cumulative one, and the two genuinely differ once an interview has an outcome.
     interviewing: counted.filter((a) => a.status === 'interview').length,
+    reachedInterview: counted.filter(everAdvanced).length,
     offers: counted.filter((a) => a.status === 'offer').length,
     rejected: counted.filter((a) => a.status === 'rejected').length,
     ghosted: counted.filter((a) => a.status === 'ghosted').length,
@@ -185,11 +208,12 @@ export function computeStats(apps: TrackedApplication[], now = new Date()): Stat
   return {
     funnel,
     responseRate: rate(funnel.responded, funnel.submitted, 'submitted applications'),
-    interviewRate: rate(
-      funnel.interviewing + funnel.offers,
-      funnel.submitted,
-      'submitted applications',
-    ),
+    // "Reached interview" is a cumulative claim, so the number under it has to be one too.
+    // Built from `interviewing + offers`, it was a snapshot: an interview that ended in a
+    // rejection left both counts, and twelve applications with four interviews behind them
+    // rendered as a 1.75rem "0%" over "0 of 12" — past the threshold, so shown as a real
+    // percentage rather than suppressed.
+    interviewRate: rate(funnel.reachedInterview, funnel.submitted, 'submitted applications'),
     medianDaysToResponse: responseDays.length >= 3 ? median(responseDays) : null,
     bySource: groupBy(apps, (a) => a.source ?? 'unknown'),
     notes,

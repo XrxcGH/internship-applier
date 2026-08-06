@@ -68,8 +68,12 @@ const POSITION_PATTERNS: Array<[RegExp, PositionType]> = [
   [/\bfellow(ship)?\b/i, 'fellowship'],
   [/\bexternship\b|\bjob shadow\b|\bmicro-?internship\b/i, 'externship'],
   [/\bREU\b|\bresearch (assistant|intern|experience)\b/i, 'research'],
-  [/\b(new ?grad|graduate programme?|entry[- ]level)\b/i, 'new_grad'],
-  [/\b(rotational|leadership development) program\b/i, 'trainee_program'],
+  // "program(?:me)?", not "programme?": the bare `?` bound to the final "e" alone, so the
+  // pattern matched the British spelling and the typo "programm" while missing "Graduate
+  // Program", the way most of the boards this reads from write it. Every spelling of the
+  // word in this file has to carry both endings.
+  [/\b(new[ -]?grad|graduate program(?:me)?|entry[- ]level)\b/i, 'new_grad'],
+  [/\b(rotational|leadership development) program(?:me)?\b/i, 'trainee_program'],
   [/\bintern(ship)?\b/i, 'internship'],
   [/\bseasonal\b/i, 'seasonal'],
   [/\bpart[- ]time\b/i, 'part_time'],
@@ -96,23 +100,132 @@ export function parsePositionType(title: string, description = ''): PositionType
  * you have remote turned off." — the exact opposite of what the posting says — and everyone
  * else saw the row labelled "Remote" with its real city thrown away.
  *
- * The window is capped and stops at clause punctuation so a negation in one sentence cannot
- * cancel a genuine remote offer in the next: "Fully remote. You will not be required to
- * relocate." stays remote. The trailing forms list the words that actually deny an offer,
- * because a bare "not" after "remote" is usually something else entirely — "this role is
- * remote and is not restricted to any state" is an offer, not a denial.
+ * A denial has to land ON the arrangement, which is a question of grammar and not of
+ * distance. The leading form used to be any "no"/"not" within forty characters of the word,
+ * so "We do not have an office - this is a remote position", "No relocation support for this
+ * remote position" and "There is no fixed schedule for remote team members" were all read as
+ * onsite: a genuinely remote posting labelled with the opposite of what it says, ranked lower
+ * for it, and shown to the user with a sentence about commuting from their home city. So the
+ * negation must either sit against the word with nothing but articles, intensifiers and the
+ * other arrangements of a list in between ("not a fully remote role", "no remote or hybrid
+ * options"), or attach to a verb that puts an arrangement on the table ("we do not offer
+ * remote work", "this position is not eligible for remote work").
+ *
+ * The window still stops at clause punctuation, so a negation in one sentence cannot cancel a
+ * genuine remote offer in the next: "Fully remote. You will not be required to relocate."
+ * stays remote. The trailing forms list the words that actually deny an offer, because a bare
+ * "not" after "remote" is usually something else entirely — "this role is remote and is not
+ * restricted to any state" is an offer, not a denial.
+ *
+ * Both arrangements are built from one template deliberately. The two lists were written out
+ * separately and drifted: hybrid never learned the "unavailable" spelling that remote knew,
+ * so "hybrid is unavailable" was read as an offer of hybrid. Anything added here has to hold
+ * for every arrangement the word can stand in for.
  */
-const REMOTE_DENIED = [
-  /\b(?:no|not|never|unable to|cannot|can'?t)\b[^.;:!?]{0,40}\bremote\b/i,
-  /\bremote\b[^.;:!?]{0,40}\b(?:not|no longer)\s+(?:currently\s+)?(?:available|offered|permitted|possible|supported|accommodated|eligible|an option)\b/i,
-  /\bremote\b[^.;:!?]{0,40}\bunavailable\b/i,
+function denialPatterns(word: string): RegExp[] {
+  // What may sit between the negation and the word without changing what is being denied.
+  const filler =
+    '(?:a|an|the|any|be|being|currently|presently|generally|typically|normally|usually|truly|' +
+    'fully|entirely|completely|purely|strictly|100%|remote|hybrid|on-?site|in[- ]office|' +
+    'in[- ]person|work from home|wfh|or|and|,)';
+  // Verbs that put an arrangement on the table, so negating one denies the offer itself.
+  const offers =
+    '(?:offer|provid|allow|support|permit|accommodat|consider|entertain|eligible|available|' +
+    'open to|able to)\\w*';
+  // A negation bound to a verb rather than to whatever noun follows it. "no relocation
+  // support" negates the support; "we do not offer" negates the offering.
+  const auxNot =
+    "(?:(?:do|does|did|is|are|was|were|will|would|ca|could|sha|should|has|have|had)\\s*n(?:o|')?t" +
+    "|cannot|can'?t|unable to|never)";
+  const denied =
+    '(?:not|no longer)\\s+(?:(?:currently|presently|generally|typically|be|being)\\s+){0,2}' +
+    '(?:available|offered|permitted|possible|supported|accommodated|considered|entertained|' +
+    'eligible|an option)';
+
+  return [
+    new RegExp(`\\b(?:no|not|never)\\s+(?:${filler}\\s*){0,4}\\b${word}\\b`, 'i'),
+    new RegExp(`\\b${auxNot}\\s+(?:\\w+\\s+){0,2}${offers}\\b[^.;:!?]{0,25}\\b${word}\\b`, 'i'),
+    new RegExp(`\\b${word}\\b[^.;:!?]{0,40}\\b${denied}\\b`, 'i'),
+    new RegExp(`\\b${word}\\b[^.;:!?]{0,40}\\bunavailable\\b`, 'i'),
+  ];
+}
+
+const REMOTE_DENIED = denialPatterns('remote');
+const HYBRID_DENIED = denialPatterns('hybrid');
+
+/** A remote claim the posting is making about the job it is advertising. */
+const REMOTE_EXPLICIT =
+  /\b(?:fully|100%|entirely|completely|permanently|purely|totally)[- ]remote\b|\bremote[- ](?:first|only)\b|\bwork from home\b|\bwfh\b/i;
+
+/**
+ * Claims of the form "this role is X" — the posting predicating an arrangement of the opening
+ * itself, as opposed to the word turning up somewhere in the prose. The list of nouns is what
+ * a posting calls itself; the verb has to sit between the noun and the arrangement, so
+ * "unlike our hybrid roles, this position is fully remote" is not a hybrid claim.
+ */
+function thisRoleIs(arrangement: string): RegExp {
+  return new RegExp(
+    '\\b(?:this|the|our|one|each|another)\\s+[^.;!?]{0,30}?' +
+      '\\b(?:role|position|job|internship|opportunity|posting|program(?:me)?|placement)\\b' +
+      '[^.;!?]{0,20}\\b(?:is|are|will be|would be|remains?)\\b[^.;!?]{0,25}' +
+      `\\b(?:${arrangement})\\b`,
+    'i',
+  );
+}
+
+const HYBRID_THIS_ROLE = [
+  thisRoleIs('hybrid'),
+  // A count of days onsite is a hybrid schedule spelled out, whichever side of the word the
+  // posting writes it on.
+  /\bhybrid\b[^.;!?]{0,40}\b\d\s*(?:days?|x)\b|\b\d\s*(?:days?|x)\b[^.;!?]{0,40}\bhybrid\b/i,
 ];
 
-const HYBRID_DENIED = [
-  /\b(?:no|not|never|unable to|cannot|can'?t)\b[^.;:!?]{0,40}\bhybrid\b/i,
-  /\bhybrid\b[^.;:!?]{0,40}\b(?:not|no longer)\s+(?:currently\s+)?(?:available|offered|permitted|possible|supported|an option)\b/i,
+const ONSITE_THIS_ROLE = [
+  thisRoleIs('on-?site|in[- ]person|in[- ]office|in the office'),
+  /\b(?:100%|fully|entirely|completely|strictly|exclusively)[- ](?:on-?site|in[- ]person|in[- ]office)\b/i,
+  // Postings address the reader as often as they describe the role, and "you will work
+  // on-site five days a week" is as plain a claim as "this role is on-site". Without this
+  // frame it counted as no claim at all, so a passing mention of hybrid elsewhere in the
+  // description decided the arrangement instead.
+  /\byou(?:'ll| will| would)?\s+(?:be\s+)?(?:work(?:ing)?|based|located)\s+(?:\w+\s+){0,2}?(?:on-?site|in[- ]person|in[- ]office|in the office)\b/i,
 ];
 
+/**
+ * Whether one of these claims is made about the job, ignoring any that the posting makes in
+ * the same breath as an explicit remote offer. "This role is fully remote, with an in-person
+ * onboarding week" is a remote posting with an aside about one week, not a posting that states
+ * two arrangements, and treating it as the second would throw away an answer the text gives
+ * plainly.
+ */
+function statedOf(text: string, patterns: RegExp[]): boolean {
+  return patterns.some((re) => {
+    const m = re.exec(text);
+    return m !== null && !REMOTE_EXPLICIT.test(m[0]);
+  });
+}
+
+/**
+ * Which arrangement the posting is claiming for THIS job.
+ *
+ * Hybrid used to be decided first, on the bare word appearing anywhere in the text, so a
+ * single "hybrid" beat an explicit "100% remote": "This internship is 100% remote. Our hybrid
+ * employees receive a commuter benefit." was stored as hybrid, and a student with hybrid
+ * turned off — the ordinary setting for someone who cannot commute — was told the posting was
+ * hybrid and never saw a job they could have taken. The word turns up in benefits paragraphs,
+ * in culture prose about other teams, and in comparisons ("unlike our hybrid roles, this
+ * position is fully remote"). The same hole ran the other way between remote and onsite: a
+ * passing "remote work may be possible later" beat "this position is onsite in Austin", which
+ * is the false-remote label the negation rules above exist to prevent.
+ *
+ * So a claim wins by being about this job, not by being tested first. "Fully remote" and
+ * "this role is hybrid" and "3 days a week onsite" are claims; a bare mention is not.
+ *
+ * A description that states two of them is describing more than one job, and no single answer
+ * is true of the one the user is looking at — so the arrangement is left unknown and the row
+ * shows a badge. An unknown costs a little ranking; picking one of two stated arrangements
+ * filters the posting out of the queue with a confident sentence about it. Hybrid and onsite
+ * are not a contradiction — hybrid is the more specific of the two and wins outright.
+ */
 export function parseWorkArrangement(text: string): WorkArrangement | null {
   // Both denials are settled before any positive branch. "No remote or hybrid options are
   // available." used to short-circuit on the bare word "hybrid" in the first line of the
@@ -120,16 +233,30 @@ export function parseWorkArrangement(text: string): WorkArrangement | null {
   const remoteDenied = REMOTE_DENIED.some((re) => re.test(text));
   const hybridDenied = HYBRID_DENIED.some((re) => re.test(text));
 
-  if (!hybridDenied && /\bhybrid\b/i.test(text)) return 'hybrid';
+  const remoteClaimed = !remoteDenied && REMOTE_EXPLICIT.test(text);
+  const hybridMentioned = !hybridDenied && /\bhybrid\b/i.test(text);
+  const hybridClaimed = hybridMentioned && statedOf(text, HYBRID_THIS_ROLE);
+  const onsiteClaimed = statedOf(text, ONSITE_THIS_ROLE);
 
-  if (!remoteDenied) {
-    if (/\b(fully remote|100% remote|remote[- ]first|work from home|wfh)\b/i.test(text)) {
-      return /\b(only|must reside|residents of|located in|based in)\b/i.test(text)
-        ? 'remote_geo_restricted'
-        : 'remote';
-    }
-    if (/\bremote\b/i.test(text)) return 'remote';
+  if (remoteClaimed && (hybridClaimed || onsiteClaimed)) return null;
+
+  if (remoteClaimed) {
+    return /\b(only|must reside|residents of|located in|based in)\b/i.test(text)
+      ? 'remote_geo_restricted'
+      : 'remote';
   }
+
+  // Claims first, in full, before any bare mention is consulted. Ranking the mention above
+  // the onsite claim left half the rule unfixed: "This role is onsite in Boston. Our hybrid
+  // teams meet on Wednesdays" came back hybrid, so a student who can commute but cannot do
+  // a hybrid split was told a job in their own city was out of reach. A bare mention is
+  // still worth something — plenty of postings say "hybrid" and nothing else — but only
+  // once nothing in the text has claimed anything about this particular role.
+  if (hybridClaimed) return 'hybrid';
+  if (onsiteClaimed) return 'onsite';
+  if (hybridMentioned) return 'hybrid';
+
+  if (!remoteDenied && /\bremote\b/i.test(text)) return 'remote';
 
   if (/\b(on[- ]site|onsite|in[- ]person|in office|in-office)\b/i.test(text)) return 'onsite';
   if (/\b(field work|travel required|traveling)\b/i.test(text)) return 'field_or_travel';
@@ -139,15 +266,43 @@ export function parseWorkArrangement(text: string): WorkArrangement | null {
   return null;
 }
 
+/** "3 days a week", "2 days per week", "3x/week" — the count, wherever the sentence puts it. */
+const DAYS_A_WEEK = /\b(\d)\s*(?:days?|x)\s*(?:[a-z-]+\s+){0,2}?(?:per|a|each|\/)\s*week/gi;
+
+/** Where the work happens, written the four ways postings write it. */
+const ONSITE_WORD = /\b(?:on-?site|in[- ]person|in(?:\s+the)?\s+office|in-office)\b/i;
+
+/**
+ * How many days a week the role is onsite.
+ *
+ * The pattern used to demand the location word AFTER "per week", so "3 days onsite per week"
+ * and "Hybrid: 3 days in office per week" — the ordering half of real postings use — came
+ * back as no answer at all, while parseWorkArrangement called the same sentence hybrid: the
+ * posting was labelled hybrid with the one number that says how much commuting it means left
+ * blank. Reading the location word on either side is the point; it can also come before the
+ * count entirely, as in "Employees are in the office 4 days per week".
+ *
+ * The word has to be there somewhere, though, and it has to be a whole word. A bare "in" was
+ * standing in for "in office", and it matched the "in" inside "internship" — so "This is a
+ * 5 days a week internship", which is a full-time job saying so, was recorded as five days
+ * of commuting on a hybrid schedule nobody offered.
+ */
 export function parseHybridDays(text: string): number | null {
-  // "onsite" as one word is written at least as often as "on-site", and without the
-  // optional hyphen "3 days per week onsite" came back as no answer at all while
-  // "on-site" parsed — so parseWorkArrangement called the same sentence hybrid and this
-  // called the day count unknown. The bare "in" already covers "in office" and "in person".
-  const m = text.match(/(\d)\s*(?:days?|x)\s*(?:per|a|\/)\s*week\s*(?:in|on[- ]?site)/i);
-  if (m?.[1]) {
+  for (const m of text.matchAll(DAYS_A_WEEK)) {
+    const start = m.index;
+    const end = start + m[0].length;
+    // Only the clause the count sits in counts as its context: an office mentioned in the
+    // next sentence says nothing about this number.
+    const before =
+      text
+        .slice(Math.max(0, start - 40), start)
+        .split(/[.;!?\n]/)
+        .pop() ?? '';
+    const after = text.slice(end, end + 40).split(/[.;!?\n]/)[0] ?? '';
+    if (!ONSITE_WORD.test(m[0]) && !ONSITE_WORD.test(before) && !ONSITE_WORD.test(after)) continue;
+
     const n = Number(m[1]);
-    return n >= 0 && n <= 7 ? n : null;
+    if (n >= 0 && n <= 7) return n;
   }
   return null;
 }
@@ -171,22 +326,57 @@ export function parseTermDates(text: string): { start: string; end: string } | n
   };
 }
 
+const WEEKS_RE = /\b(\d{1,2})\s*[-–]?\s*(?:to\s*)?(\d{1,2})?\s*weeks?\b/gi;
+const MONTHS_RE = /\b(\d{1,2})\s*[-–]?\s*(?:to\s*)?(\d{1,2})?\s*months?\b/gi;
+
+/** Wording that makes a span of time the length of the job. */
+const TERM_CONTEXT =
+  /\b(?:internship|intern program|program(?:me)?|position|role|co-?op|placement|fellowship|apprenticeship|assignment|runs?|running|lasts?|lasting|duration|term|commitment|long|over the summer)\b/i;
+
+/** Wording that makes it the length of something else the posting mentions. */
+const NOT_TERM_CONTEXT =
+  /\b(?:paid time off|pto|vacation|holidays?|leave|sick|notice|onboarding|orientation|training|ramp[- ]?up|applications?\s+(?:close|closing|open)|deadline|respon(?:se|d)|hear back|review|probation|extension|notice period)\b/i;
+
+/**
+ * How long the job lasts.
+ *
+ * This used to take the first week or month figure anywhere in the text, which is how "Interns
+ * receive 2 weeks of paid time off. The program runs 12 weeks over the summer." became a
+ * two-week internship, and "Our onboarding takes 1 week" a one-week one. Nothing filters on
+ * the field yet, so today that is a wrong number stored rather than a posting hidden — but the
+ * moment a "at least 8 weeks" filter is switched on, every posting that mentions PTO, notice
+ * or an application deadline before its own length disappears from the queue.
+ *
+ * So every figure is weighed the way parseCompensation weighs a dollar amount: the clause
+ * around it decides whether it is the term, and the first match only wins when nothing in the
+ * text says otherwise.
+ */
+function bestSpan(text: string, re: RegExp, toWeeks: (avg: number) => number): number | null {
+  let best: { value: number; score: number } | null = null;
+
+  for (const m of text.matchAll(re)) {
+    const a = Number(m[1]);
+    const b = m[2] ? Number(m[2]) : a;
+    const value = toWeeks((a + b) / 2);
+    if (value < 1 || value > 104) continue;
+
+    const before = clauseBefore(text, m.index);
+    const after = clauseAfter(text, m.index + m[0].length);
+    const score =
+      (TERM_CONTEXT.test(before) || TERM_CONTEXT.test(after) ? 1 : 0) -
+      (NOT_TERM_CONTEXT.test(before) || NOT_TERM_CONTEXT.test(after) ? 1 : 0);
+
+    if (!best || score > best.score) best = { value, score };
+  }
+
+  return best?.value ?? null;
+}
+
 export function parseDurationWeeks(text: string): number | null {
-  const weeks = text.match(/\b(\d{1,2})\s*[-–]?\s*(?:to\s*)?(\d{1,2})?\s*weeks?\b/i);
-  if (weeks?.[1]) {
-    const a = Number(weeks[1]);
-    const b = weeks[2] ? Number(weeks[2]) : a;
-    const avg = Math.round((a + b) / 2);
-    if (avg >= 1 && avg <= 104) return avg;
-  }
-  const months = text.match(/\b(\d{1,2})\s*[-–]?\s*(?:to\s*)?(\d{1,2})?\s*months?\b/i);
-  if (months?.[1]) {
-    const a = Number(months[1]);
-    const b = months[2] ? Number(months[2]) : a;
-    const avg = Math.round(((a + b) / 2) * 4.345);
-    if (avg >= 1 && avg <= 104) return avg;
-  }
-  return null;
+  return (
+    bestSpan(text, WEEKS_RE, (avg) => Math.round(avg)) ??
+    bestSpan(text, MONTHS_RE, (avg) => Math.round(avg * 4.345))
+  );
 }
 
 // ---------------------------------------------------------------- compensation
@@ -296,6 +486,37 @@ function clauseAfter(text: string, from: number): string {
   return cut === -1 ? window : window.slice(0, cut);
 }
 
+/** A denial or a comparison in front of a claim — "this is not an unpaid internship". */
+const NEGATED_BEFORE =
+  /\b(?:no|not|never|neither|nor|isn'?t|aren'?t|wasn'?t|don'?t|doesn'?t|won'?t|unlike|rather than|instead of|other than|as opposed to)\b[^.;!?]{0,30}$/i;
+
+/** Benefits boilerplate that borrows the word: unpaid leave is not an unpaid job. */
+const UNPAID_BENEFIT =
+  /^\s*(?:\w+[- ]){0,2}(?:leave|time off|pto|vacation|holidays?|volunteer\w*|overtime|absences?|sabbatical|day|days|break)\b/i;
+
+/**
+ * Whether the text says the JOB is unpaid.
+ *
+ * This was a bare `\bunpaid\b` test on the first line of parseCompensation, ahead of all the
+ * care below it, so one occurrence of the word anywhere decided the pay. It fired on ordinary
+ * benefits boilerplate — "paid and unpaid leave options", "unpaid volunteer days", "we never
+ * ask interns to work unpaid overtime" — and on postings denying the thing outright ("this is
+ * not an unpaid internship; interns are paid $30/hour"). Each one scored the posting 0.1 on
+ * pay and told the user "the pay is low or unpaid" about a job paying $45 an hour.
+ *
+ * Every occurrence gets a look, because a posting that mentions unpaid leave may also be an
+ * unpaid internship, and one clean claim is enough.
+ */
+function saysUnpaid(text: string): boolean {
+  for (const m of text.matchAll(/\bunpaid\b/gi)) {
+    const before = clauseBefore(text, m.index);
+    const after = clauseAfter(text, m.index + m[0].length);
+    if (NEGATED_BEFORE.test(before) || UNPAID_BENEFIT.test(after)) continue;
+    return true;
+  }
+  return false;
+}
+
 /**
  * Pulls the pay out of a description.
  *
@@ -312,8 +533,8 @@ function clauseAfter(text: string, from: number): string {
  * plenty of postings write nothing but "$30" in a pay field.
  */
 export function parseCompensation(text: string): ParsedComp | null {
-  if (/\bunpaid\b/i.test(text)) return { unpaid: true, raw: 'unpaid' };
-  if (/\b(academic|course|school) credit only\b/i.test(text)) {
+  const credit = /\b(academic|course|school) credit only\b/i.exec(text);
+  if (credit && !NEGATED_BEFORE.test(clauseBefore(text, credit.index))) {
     return { academicCreditOnly: true, raw: 'academic credit only' };
   }
 
@@ -336,6 +557,11 @@ export function parseCompensation(text: string): ParsedComp | null {
     const score = (unit ? 2 : 0) + (PAY_CONTEXT.test(before) || PAY_CONTEXT.test(after) ? 1 : 0);
     if (!best || score > best.score) best = { match: m, unit, score };
   }
+
+  // A bare figure with neither a period nor a pay word behind it is weak evidence — a
+  // reimbursement cap or an equipment budget reads the same way — so an unpaid statement
+  // still wins over it. A stated wage does not lose to a word.
+  if (saysUnpaid(text) && (!best || best.score === 0)) return { unpaid: true, raw: 'unpaid' };
 
   if (!best) return null;
 
@@ -365,14 +591,52 @@ export function parseCompensation(text: string): ParsedComp | null {
 
 // ---------------------------------------------------------------- application demands
 
+/**
+ * Whether a posting asks for something, given the words it uses for it.
+ *
+ * Each key used to spell its own rule and each got it wrong in its own direction. The cover
+ * letter guard knew "no cover letter" and "optional" but not "a cover letter is not required",
+ * the phrasing postings actually use — so a posting saying it does NOT want one was recorded
+ * as demanding it. References went the other way and demanded the literal word "required"
+ * within thirty characters, which made "References are not required" a demand for references
+ * and "please submit a cover letter and two references" — the commonest positive phrasing
+ * there is — no demand at all.
+ *
+ * So mention plus an absence of release is the rule for every key, and the ways a posting
+ * releases you from something are written once here rather than three times.
+ */
+const NOT_DEMANDED =
+  /\b(?:not|no longer)\s+(?:(?:currently|strictly|technically|always|be)\s+){0,2}(?:required|necessary|needed|requested|expected|mandatory|obligatory)\b|\boptional\b|\bnot? need(?:ed)?\b|\bwaived\b|\bnice to have\b/;
+
+function demanded(text: string, subject: RegExp): boolean {
+  // Every mention gets a look. A posting that says a cover letter is optional in its boilerplate
+  // and asks for one in the next paragraph is asking for one, and one clean ask is enough.
+  for (const m of text.matchAll(new RegExp(subject.source, 'gi'))) {
+    // Only the clause the thing is named in can release it: "a cover letter is not required"
+    // says nothing about the transcript demanded two paragraphs down.
+    const before = clauseBefore(text, m.index);
+    const after = clauseAfter(text, m.index + m[0].length);
+    // "No cover letter needed" is a release; "applications without a portfolio will not be
+    // reviewed" is a demand, so "without" is left alone — it more often names what a posting
+    // refuses to accept than what it does not want.
+    if (/\bno\s+$/.test(before)) continue;
+    if (NOT_DEMANDED.test(before) || NOT_DEMANDED.test(after)) continue;
+    return true;
+  }
+  return false;
+}
+
 export function parseRequirements(text: string): Record<string, boolean> {
   const t = text.toLowerCase();
   return {
-    coverLetter: /cover letter/.test(t) && !/no cover letter|cover letter.{0,20}optional/.test(t),
-    transcript: /\btranscript/.test(t),
-    portfolio: /\bportfolio\b|\bwork samples?\b/.test(t),
-    references: /\breferences?\b.{0,30}\brequired\b|\bletters? of recommendation\b/.test(t),
-    videoInterview: /\b(video interview|hirevue|one-way interview|recorded interview)\b/.test(t),
+    coverLetter: demanded(t, /cover letter/),
+    transcript: demanded(t, /\btranscripts?\b/),
+    portfolio: demanded(t, /\bportfolio\b|\bwork samples?\b/),
+    references: demanded(t, /\breferences?\b|\bletters? of recommendation\b/),
+    videoInterview: demanded(
+      t,
+      /\b(video interview|hirevue|one-way interview|recorded interview)\b/,
+    ),
   };
 }
 

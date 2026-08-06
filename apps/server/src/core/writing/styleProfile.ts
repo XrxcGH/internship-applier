@@ -180,6 +180,31 @@ export interface SampleInput {
   content: string;
 }
 
+/**
+ * How the writer starts sentences, as their opening words in order of how often they use
+ * them.
+ *
+ * This used to keep the first three words of each of the first twelve sentences, which is
+ * not a measurement — it is up to twelve verbatim clauses lifted out of whatever the person
+ * pasted in, and Voice asks them for something unedited and personal. A sample opening "My
+ * mother died the winter I started" left "my mother died" sitting in the derived profile,
+ * which is stored as plain JSON while the sample it came from is encrypted, and it came
+ * back out again in the privacy export. The single opening word carries the habit the
+ * drafting prompt is after — whether someone starts on "I", on "But", on "So" — and carries
+ * nothing of what the sentence went on to say.
+ */
+function openingWords(sents: string[]): string[] {
+  const counts = new Map<string, number>();
+  for (const s of sents) {
+    const first = (words(s)[0] ?? '').toLowerCase().replace(/[^a-z0-9']+/g, '');
+    if (first) counts.set(first, (counts.get(first) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([w]) => w);
+}
+
 export function computeStyleProfile(samples: SampleInput[], now = new Date()): StyleProfile {
   // Flattened before anything is counted. A sample pasted out of Word measured zero
   // contractions where the same prose typed in a plain editor measured twenty-two per
@@ -233,10 +258,7 @@ export function computeStyleProfile(samples: SampleInput[], now = new Date()): S
     listUsage: listRatio > 0.15 ? 'common' : listRatio > 0.02 ? 'rare' : 'never',
     favoredTransitions: transitionCounts.slice(0, 6).map((x) => x.t),
     hedgeRate: per100((text.match(HEDGES) ?? []).length),
-    openingPatterns: sents
-      .slice(0, 12)
-      .map((s) => words(s).slice(0, 3).join(' '))
-      .filter(Boolean),
+    openingPatterns: openingWords(sents),
     sampleIds: samples.map((s) => s.id),
     computedAt: now.toISOString(),
   };

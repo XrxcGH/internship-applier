@@ -12,6 +12,7 @@ import {
   type MatchDetail,
   type MatchRow,
 } from '../lib/matches';
+import { queueKeyAction } from '../lib/queueKeys';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Empty, Notice } from '../components/Controls';
 import { RequirementChecklist, ScoreBreakdownBars } from '../components/RequirementChecklist';
@@ -175,39 +176,36 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
     [selected],
   );
 
-  // Keyboard triage. Ignored while typing in a field or while the reject sheet is open.
+  // Keyboard triage. What each press means — and the chords that mean nothing here — is
+  // decided by queueKeyAction, which is tested on its own.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && /input|textarea|select/i.test(t.tagName)) return;
-      if (rejecting) {
-        if (e.key === 'Escape') setRejecting(false);
-        return;
-      }
-      switch (e.key.toLowerCase()) {
-        case 'j':
-          e.preventDefault();
+      const action = queueKeyAction(e, { rejecting });
+      if (action === null) return;
+      // Escape is left alone deliberately: it closes dialogs and leaves full screen, and
+      // taking it over so the sheet can close is not worth breaking either of those.
+      if (action !== 'close-sheet') e.preventDefault();
+      switch (action) {
+        case 'next':
           move(1);
           break;
-        case 'k':
-          e.preventDefault();
+        case 'prev':
           move(-1);
           break;
-        case 'a':
-          e.preventDefault();
+        case 'approve':
           void act('approved');
           break;
-        case 's':
-          e.preventDefault();
+        case 'skip':
           void act('skipped');
           break;
-        case 'x':
-          e.preventDefault();
+        case 'reject':
           setRejecting(true);
           break;
-        case 'l':
-          e.preventDefault();
+        case 'save':
           void act('saved');
+          break;
+        case 'close-sheet':
+          setRejecting(false);
           break;
       }
     };
@@ -249,14 +247,27 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
           {counts['eligible'] ?? 0} eligible · {counts['unknown'] ?? 0} to check ·{' '}
           {counts['ineligible'] ?? 0} filtered
         </span>
+        {/* Guarded by the same ref as the triage actions, and greyed out while it runs.
+            This was the one control on the page with neither: a recompute takes a while
+            and answers nothing until it is done, so a second impatient click started a
+            second full matching run — which re-extracts requirements with the model, at
+            cost, for postings the first run is extracting at that moment. Whichever run
+            finished first also cleared the "Recomputing…" line, so the rest carried on
+            invisibly. */}
         <Button
           size="sm"
+          disabled={busy !== null}
           onClick={() => {
+            if (busyRef.current) return;
+            busyRef.current = true;
             setBusy('Recomputing');
             void recompute()
               .then(load)
               .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-              .finally(() => setBusy(null));
+              .finally(() => {
+                busyRef.current = false;
+                setBusy(null);
+              });
           }}
         >
           Recompute
@@ -281,10 +292,18 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
         </div>
       )}
 
+      {/* This used to open with "Run discovery", and there is no screen, button or
+          shortcut anywhere in this app that runs discovery. Someone who had just been told
+          at G1 that confirming unlocks discovery arrived here, found one button, pressed
+          it, and got the same empty queue back with no idea what they had missed. Say
+          where postings actually come from instead. */}
       {rows.length === 0 && !error && (
         <Empty title="Nothing in the queue.">
-          Run discovery, then Recompute — or widen the band above to see what was filtered out, and
-          why.
+          Discovery has no screen yet. Postings reach this machine through the server:{' '}
+          <code className="u-data">POST /api/discovery/run</code>, or{' '}
+          <code className="u-data">POST /api/discovery/manual</code> for a single posting you paste
+          in. Recompute scores whatever is already stored. You can also widen the band above to see
+          what was filtered out, and why.
         </Empty>
       )}
 
@@ -407,9 +426,19 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
                         Open posting ↗
                       </a>
                     </div>
+                    {/* The second sentence is here because Save, Skip and Reject look like
+                        three outcomes and behave like one. Each is written down as its own
+                        decision on the server, and nothing in this interface reads any of
+                        them back: there is no saved list, no decided view and no undo, so
+                        someone who pressed Save meaning "come back to this" watched the
+                        posting leave the queue for good and went looking for a screen that
+                        does not exist. Say so until one does. */}
                     <p className="text-faint mt-4 u-prose text-[0.9375rem]">
                       Approving creates an application you review at gate G3. It does not submit
-                      anything — you do that <em>yourself</em>, on the real page.
+                      anything — you do that <em>yourself</em>, on the real page. Save and Skip both
+                      take the posting out of the queue, as does Reject. Each is recorded as its own
+                      decision, but nothing here reads any of them back yet, so treat all three as
+                      final.
                     </p>
                   </>
                 )}

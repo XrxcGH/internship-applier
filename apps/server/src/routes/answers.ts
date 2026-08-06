@@ -107,16 +107,31 @@ interface Verified {
 /**
  * Re-verifies text against the profile. Runs on every draft AND on every user edit —
  * an approved answer must be verified as it stands, not as it was generated.
+ *
+ * Takes the whole application context rather than the posting description on its own. The
+ * description was threaded through here for retrieval while the company and the role title
+ * — which FactGuard needs for a different reason — were not, and that half-wired mechanism
+ * is what produced the bug below. One argument carrying everything the posting knows means
+ * a caller cannot supply part of it again.
  */
 function verify(
   text: string,
   question: string,
   profile: ConfirmedProfile,
   style: StyleProfile | undefined,
-  postingContext: string,
+  ctx: ApplicationContext | null,
 ): Verified {
-  const evidence = retrieveEvidence(profile, question, { postingContext });
-  const guard = guardDraft(text, evidence);
+  const evidence = retrieveEvidence(profile, question, { postingContext: ctx?.description ?? '' });
+  // The employer's name and the role title come from the posting and are nowhere on the
+  // profile, so FactGuard has to be told them or it reads them as inventions. Nobody passed
+  // them, and the result was that "What draws me to Stripe is the documentation" could not
+  // be approved: G3 came back with `"Stripe" does not appear anywhere on your profile` and
+  // has no override, so the only way to satisfy the message it printed — add the fact to
+  // your profile — was to claim a job at Stripe the user had never had, which is the exact
+  // thing FactGuard exists to stop. Naming the company is the most ordinary sentence a
+  // "why this company" answer contains. Mentioning is all this buys: "I interned at Stripe"
+  // is still blocked, by `affiliationFrame` in factGuard.ts.
+  const guard = guardDraft(text, evidence, ctx ? [ctx.company, ctx.title] : []);
   // Em-dash density and sentence rhythm are tells only relative to how this person writes,
   // which is why the drafting side hands the same baselines over. Measured against the
   // generic defaults instead, someone who genuinely writes with em dashes opened the review
@@ -248,11 +263,27 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(schema.applicationAnswer.applicationId, req.params.id))
       .all();
 
+    /**
+     * What the last fill run could not fill.
+     *
+     * The live version of this list belongs to the in-memory run, and that run is gone the
+     * moment the browser is closed, a second run starts or the server restarts — after any
+     * of which the nine fields the user still has to type by hand existed only in a column
+     * no endpoint returned. Reading it back here is what makes the copy on the application
+     * worth writing.
+     */
+    const stored = db
+      .select({ skippedFields: schema.application.skippedFields })
+      .from(schema.application)
+      .where(eq(schema.application.id, req.params.id))
+      .all()[0];
+
     const access = await describeAccess();
     return {
       ...ctx,
       id: req.params.id,
       answers: answers.map(answerPayload),
+      skippedFields: stored?.skippedFields ?? [],
       canDraft: access.available,
       modelAccess: access,
     };
@@ -293,7 +324,7 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
     let evidence: AnswerEvidence[] = [];
     let flags: AnswerFlag[] = [];
     if (reusable && profile) {
-      const v = verify(reusable.text, questionText, profile, loadStyle(), ctx.description);
+      const v = verify(reusable.text, questionText, profile, loadStyle(), ctx);
       evidence = v.evidence;
       flags = v.flags;
     }
@@ -407,7 +438,7 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
 
       emit('factguard');
       emit('style');
-      const v = verify(result.text, row.questionText, profile, loadStyle(), ctx?.description ?? '');
+      const v = verify(result.text, row.questionText, profile, loadStyle(), ctx);
 
       db.update(schema.applicationAnswer)
         .set({
@@ -464,9 +495,7 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
 
     // Verification needs a confirmed profile. Without one, the edit is saved but nothing
     // is marked verified — better than showing stale flags against new text.
-    const v = profile
-      ? verify(text, row.questionText, profile, loadStyle(), ctx?.description ?? '')
-      : null;
+    const v = profile ? verify(text, row.questionText, profile, loadStyle(), ctx) : null;
 
     db.update(schema.applicationAnswer)
       .set({
@@ -533,7 +562,7 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const ctx = loadContext(row.applicationId);
-    const v = verify(text, row.questionText, profile, loadStyle(), ctx?.description ?? '');
+    const v = verify(text, row.questionText, profile, loadStyle(), ctx);
     const blocking = v.guard.blocking;
     if (blocking.length > 0) {
       db.update(schema.applicationAnswer)

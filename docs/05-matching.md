@@ -11,12 +11,24 @@ ordering the review queue. It never filters anything out on its own.
 
 ## Filters
 
-Defined in `packages/shared/src/filters.ts`. Filters shape *what you're shown*; they are
-not the eligibility rules, which stay deterministic and run regardless.
+Defined in `packages/shared/src/filters.ts`. Filters are meant to shape *what you're shown*;
+they are not the eligibility rules, which stay deterministic and run regardless.
 
-Three rules govern the whole filter model:
+**Most of the table below is not applied to anything yet.** `core/discovery/queryPlanner.ts`
+is the only consumer of a filter set, and it reads seven leaves: `term.seasons`,
+`term.years`, `positionTypes`, `location.cities`, `role.roleFamilies`, `role.titleIncludes`
+and `company.onlyCompanies`. Everything else in the Groups table parses and validates and is
+then ignored — `POST /api/discovery/plan` returns the same plan for a fully populated filter
+set as it does for `{}`, and says nothing about having dropped the rest. No screen in the web
+app sends one, so no user is affected today; an API caller is, silently. Read the table as
+the intended model, not as shipped behaviour, and check `queryPlanner.ts` before relying on
+a group.
 
-1. **Every default is permissive.** An unset filter widens the search, never narrows it.
+Three rules govern the parts that are live:
+
+1. **Every default is permissive.** An unset filter widens the search, never narrows it —
+   with the deliberate exception of the season/year and position-type defaults, which pin
+   the search to the cycle the user is applying for.
 2. **Unstated is not disqualifying.** A posting that doesn't mention pay is unknown, not
    unpaid. Every `include*Undisclosed` / `includeUnknown*` flag defaults to true.
 3. **Filters that mirror a hard rule are preferences about display**, not the rule itself.
@@ -179,7 +191,7 @@ listed".
 | Seniority fit | 10 | Distance between required experience and `derived.seniorityBand`. Penalizes both over- and under-shooting. |
 | Location desirability | 8 | Remote / base city / relocation target, ranked by stated preference. |
 | Compensation | 6 | Only when disclosed; unstated compensation is neutral, never penalized. |
-| Application effort | 6 | Inverse of `apply_effort.estMinutes` + essay count. A one-click Greenhouse form outranks a 40-minute Workday wizard, all else equal. |
+| Application effort | 6 | **Not built** — inverse of `apply_effort.estMinutes` + essay count is what it would compute, but nothing writes `apply_effort` (docs/03), so every posting takes the `effort === null` branch and scores the neutral 0.6 with the note "effort unknown". A one-click Greenhouse form and a 40-minute Workday wizard are ordered identically today, and 6 of the 100 weight points are a constant. |
 
 Score is clamped 0–100 and stored with the full breakdown so the UI can show the bars.
 

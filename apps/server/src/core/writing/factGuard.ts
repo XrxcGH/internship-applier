@@ -101,9 +101,37 @@ export function normalize(s: string): string {
     .trim();
 }
 
-/** Word-boundary containment over normalised text. Stops "rust" matching "trust". */
+/**
+ * The forms of a phrase that differ only in the number of its last word: "rest api" and
+ * "rest apis", "library" and "libraries". Every other word is left exactly as written.
+ */
+function inflections(phrase: string): string[] {
+  const cut = phrase.lastIndexOf(' ');
+  const head = cut < 0 ? '' : phrase.slice(0, cut + 1);
+  const last = phrase.slice(cut + 1);
+  const forms = new Set([last, `${last}s`, `${last}es`]);
+  if (last.endsWith('s')) forms.add(last.slice(0, -1));
+  if (last.endsWith('es')) forms.add(last.slice(0, -2));
+  if (last.endsWith('ies')) forms.add(`${last.slice(0, -3)}y`);
+  if (last.endsWith('y')) forms.add(`${last.slice(0, -1)}ies`);
+  return [...forms].filter((f) => f.length > 0).map((f) => head + f);
+}
+
+/**
+ * Word-boundary containment over normalised text. Stops "rust" matching "trust".
+ *
+ * A trailing plural is not a different fact. A profile whose skills list said "REST APIs"
+ * did not support a draft that said "a REST API", so the user was blocked at G3 by a
+ * message telling them "REST API" does not appear anywhere on their profile — untrue, about
+ * a term one character away, on a screen with no override, and the only remedy it offered
+ * (add the fact to your profile) had already been done. The rule is that only the LAST word
+ * of a phrase is allowed to differ, and only in its number, singular or plural, whichever
+ * side carries the ending.
+ */
 function containsPhrase(haystack: string, needle: string): boolean {
-  return needle.length > 0 && ` ${haystack} `.includes(` ${needle} `);
+  if (needle.length === 0) return false;
+  const hay = ` ${haystack} `;
+  return inflections(needle).some((f) => hay.includes(` ${f} `));
 }
 
 /**
@@ -151,16 +179,26 @@ const ONES = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'n
  * The compound form first, so "twenty-five years" is read as twenty-five rather than as a
  * bare "five" with the tens word left behind; then every single word longest-first, so
  * "seventeen" is not read as "seven" trailing a stray "teen".
+ *
+ * The digit branch carries its decimal tail for the same reason, and this one was worse.
+ * "I worked in the lab for 2.5 years" matched at the word boundary between the dot and the
+ * five, so a true sentence about a thirty-month job came back red at G3 saying: the draft
+ * says "5 years". The user cannot find "5 years" in their draft, because they never wrote
+ * it, and there is no override on that screen. It failed the other way round just as
+ * quietly — "20.5 years" against a five-year entry also read as five, matched the profile,
+ * and was waved through. The rule is that a number and its fractional part are one count,
+ * never two, so nothing may be read as a count when a digit or a decimal point sits
+ * directly in front of it.
  */
 const COUNT_PATTERN = [
-  String.raw`\d{1,2}`,
+  String.raw`\d{1,2}(?:\.\d+)?`,
   String.raw`(?:${TENS.join('|')})[\s-](?:${ONES.join('|')})`,
   ...Object.keys(NUMBER_WORDS).sort((a, b) => b.length - a.length),
 ].join('|');
 
 /** Digits verbatim; words summed, so "twenty-five" is 25 rather than 20 or 5. */
 function countOf(raw: string): number {
-  if (/^\d+$/.test(raw)) return Number(raw);
+  if (/^\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
   return raw
     .toLowerCase()
     .split(/[\s-]+/)
@@ -200,7 +238,7 @@ export interface DurationClaim {
 export function extractDurations(text: string): DurationClaim[] {
   const out: DurationClaim[] = [];
   const re = new RegExp(
-    String.raw`\b(?:for|over|across|spent|nearly|almost|about|around)?\s*(${COUNT_PATTERN})` +
+    String.raw`\b(?:for|over|across|spent|nearly|almost|about|around)?\s*(?<![\d.])(${COUNT_PATTERN})` +
       String.raw`[\s-]*(year|yr|month|mo|week)s?\b(?![\s-]*old\b)`,
     'gi',
   );
@@ -428,12 +466,36 @@ const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\
  * Acme for years", "I worked with the Acme API on a side project". Those are wishes and
  * mentions, not claims of employment.
  */
+/**
+ * The verb list is what decides whether a bare acronym is an employer or a technology, so
+ * it has to cover how people actually write about a job.
+ *
+ * Seven past-tense verbs was too narrow in both tense and vocabulary. "I am interning at
+ * NCSA", "my internship at NASA", "I spent last summer at JPL" and "during my time at
+ * MITRE" are all employment claims about an all-caps name, and every one of them slipped
+ * the frame and was waved through unchecked — which is the direction that matters, because
+ * this branch exists to let a technology past and a fabricated employer must not ride
+ * along with it. The present and continuous forms and the noun forms are here for that
+ * reason; "I deployed it to AWS" still names no affiliation and is still left alone.
+ */
 const affiliationFrame = (name: string): RegExp =>
   new RegExp(
-    String.raw`\b(?:i|we)\b[\w\s,'’-]{0,30}?\b(?:interned|worked|studied|spent|joined|served|hired)\b[\w\s,'’-]{0,25}?\b(?:at|for)\s+` +
+    String.raw`(?:\b(?:i|we)\b[\w\s,'’-]{0,30}?\b(?:intern(?:ed|ing|s)?|work(?:ed|ing|s)?|stud(?:ied|ying|y)|spent|spend(?:ing)?|join(?:ed|ing)?|serv(?:ed|ing)?|hired|employed|volunteer(?:ed|ing)?|apprenticed)\b|\b(?:my|our)\b[\w\s,'’-]{0,20}?\b(?:internship|apprenticeship|fellowship|placement|role|position|job|time|tenure|summer|semester)\b)` +
+      String.raw`[\w\s,'’-]{0,25}?\b(?:at|for|with)\s+` +
       escapeRegExp(name),
     'i',
   );
+
+/**
+ * A run made only of short all-caps words: API, CSV, SQL, REST API, HTTP.
+ *
+ * Written this way a name is as often a file format, a protocol or a language as it is an
+ * employer, and nothing about the letters themselves can tell the two apart. Anything with
+ * an ordinary word beside it — "IBM Research", "Kestrel Analytics" — is a name and does not
+ * come through here.
+ */
+const isAcronymRun = (raw: string): boolean =>
+  /^[A-Z][A-Z0-9]{1,4}(?:\s+[A-Z][A-Z0-9]{1,4})*$/.test(raw);
 
 export interface DeterministicResult {
   verdict: ClaimVerdict | null;
@@ -498,8 +560,12 @@ export function checkClaimDeterministically(
     // Scope to the entity the claim names, when it names one the profile knows. An
     // unscoped claim is measured against the longest span on the profile — permissive on
     // purpose, since "three years of Python" isn't tied to any single entry.
+    //
+    // Whole words here too, for the same reason as the organisation check below: a bare
+    // `includes` let a claim naming MIT scope itself to an entry at "Summit Labs" and take
+    // that entry's ceiling.
     const scoped = dated.filter((d) =>
-      claimedNames.some((c) => d.names.some((n) => n === c.norm || n.includes(c.norm))),
+      claimedNames.some((c) => d.names.some((n) => n === c.norm || containsPhrase(n, c.norm))),
     );
     const pool = scoped.length > 0 ? scoped : dated;
 
@@ -548,8 +614,30 @@ export function checkClaimDeterministically(
 
   // ── organisations, schools, products. The invented-employer case.
   for (const { raw, norm } of claimedNames) {
+    // Whole words, never bare letters. This used to be a plain `includes` both ways, so any
+    // invented employer whose spelling happened to swallow a short name from the profile
+    // was accepted in silence: a student with MIT on their profile could write "I interned
+    // at Smith Barney last summer" and the guard raised nothing, because "smith barney"
+    // contains "mit". "Summit Consulting" passed the same way, "Metaphor Systems" passed on
+    // a profile holding Meta, and "Sapient" on one holding SAP. Green ticks on fabricated
+    // employers are the worst thing this file can produce, because G3 is where the user
+    // decides they have nothing left to check.
+    //
+    // The rule: one name vouches for another only when it appears inside it as a whole
+    // word.
     const matches = (pool: string[]): boolean =>
-      pool.some((k) => k === norm || k.includes(norm) || norm.includes(k));
+      pool.some(
+        (k) =>
+          k === norm ||
+          // "Rutgers" standing in for "Rutgers Learning Center" — the profile's own entity,
+          // shortened by the writer.
+          containsPhrase(k, norm) ||
+          // "MIT Media Lab" built out of "MIT" — a division of somewhere the writer really
+          // is. Two-letter runs get no say here, because the profile's titles land in this
+          // pool alongside its employers and a "TA" or an "RA" would otherwise vouch for
+          // any company that happens to start with those letters as a word.
+          (k.length > 2 && containsPhrase(norm, k)),
+      );
 
     if (matches([...knownNames]) || containsPhrase(normEvidence, norm)) continue;
 
@@ -563,6 +651,15 @@ export function checkClaimDeterministically(
           `experience there. Say what draws you to them instead.`,
       };
     }
+
+    // A bare acronym counts as an organisation only when the sentence puts the writer
+    // inside it. Without this, "It replaced a CSV export", "The HTTP layer was the easy
+    // part" and "I wrote a REST API for the billing service" were each reported as an
+    // invented organisation and each blocked approval at G3, where there is no override —
+    // three true sentences that any engineer would write, about a format, a protocol and an
+    // interface. "I interned at IBM" is still read as employment and still red; "I deployed
+    // it to AWS" is not a claim about working at AWS and is left alone.
+    if (isAcronymRun(raw) && !affiliationFrame(raw).test(claim)) continue;
 
     return {
       verdict: 'unsupported',

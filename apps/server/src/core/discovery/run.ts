@@ -341,12 +341,22 @@ function linkSources(postingId: string, sources: string[], externalId: string | 
   }
 }
 
-const sourceIds = new Map<string, string>();
-
+/**
+ * The source row for a label, looked up every time on purpose.
+ *
+ * This used to memoise label → row id in a module-level Map that nothing ever cleared. "Delete
+ * everything" in Settings truncates the source table, and foreign keys are on — so the first
+ * discovery run after a delete handed the job_posting_source insert an id for a row that no
+ * longer existed and the whole run died on "FOREIGN KEY constraint failed". The user saw a 500
+ * from a search, or a 502 saying "Could not read that URL" about a URL that had been fetched
+ * and parsed perfectly, and it happened on every run until someone restarted the process. The
+ * delete reply says "Restart the app to begin again", but that is advice and the app keeps
+ * running.
+ *
+ * The lookup it replaces is one indexed hit on a table with a handful of rows, a few times per
+ * run. Cached state that outlives the database it describes is not worth that.
+ */
 function ensureSource(label: string): string {
-  const cached = sourceIds.get(label);
-  if (cached) return cached;
-
   const kind = label.split(':')[0] ?? 'manual';
   const rows = db
     .select({ id: schema.source.id })
@@ -358,7 +368,6 @@ function ensureSource(label: string): string {
   if (!rows[0]) {
     db.insert(schema.source).values({ id, kind, label, enabled: true }).run();
   }
-  sourceIds.set(label, id);
   return id;
 }
 

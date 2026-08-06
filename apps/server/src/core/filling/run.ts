@@ -14,7 +14,7 @@ import type { ApplicationAnswer, ConfirmedProfile } from '@ia/shared';
 import { publish } from '../../infra/events';
 import { logger } from '../../infra/logger';
 import { detectIntervention, openSession, type BrowserSession, type Intervention } from './browser';
-import { executePlan, describeFill, type FillResult } from './fill';
+import { executePlan, describeFill, sameDocument, type FillResult } from './fill';
 import { buildFormMap, summarizeMap, type FormMap } from './formMap';
 import { buildFillPlan, type FillPlan } from './plan';
 
@@ -59,6 +59,11 @@ export function serializeRun(run: FillRun) {
     applicationId: run.applicationId,
     state: run.state,
     url: run.url,
+    // The address the form was actually read from, which is not always the one the
+    // application was saved with: a sign-in redirect, a wizard step or a stale link can put
+    // the browser somewhere else entirely, and `url` alone would name the page the tool
+    // MEANT to fill as the page it did fill.
+    pageUrl: run.map?.url ?? null,
     message: run.message,
     startedAt: run.startedAt,
     intervention: run.intervention ?? null,
@@ -166,6 +171,15 @@ export async function continueRun(input: StartInput): Promise<FillRun> {
     throw new Error('No open fill run for this application. Start one first.');
   }
 
+  // One fill at a time, per run. Two overlapping continues share a page and a keyboard —
+  // `insertText` goes to whatever has focus, so one run's approved essay lands in the box the
+  // other just clicked into — and there is no legitimate caller that needs it. The UI cannot
+  // produce this (its buttons disable while a call is in flight), but the local API is a
+  // supported way to drive this server and a second tab can be looking at a stale screen.
+  if (run.state === 'filling') {
+    throw new Error('This application is already being filled. Wait for that run to finish.');
+  }
+
   // Everything past this point ends in a state the user can act on, the same way starting a
   // run does. A throw from the re-read or from the fill used to leave the run parked in
   // `reading` or `filling` forever: the route reported the error, but the screen kept
@@ -202,19 +216,45 @@ export async function continueRun(input: StartInput): Promise<FillRun> {
       resumePath: input.resumePath,
     });
 
+    // A page with nothing on it to fill is not a form this tool has anything to say about.
+    // Reporting it `done` walked the application on to `awaiting_submit` and told the user to
+    // go and submit a form that had never been typed into — the ordinary outcome on a career
+    // site whose form renders after the page load this run waited for.
+    if (run.plan.actions.length === 0 && run.plan.skips.length === 0) {
+      run.state = 'failed';
+      run.message =
+        'Nothing on this page could be read as a form field, so nothing was typed. ' +
+        'Check the page in the browser window — the form may not have loaded yet.';
+      return run;
+    }
+
     run.state = 'filling';
-    run.result = await executePlan(run.session.page, run.plan, (r) => {
-      publish({
-        type: 'fill.step',
-        applicationId: input.applicationId,
-        field: r.field.label,
-        status: r.status,
-        note: r.note,
-      });
+    run.result = await executePlan(run.session.page, run.plan, {
+      // The page the map was just read from. Anything else the browser wanders onto mid-fill
+      // — a select whose onchange navigates, a form that submits itself — stops the run
+      // rather than sending the rest of the plan into a document nobody scanned.
+      documentUrl: run.map.url,
+      onProgress: (r) => {
+        publish({
+          type: 'fill.step',
+          applicationId: input.applicationId,
+          field: r.field.label,
+          status: r.status,
+          note: r.note,
+        });
+      },
     });
 
     run.state = 'done';
     run.message = describeFill(run.result);
+    if (!sameDocument(run.map.url, run.url)) {
+      // Naming the page is the only thing that can catch this. The run was started against
+      // one address and filled another — a sign-in redirect, a wizard that moved on, a tab
+      // the user navigated — and the application is about to be recorded as filled either way.
+      run.message +=
+        ` This was the form at ${run.map.url}, not the address saved with this ` +
+        'application. Check it is the right page before you submit.';
+    }
 
     // All four outcomes, because this is the last thing a stream consumer ever hears about
     // the run. Announcing only `filled` and `skipped` meant a run that typed five values and

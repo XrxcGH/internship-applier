@@ -238,6 +238,92 @@ describe('what is really on the page', () => {
   });
 
   /**
+   * The same two honeypots, behind a shadow boundary.
+   *
+   * The ancestor checks walked with `parentElement`, which is null at the top of a shadow
+   * tree — a ShadowRoot is a document fragment, not an element — so the walk stopped there
+   * and every control inside an open shadow root skipped all of them, at any depth. A design
+   * system that ships its inputs as custom elements is the ordinary case, not an exotic one,
+   * and both honeypots came back "Email address" at 0.97 with nothing above them examined.
+   * Playwright considers them visible, so the value was typed, read back and reported "ok"
+   * over a form that had just flagged the applicant as a bot.
+   *
+   * The light-DOM pair is included in the same page so a fix that only ever worked on one
+   * side of the boundary fails here rather than looking green.
+   */
+  it('does not offer a honeypot hidden by an ancestor across a shadow boundary', async () => {
+    await session.page.setContent(`
+      <input aria-label="Full name" name="full_name">
+      <div style="opacity:0"><input aria-label="Email address" name="light_a"></div>
+      <div style="height:0;overflow:hidden"><input aria-label="Email address" name="light_d"></div>
+      <div style="opacity:0"><hp-b></hp-b></div>
+      <div style="height:0;overflow:hidden"><hp-c></hp-c></div>
+      <script>
+        // An IIFE, because setContent shares a JS realm with whatever this session loaded
+        // before and a top-level const here can collide with one from an earlier page.
+        (() => {
+          const shadowB = document.querySelector('hp-b').attachShadow({ mode: 'open' });
+          // Two divs deep, which is the shape a component library actually ships: the walk
+          // has to cross the boundary, not merely look at the host's immediate child.
+          shadowB.innerHTML =
+            '<div><div><input aria-label="Email address" name="shadow_b"></div></div>';
+          const shadowC = document.querySelector('hp-c').attachShadow({ mode: 'open' });
+          shadowC.innerHTML = '<input aria-label="Email address" name="shadow_c">';
+        })();
+      </script>
+    `);
+    const m = await buildFormMap(session.page);
+
+    // The real field, and nothing else. Named rather than counted, so a regression says
+    // which honeypot came back.
+    expect(m.fields.map((f) => f.label)).toEqual(['Full name']);
+  }, 60_000);
+
+  /**
+   * Two instances of the same web component, which is what a repeated row of a form is.
+   *
+   * `#id` was returned the moment an element had one, with no uniqueness check at all, and
+   * the `[name=...]` check counted with `document.querySelectorAll` — which does not enter
+   * shadow roots, while Playwright's CSS engine does. So two components each holding
+   * `<input id="inner" name="email">` were both given the locator `#inner`, and the count the
+   * code trusted said 1 where the engine resolving it saw 2. Every field of that shape failed
+   * with a raw strict-mode error handed to the user as its note, and no value could be filled
+   * at all.
+   */
+  it('never hands out a locator that resolves to more than one element', async () => {
+    await session.page.setContent(`
+      <input aria-label="Your name">
+      <x-field data-label="Portfolio URL"></x-field>
+      <x-field data-label="Personal site"></x-field>
+      <script>
+        (() => {
+          for (const host of document.querySelectorAll('x-field')) {
+            const shadow = host.attachShadow({ mode: 'open' });
+            shadow.innerHTML =
+              '<input id="inner" name="email" aria-label="' + host.dataset.label + '">';
+          }
+        })();
+      </script>
+    `);
+    const m = await buildFormMap(session.page);
+
+    expect(m.fields.map((f) => f.label)).toEqual(['Your name', 'Portfolio URL', 'Personal site']);
+    expect(new Set(m.fields.map((f) => f.locator)).size).toBe(m.fields.length);
+
+    for (const f of m.fields) {
+      const n = /^__index__(\d+)/.exec(f.locator)?.[1];
+      const resolved =
+        n === undefined
+          ? session.page.locator(f.locator)
+          : session.page.locator(FILLABLE_CONTROLS).nth(Number(n));
+      // One element, and the one the scanner described. A locator that resolves to two is
+      // what Playwright refuses in strict mode.
+      expect(await resolved.count(), `${f.label} (${f.locator})`).toBe(1);
+      expect(await resolved.getAttribute('aria-label'), f.label).toBe(f.label);
+    }
+  }, 60_000);
+
+  /**
    * The scanner collected light-DOM matches before descending into shadow roots, while
    * Playwright's selector engine pierces them in tree order — so on any frame with a
    * shadow-DOM control, every index locator was off by one or more. There is no label

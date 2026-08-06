@@ -18,7 +18,13 @@ import { privacyRoutes } from './routes/privacy';
 import { registerUiStatic } from './ui';
 
 export interface BuildOptions {
-  /** Disable the X-App-Token check. Test-only. */
+  /**
+   * Disable the X-App-Token check. Test-only.
+   *
+   * Left undefined it follows `config.isTest`, which is how the suite runs. Passing `false`
+   * on purpose turns the check on inside a test, which is the only way to have a test that
+   * asserts anything about the token at all.
+   */
   skipAuth?: boolean;
 }
 
@@ -39,6 +45,54 @@ export interface BuildOptions {
  * the built-UI mode sends 127.0.0.1:8787, and both are the same user at the same machine.
  */
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+/**
+ * The one spelling of a request target that this server is allowed to reason about.
+ *
+ * The router percent-decodes a path before it matches, so `/%61pi/privacy/export` reaches
+ * the privacy handler exactly as `/api/privacy/export` does. Every guard here and in the
+ * route modules compared the raw, still-encoded target against a literal path, so changing
+ * a single character to its escape walked past all of them at once: an unauthenticated
+ * `GET /%61pi/privacy/export` returned the whole decrypted export, PII included, and
+ * `POST /%61pi/discovery/run` started a real discovery run against a profile the user had
+ * never confirmed — gate G1, bypassed by typing `%61` instead of `a`.
+ *
+ * THE RULE, so the next guard keeps it: never compare a raw request target against a
+ * literal path. Ask this function first. Percent-encoding is one way to spell a path
+ * differently and it is not the only one, so `.` and `..` segments come out here too — the
+ * router does not collapse them today, but a guard that only knew about the one trick
+ * someone happened to try is how this file got into trouble in the first place.
+ *
+ * Empty segments are deliberately kept: `//api/matches` is a different path to the router
+ * (it 404s), and folding it to `/api/matches` here would only ever make this guard more
+ * permissive than the thing it guards. Everything this function does errs the other way.
+ */
+export function canonicalTarget(target: string): string {
+  const q = target.indexOf('?');
+  const rawPath = q === -1 ? target : target.slice(0, q);
+  const query = q === -1 ? '' : target.slice(q);
+
+  let decoded = rawPath;
+  try {
+    decoded = decodeURIComponent(rawPath);
+  } catch {
+    // A malformed escape is not a path anybody meant. Fastify rejects most of these with a
+    // 400 before a hook ever runs; leaving the target as sent means the guards see an
+    // undecoded string and treat it as guarded, which is the safe direction.
+  }
+
+  const out: string[] = [];
+  for (const segment of decoded.split('/')) {
+    if (segment === '.') continue;
+    if (segment === '..') {
+      out.pop();
+      continue;
+    }
+    out.push(segment);
+  }
+  const path = out.join('/');
+  return (path.startsWith('/') ? path : `/${path}`) + query;
+}
 
 function hostnameOf(host: string): string {
   const value = host.trim().toLowerCase();
@@ -95,7 +149,21 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
       });
     }
 
-    if (opts.skipAuth || config.isTest) return;
+    // Fix the target once, here, rather than asking every guard to decode for itself. This
+    // hook is registered on the root instance and so runs before the onRequest hooks the
+    // route modules add, which means the two G1 checks — `/api/matches` in routes/matches.ts
+    // and `/api/discovery` in routes/discovery.ts — and anything added later all see a path
+    // that cannot be disguised, without having to remember anything. Only the API surface is
+    // rewritten: static assets are looked up on disk by the target they arrived with, and
+    // handing that code a decoded name would make it decode twice.
+    const canonical = canonicalTarget(req.url);
+    if (canonical !== req.url && canonical.startsWith('/api/')) req.raw.url = canonical;
+
+    // `skipAuth: false` passed explicitly is how the test suite reaches the token check at
+    // all: NODE_ENV is `test` throughout the suite, so `config.isTest` used to switch this
+    // branch off before any test could exercise it, and a token bypass was invisible to
+    // every test that could have caught it. Omitting the option keeps the old behaviour.
+    if ((opts.skipAuth ?? config.isTest) === true) return;
 
     // The token guards the API, not the interface. When this server also serves the built
     // UI, requiring a token for `/index.html` would mean the browser could never load the

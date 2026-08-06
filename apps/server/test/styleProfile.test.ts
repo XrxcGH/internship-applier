@@ -106,6 +106,36 @@ describe('computeStyleProfile', () => {
   });
 });
 
+/**
+ * The measured profile is stored as plain JSON while the writing sample behind it is
+ * encrypted, and the privacy export hands the whole row back. Keeping the first three words
+ * of each of the first twelve sentences put verbatim clauses of someone's personal prose in
+ * the clear — and Voice asks for writing that is unedited, so those clauses are exactly as
+ * personal as the sample is. Deleting the sample does not remove them.
+ */
+describe('the measured profile does not quote the sample', () => {
+  const PERSONAL = `
+My mother died the winter I started at the lab. I kept going anyway, mostly because the
+building was warm. The centrifuge hummed all night and I found that steadying. Doctor Ellis
+noticed before anyone else did. She asked me about it once and never again.
+`.trim();
+
+  const profile = computeStyleProfile([{ id: 's1', content: PERSONAL }], NOW);
+
+  it('keeps opening words, not opening phrases', () => {
+    expect(profile.openingPatterns.length).toBeGreaterThan(0);
+    for (const o of profile.openingPatterns) expect(o, o).not.toContain(' ');
+    expect(profile.openingPatterns).toContain('i');
+  });
+
+  it('leaves no content word from the sample anywhere in the profile', () => {
+    const dumped = JSON.stringify(profile).toLowerCase();
+    for (const word of ['mother', 'died', 'centrifuge', 'ellis', 'steadying']) {
+      expect(dumped, word).not.toContain(word);
+    }
+  });
+});
+
 describe('adequacy and description', () => {
   it('is honest about thin input', () => {
     expect(sampleAdequacy(0).level).toBe('none');

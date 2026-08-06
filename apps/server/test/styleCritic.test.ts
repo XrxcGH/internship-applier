@@ -100,11 +100,51 @@ describe('honest refusal to measure', () => {
     expect(r.tooShort).toBe(true);
     expect(r.drift).toEqual([]);
     expect(describeMatch(r)).toContain('Too short');
+    // A perfect score is a claim about a comparison. This one did not happen.
+    expect(r.match).toBeNull();
   });
 
   it('reports no drift when there is no measured voice to compare against', () => {
     const r = critiqueStyle(SAMPLES, undefined);
     expect(r.drift).toEqual([]);
-    expect(r.match).toBe(1);
+    expect(r.match).toBeNull();
+  });
+});
+
+/**
+ * The overall score used to average only the drifts that cleared the reporting threshold,
+ * so the divisor grew every time a draft picked up a new problem. A draft with one bad
+ * dimension scored 0, and the SAME draft with a second, milder problem added scored 0.13:
+ * the number went up because the writing got worse. Nothing renders this figure today, but
+ * the moment a percentage appears beside a draft it is one a user will act on.
+ */
+describe('the overall score moves the right way', () => {
+  const ONE_TELL = `
+I didn't expect to like databases. I really didn't.
+
+But the first time I watched a query planner pick a completely different strategy — because
+I'd added one index — that was the moment it clicked, and I've been chasing that feeling
+since. Storage engines are just an elaborate argument — about what you're willing to give
+up. Speed? Space? Pick two, mostly.
+
+So I built a toy key-value store. It's bad! It leaks memory under load and the write-ahead
+log is embarrassing. But I understand B-trees now — in a way no textbook gave me.
+`.trim();
+
+  const TWO_TELLS = `${ONE_TELL}\n\nI kept at it.\n\nIt paid off.\n\nEventually.`;
+
+  it('never rewards a draft for acquiring another problem', () => {
+    const one = critiqueStyle(ONE_TELL, YOURS);
+    const two = critiqueStyle(TWO_TELLS, YOURS);
+    expect(one.drift).toHaveLength(1);
+    expect(two.drift.length).toBeGreaterThan(one.drift.length);
+    expect(two.match!).toBeLessThanOrEqual(one.match!);
+  });
+
+  it('counts the dimensions that came back clean', () => {
+    const one = critiqueStyle(ONE_TELL, YOURS);
+    // Averaging over the reported drifts alone made the mean equal to the worst, so a
+    // single bad dimension scored as though every dimension were that bad.
+    expect(one.match!).toBeGreaterThan(1 - one.drift[0]!.severity);
   });
 });

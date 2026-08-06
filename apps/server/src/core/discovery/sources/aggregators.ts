@@ -5,6 +5,11 @@
  * reports itself unconfigured and the run summary says so explicitly, rather than
  * quietly contributing nothing — an invisible gap in coverage reads as "we searched
  * everywhere" when we didn't.
+ *
+ * Those notes name the .env file because that is where the keys are read from. They used to
+ * say "in Settings", and Settings has no key field and no mention of either source: the one
+ * place a user finds out why federal internships were missing sent them looking for a box
+ * that does not exist, with no second instruction to fall back on.
  */
 import { DEFAULT_FILTERS } from '@ia/shared';
 import { fetchJson, politeFetch } from '../../../infra/http/fetcher';
@@ -92,8 +97,9 @@ export const adzuna: JobSource = {
       return {
         postings: [],
         notes: [
-          'adzuna: skipped — no API key. Get a free one at developer.adzuna.com and add ' +
-            'ADZUNA_APP_ID / ADZUNA_APP_KEY in Settings.',
+          'adzuna: skipped — no API key. Get a free one at developer.adzuna.com and set ' +
+            'ADZUNA_APP_ID / ADZUNA_APP_KEY in the .env file at the root of this project, ' +
+            'then restart the server.',
         ],
       };
     }
@@ -214,9 +220,10 @@ export const usajobs: JobSource = {
       return {
         postings: [],
         notes: [
-          'usajobs: skipped — no API key. Register free at developer.usajobs.gov and add ' +
-            'USAJOBS_API_KEY / USAJOBS_USER_AGENT in Settings. This is the source for ' +
-            'federal internships and Pathways.',
+          'usajobs: skipped — no API key. Register free at developer.usajobs.gov and set ' +
+            'USAJOBS_API_KEY / USAJOBS_USER_AGENT in the .env file at the root of this ' +
+            'project, then restart the server. This is the source for federal internships ' +
+            'and Pathways.',
         ],
       };
     }

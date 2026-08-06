@@ -15,7 +15,10 @@
  *
  * G4. There is no branch in this file that clicks a submit control, and the fixture
  * records every POST it receives so the suite can prove no form was submitted rather than
- * merely that no `.click()` was written.
+ * merely that no `.click()` was written. Not clicking submit is only half of it: typing can
+ * submit a form too, because `pressSequentially` presses a real key per character and
+ * Playwright's keyboard treats "\n" and "\r" as Enter, which a single-input form submits on.
+ * Nothing below sends a key a form can act on — see LINE_BREAK.
  */
 import type { Frame, Locator, Page } from 'playwright';
 import type { FormField } from '@ia/shared';
@@ -41,6 +44,25 @@ export interface FillResult {
 }
 
 /**
+ * Is the browser still showing the document the form was read from?
+ *
+ * Origin and path only. A form that appends `?step=2` to its own address, or a fragment, or
+ * a tracking parameter, is still the page whose controls were scanned, and stopping a fill
+ * over that would be the tool crying wolf. A different path is not: every locator in the
+ * plan, and every index locator especially, describes a document that has gone.
+ */
+export function sameDocument(current: string, recorded: string): boolean {
+  if (current === recorded) return true;
+  try {
+    const a = new URL(current);
+    const b = new URL(recorded);
+    return a.origin === b.origin && a.pathname === b.pathname;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolves the frame a field lives in, or nothing at all.
  *
  * Matching on the URL alone was wrong twice over. Frames share URLs far more often than it
@@ -56,8 +78,18 @@ export interface FillResult {
  * so is the only honest outcome — read-back cannot help here, because it re-reads whatever
  * wrong element was resolved and finds the value sitting in it.
  */
-function frameFor(page: Page, field: FormField): Frame | undefined {
-  if (!field.frame) return page.mainFrame();
+function frameFor(page: Page, field: FormField, documentUrl?: string): Frame | undefined {
+  if (!field.frame) {
+    // The main document gets the same treatment the iframe half has always had. It was
+    // exempt, and that exemption was how an approved essay reached a Social Security Number
+    // box: filling a country dropdown fired the page's own `location.href` handler, the
+    // browser moved to step two, and `__index__1` — a position, not an identity — resolved
+    // to whatever sat second in a document the redline pass had never scanned. Read-back
+    // could not help, because it re-read the wrong element and found the value in it.
+    const main = page.mainFrame();
+    if (documentUrl && !sameDocument(main.url(), documentUrl)) return undefined;
+    return main;
+  }
   const { index, url } = parseFrameKey(field.frame);
   // The position is counted over the whole list, the way the scanner numbered it.
   const all = page.frames();
@@ -95,18 +127,56 @@ function comparable(s: string): string {
 }
 
 /**
+ * How much of a value a form may drop and still be said to have kept it.
+ *
+ * A form that trims a few characters off the end has done something ordinary. A form that
+ * keeps one character of a 600-character essay has thrown the answer away, and "any
+ * non-empty prefix counts" reported that as filled — the precise failure read-back exists to
+ * catch. The plan already slices to the form's own maxlength before typing, so a loss this
+ * large is never the budget being enforced.
+ */
+const KEPT_ENOUGH = 0.9;
+
+/**
  * Did the page keep what we typed?
  *
  * Deliberately lenient about formatting and strict about content. "+1 (555) 010-0000"
- * matching "15550100000" is the form being helpful; an empty box is not.
+ * matching "15550100000" is the form being helpful; an empty box is not, and neither is a
+ * box holding a tenth of the answer.
  */
 function accepted(intended: string, actual: string): boolean {
   if (actual === intended) return true;
   const a = comparable(actual);
   const b = comparable(intended);
   if (!a) return false;
-  // Truncation at maxlength is the form's decision, and it kept a prefix of the truth.
-  return a === b || b.startsWith(a) || a.startsWith(b);
+  if (a === b) return true;
+  // A prefix, and nearly all of one. The other direction — the page holding MORE than was
+  // typed — used to count as well, which is how a second fill run that appended an approved
+  // answer to itself came back "ok" with the answer in the box twice.
+  return b.startsWith(a) && a.length >= b.length * KEPT_ENOUGH;
+}
+
+/**
+ * Line breaks, in every shape a real answer arrives in.
+ *
+ * THE RULE: nothing this tool types may be a character the browser will act on as a key.
+ * `pressSequentially` presses one key per character, and Playwright's US layout aliases both
+ * "\n" and "\r" to Enter — so "\r\n" is two Enter presses. In a form whose only text box is
+ * a single-line <input>, one Enter is the browser's implicit submit: an ordinary
+ * two-paragraph answer, approved by the user but not yet read on the page, sent the
+ * application to the employer, and the run reported the field as a mismatch and the rest as
+ * timeouts, which reads like a flaky page rather than a submitted application.
+ *
+ * Enter is the only character in that layout today; Tab and the other control characters
+ * arrive as plain text. So a break is dropped to a space where the control cannot hold one,
+ * and where it can, it is inserted with `insertText`, which fires no key events at all. If a
+ * future Playwright maps another character to a key, it belongs here too.
+ */
+const LINE_BREAK = /\r\n?|\n/;
+
+/** Controls that can hold more than one line, so a break belongs in the value. */
+function holdsLineBreaks(control: FormField['control']): boolean {
+  return control === 'textarea' || control === 'richtext';
 }
 
 /** The words of a label, so "No, not now or in the future" starts with the word "no". */
@@ -147,6 +217,10 @@ export interface SelectOption {
  * An option carrying an empty value is the "Select an option" placeholder; choosing it does
  * not fill a field, it blanks one. When nothing clears the bar the field is left for the
  * user, which is a far better outcome than a confident wrong answer under their name.
+ *
+ * EVERY option list goes through here — `<select>`, radio groups, and div comboboxes alike.
+ * Each of the other two kept a matcher of its own after this one was hardened, and each of
+ * them went on making this exact mistake on the sponsorship question. One list, one rule.
  */
 export function chooseOption<T extends SelectOption>(options: T[], value: string): T | undefined {
   const real = options.filter((o) => o.value.trim() !== '');
@@ -174,19 +248,18 @@ async function readValue(loc: Locator, field: FormField): Promise<string> {
   }
 }
 
-/** Turns a value into a literal for RegExp, so "C++" is a string and not a syntax error. */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
+async function fillOne(page: Page, action: FillAction, documentUrl?: string): Promise<FieldResult> {
   const { field, value } = action;
-  const frame = frameFor(page, field);
+  const frame = frameFor(page, field, documentUrl);
   if (!frame) {
+    const moved = !field.frame;
     return {
       field,
       status: 'failed',
-      note: 'The part of the page this field lives in is no longer there. Fill it in yourself.',
+      note: moved
+        ? 'The page moved to a different address after this form was read, so nothing was ' +
+          'typed here. Open the form again.'
+        : 'The part of the page this field lives in is no longer there. Fill it in yourself.',
     };
   }
   const loc = locate(frame, field);
@@ -201,6 +274,17 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
    * you teach someone to click past the one that matters.
    */
   let expected = value;
+
+  /**
+   * What the report prints when the page kept the value, when that is not the read-back.
+   *
+   * A ticked checkbox reads back "checked", and nobody needs telling that; they need telling
+   * what it was ticked for.
+   */
+  let reported: string | undefined;
+
+  /** Anything the user should know about a value that was adjusted before it was typed. */
+  let adjusted: string | undefined;
 
   try {
     await loc.waitFor({ state: 'visible', timeout: 5000 });
@@ -272,12 +356,16 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
         // A grouped radio is a question with options, and the choice is made by matching
         // the intended value against each button's OWN text — never by ticking whichever
         // button happened to carry the group's question as its label.
+        //
+        // Matched by the same rule as a dropdown, because an option list is an option list
+        // wherever it is drawn. Letter-level prefix matching lived here after it had been
+        // taken out of `chooseOption`, and it did the same damage one control down: "Yes"
+        // ticked "Yes, but I will require sponsorship now or in the future" and "Currently
+        // enrolled" ticked "Currently enrolled part-time", each by document order, each
+        // reported ok. Whatever `chooseOption` learns next, radios learn with it.
         const options = field.options ?? [];
         if (options.length > 0) {
-          const chosen =
-            options.find((o) => comparable(o.label) === comparable(value)) ??
-            options.find((o) => comparable(o.value) === comparable(value)) ??
-            options.find((o) => comparable(o.label).startsWith(comparable(value)));
+          const chosen = chooseOption(options, value);
           if (!chosen?.locator) {
             return {
               field,
@@ -296,6 +384,7 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
         if (/^(yes|true|on|checked)$/i.test(value)) await loc.check();
         else return { field, status: 'skipped', note: 'Left for you to decide.' };
         expected = 'checked';
+        reported = value;
         break;
       }
 
@@ -305,6 +394,7 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
         if (/^(yes|true|on|checked)$/i.test(value)) await loc.check();
         else return { field, status: 'skipped', note: 'Left for you to decide.' };
         expected = 'checked';
+        reported = value;
         break;
       }
 
@@ -312,21 +402,72 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
         // A div-based combobox has no value to set: it has to be opened and an option
         // clicked, the same way a person would.
         await loc.click();
-        // The value is a person's data, not a pattern. Unescaped, "C++" threw
-        // "Nothing to repeat" and "Washington (State)" quietly matched nothing.
-        const option = frame
-          .locator('[role=option]')
-          .filter({ hasText: new RegExp(escapeRegExp(value.slice(0, 24)), 'i') })
-          .first();
-        if ((await option.count()) === 0) {
-          return { field, status: 'skipped', note: `No option matching "${value}".` };
+
+        /**
+         * The options are read first and chosen between in memory, by the same rule as a
+         * dropdown — never by asking the page for the first option whose text contains the
+         * value. That substring search picked "Yes, now or in the future" for "No" (the word
+         * "now" carries the letters), "Australia" for "US" and "Nevada" for "VA", and it had
+         * already clicked the wrong one by the time read-back could object. The listbox this
+         * combobox owns is preferred over the whole frame because an ATS that renders every
+         * question's options into one document will otherwise offer up an option belonging to
+         * a different question entirely.
+         */
+        const owns =
+          (await loc.getAttribute('aria-controls')) ?? (await loc.getAttribute('aria-owns'));
+        const listbox = owns ? frame.locator(`[id="${owns.replace(/["\\]/g, '\\$&')}"]`) : null;
+        const scope = listbox && (await listbox.count()) > 0 ? listbox : frame;
+        const optionLoc = scope.locator('[role=option]');
+        const offered = await optionLoc.evaluateAll((els) =>
+          els.map((el) => ({
+            value:
+              el.getAttribute('data-value') ??
+              el.getAttribute('value') ??
+              (el.textContent ?? '').trim(),
+            label: (el.getAttribute('aria-label') ?? el.textContent ?? '').trim(),
+          })),
+        );
+        if (offered.length === 0) {
+          return { field, status: 'skipped', note: 'This dropdown offered no options to pick.' };
         }
-        await option.click();
-        break;
+        const picked = chooseOption(
+          offered.map((o, index) => ({ ...o, index })),
+          value,
+        );
+        if (!picked) {
+          return {
+            field,
+            status: 'skipped',
+            note: `No option matching "${value}". Choose it yourself.`,
+          };
+        }
+        await optionLoc.nth(picked.index).click();
+
+        // Like a select, this cannot be verified by re-reading — the widget holds whatever it
+        // was told — so the report prints the words the page now shows.
+        const now = await readValue(loc, field);
+        const held = comparable(now);
+        if (held === comparable(picked.value) || held === comparable(picked.label)) {
+          return { field, status: 'ok', readBack: picked.label };
+        }
+        return {
+          field,
+          status: 'mismatch',
+          readBack: now,
+          note: now
+            ? `The page shows "${now}" instead. Check this one.`
+            : 'The page did not keep this value. Fill it in yourself.',
+        };
       }
 
       case 'richtext': {
         await loc.click();
+        // Clear anything already in the box, exactly as the typing branch does. Without it a
+        // second run on a contenteditable essay inserted the approved answer after the copy
+        // already sitting there, leaving the employer's form holding it twice — and read-back
+        // called that ok, because the box did contain what we typed.
+        await loc.fill('');
+        // `insertText` fires no key events, so a line break here cannot press Enter.
         await page.keyboard.insertText(value);
         break;
       }
@@ -335,7 +476,28 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
         // A date input holds a structured value, not text. Typing into one produces
         // whatever the browser's segmented editor makes of the keystrokes, which for an
         // ISO string is nothing. `fill()` is the only thing that sets it correctly.
-        await loc.fill(value);
+        //
+        // And the two granularities are not interchangeable. A graduation is stored as a
+        // month ("2027-05") and an availability as a full day ("2027-06-01"), while the
+        // scanner reports <input type=date> and <input type=month> as the same kind of
+        // control — so whichever the employer used, one of them was handed a value the input
+        // cannot hold. Playwright throws "Malformed value" at that, and those two words were
+        // what the user was shown next to their graduation date, on every form that asked
+        // for one, forever.
+        const kind = await loc
+          .evaluate((el: unknown) => String((el as { type?: string }).type ?? '').toLowerCase())
+          .catch(() => '');
+        let iso = value;
+        if (kind === 'date' && /^\d{4}-\d{2}$/.test(iso)) {
+          iso = `${iso}-01`;
+          adjusted =
+            'Your profile records only the month, so the first of it was used. ' +
+            'Change the day if this form needs an exact date.';
+        } else if (kind === 'month' && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+          iso = iso.slice(0, 7);
+        }
+        await loc.fill(iso);
+        expected = iso;
         break;
       }
 
@@ -343,12 +505,25 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
         await loc.click();
         // Clear anything prefilled, or values concatenate.
         await loc.fill('');
+
+        // A line break is never pressed. See LINE_BREAK: Enter is a key, and in a
+        // single-input form it is the submit button.
+        const lines = value.split(LINE_BREAK);
+        const multiline = holdsLineBreaks(field.control);
+        expected = lines.join(multiline ? '\n' : ' ');
+        if (!multiline && lines.length > 1) {
+          adjusted = 'This box holds one line, so the breaks in your answer became spaces.';
+        }
         // Real key events, because that is what widgets listen for. The DELAY between
         // them is not what makes them work, so anything past LONG_TEXT gets none.
-        await loc.pressSequentially(value, {
-          delay: value.length > LONG_TEXT ? 0 : keyDelay(),
-          timeout: 60_000,
-        });
+        const delay = value.length > LONG_TEXT ? 0 : keyDelay();
+        for (const [i, line] of lines.entries()) {
+          if (i > 0) {
+            if (multiline) await page.keyboard.insertText('\n');
+            else await loc.pressSequentially(' ', { delay, timeout: 60_000 });
+          }
+          if (line) await loc.pressSequentially(line, { delay, timeout: 60_000 });
+        }
       }
     }
 
@@ -356,7 +531,7 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
     if (accepted(expected, readBack)) {
       // The report shows what a person would see on the page, not the option code we
       // compared against.
-      return { field, status: 'ok', readBack: expected === value ? readBack : value };
+      return { field, status: 'ok', readBack: reported ?? readBack, note: adjusted };
     }
 
     return {
@@ -376,6 +551,19 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
   }
 }
 
+export interface ExecuteOptions {
+  onProgress?: (r: FieldResult) => void;
+  /**
+   * The address the FormMap was read from, so a fill that outlives its own page can stop.
+   *
+   * Without it every locator is resolved against whatever the browser happens to be showing.
+   * A country dropdown with an `onchange` that sets `location.href` — an everyday pattern —
+   * is enough: the page moved to step two, and the rest of the plan carried on typing into a
+   * document nobody had scanned and the redline pass had never seen.
+   */
+  documentUrl?: string;
+}
+
 /**
  * Runs the plan.
  *
@@ -386,16 +574,40 @@ async function fillOne(page: Page, action: FillAction): Promise<FieldResult> {
 export async function executePlan(
   page: Page,
   plan: FillPlan,
-  onProgress?: (r: FieldResult) => void,
+  opts: ExecuteOptions = {},
 ): Promise<FillResult> {
+  const { onProgress, documentUrl } = opts;
   const results: FieldResult[] = [];
+  let movedTo: string | undefined;
 
   for (const action of plan.actions) {
-    const r = await fillOne(page, action);
+    if (movedTo) {
+      // Stopping is the point. A page that navigated mid-plan invalidates every locator left
+      // in it, and an index locator does not fail when that happens — it resolves to
+      // whatever now sits at that position and reports it filled.
+      const r: FieldResult = {
+        field: action.field,
+        status: 'failed',
+        note: 'The page moved to a different address partway through, so nothing was typed here.',
+      };
+      results.push(r);
+      onProgress?.(r);
+      continue;
+    }
+
+    const r = await fillOne(page, action, documentUrl);
     results.push(r);
     onProgress?.(r);
     if (r.status !== 'ok') {
       logger.warn({ label: r.field.label, status: r.status, note: r.note }, 'field not filled');
+    }
+
+    if (documentUrl) {
+      const now = page.mainFrame().url();
+      if (!sameDocument(now, documentUrl)) {
+        movedTo = now;
+        logger.warn({ from: documentUrl, to: now }, 'page moved to a different address; stopping');
+      }
     }
   }
 
@@ -420,9 +632,20 @@ export async function executePlan(
  * read as done, and the whole point of stopping before submit is that it is not.
  */
 export function describeFill(result: FillResult): string {
+  if (result.results.length === 0) {
+    // A run that found nothing is not a successful run. "All 0 fields filled. Read the page,
+    // then submit it yourself." is what the user was told when the form had not rendered yet
+    // — a career-site SPA, or a page behind an "Apply now" step — and it sent them to submit
+    // a form this tool had never typed a character into, under a green tick.
+    return (
+      'Nothing on this page could be read as a form field, so nothing was typed. ' +
+      'Check the page in the browser window.'
+    );
+  }
   const needsYou = result.results.filter((r) => r.status !== 'ok').length;
   if (needsYou === 0) {
-    return `All ${result.filled} fields filled. Read the page, then submit it yourself.`;
+    const n = result.filled;
+    return `All ${n} field${n === 1 ? '' : 's'} filled. Read the page, then submit it yourself.`;
   }
   return (
     `${needsYou} field${needsYou === 1 ? '' : 's'} still need${needsYou === 1 ? 's' : ''} you. ` +

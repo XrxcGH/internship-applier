@@ -8,6 +8,13 @@ import { z } from 'zod';
  * `UNVERIFIED_CLAIMS` — so a client branching on the documented code would have sat waiting
  * for a rejection that never arrived. Every code below is one a route in apps/server/src
  * emits today; add one here in the same commit that starts emitting it.
+ *
+ * That last sentence was a promise this file could not keep on its own, and it was broken
+ * twice: `PAST_FILLING` and `APPLICATION_IN_PROGRESS` were both being sent by the fill route
+ * while this list denied they existed, so `ApiError.parse` on either one threw a ZodError
+ * instead of yielding the code a client needed to branch on. `scripts/audit-error-codes.ts`
+ * runs in CI and compares this list against what the routes actually emit, so the next
+ * omission fails a build rather than waiting for someone to notice.
  */
 export const ApiErrorCode = z.enum([
   'PROFILE_NOT_CONFIRMED',
@@ -23,6 +30,8 @@ export const ApiErrorCode = z.enum([
   'DRAFT_FAILED',
   'FILL_FAILED',
   'NO_RUN',
+  'PAST_FILLING',
+  'APPLICATION_IN_PROGRESS',
   'INTERNAL',
 ]);
 

@@ -269,8 +269,21 @@ function toEntry(row: typeof schema.answerTemplate.$inferSelect): LibraryEntry {
  * naming the previous employer went out to the next one. Legal suffixes are dropped and
  * each remaining word is enough on its own; short words are excluded because a company
  * called "Box" or "On" would otherwise match half the English language.
+ *
+ * TWO THINGS THIS GETS WRONG IF YOU REORDER IT. The legal suffix comes off BEFORE the
+ * whole-name check, not after: with the suffix still attached, "IBM Corp." was looked for
+ * as the run "ibm corp", which appears in nobody's prose, and the word pass behind it then
+ * threw "ibm" away for being three letters. So an answer opening "IBM is where mainframes
+ * still matter" was correctly withheld when the posting said "IBM" and handed to the next
+ * employer when it said "IBM Corp." — the guarantee in the header turned on whether the
+ * posting's company field happened to carry a full stop. And the short-word floor applies
+ * to ordinary words only: IBM, SAP, AWS and GE are the whole distinctive name, not a
+ * fragment of one, and an all-caps run is never the sort of everyday word the floor exists
+ * to exclude. Erring towards `true` here costs a reuse; erring towards `false` addresses a
+ * cover letter to the wrong company.
  */
 const LEGAL_SUFFIX = /\b(inc|llc|ltd|corp|corporation|co|gmbh|plc|sa|nv|ag|limited)\b/g;
+const LEGAL_SUFFIX_WORD = /^(inc|llc|ltd|corp|corporation|co|gmbh|plc|sa|nv|ag|limited)$/i;
 
 function namesCompany(text: string, company: string): boolean {
   const flatten = (s: string): string =>
@@ -281,15 +294,14 @@ function namesCompany(text: string, company: string): boolean {
       .trim()} `;
 
   const haystack = flatten(text);
-  const full = flatten(company).trim();
-  if (full.length > 1 && haystack.includes(` ${full} `)) return true;
+  const bare = flatten(company).replace(LEGAL_SUFFIX, ' ').replace(/\s+/g, ' ').trim();
+  if (bare.length > 1 && haystack.includes(` ${bare} `)) return true;
 
-  const words = full
-    .replace(LEGAL_SUFFIX, ' ')
-    .split(' ')
-    .filter((w) => w.length > 3);
-
-  return words.some((w) => haystack.includes(` ${w} `));
+  return company
+    .split(/[^A-Za-z0-9]+/)
+    .filter((w) => w.length > 0 && !LEGAL_SUFFIX_WORD.test(w))
+    .filter((w) => w.length > 3 || /^[A-Z0-9]{2,}$/.test(w))
+    .some((w) => haystack.includes(` ${w.toLowerCase()} `));
 }
 
 /**

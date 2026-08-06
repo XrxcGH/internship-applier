@@ -109,13 +109,82 @@ describe('age_minimum', () => {
   it('fails when too young, and says so', () => {
     const o = evaluateEligibility(
       input({
-        profile: profile({ derived: { ...profile().derived, age: 16, isMinor: true } }),
+        profile: profile({
+          dateOfBirth: '2010-03-15',
+          derived: { ...profile().derived, age: 16, isMinor: true },
+        }),
         requirements: [req('age', { min: 18 })],
       }),
     );
     expect(statusOf(o, 'age_minimum')).toBe('fail');
     expect(o.eligibility).toBe('ineligible');
     expect(o.blockers[0]!.because).toMatch(/16.*18/);
+  });
+
+  /**
+   * `profile.derived` is written when the profile is saved and never again, so a student who
+   * filled in the wizard at 17 stayed 17 on every matching run afterwards and "must be 18 to
+   * apply" went on hiding postings for months after their birthday. The rule reads the clock
+   * it was handed, not the one that happened to be running the day they last saved.
+   */
+  it('counts a birthday that has passed since the profile was last saved', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({
+          dateOfBirth: '2008-06-15',
+          derived: { ...profile().derived, age: 17, isMinor: true },
+        }),
+        requirements: [req('age', { min: 18 })],
+      }),
+    );
+    expect(statusOf(o, 'age_minimum')).toBe('pass');
+    expect(o.blockers).toEqual([]);
+  });
+
+  /**
+   * "Interns who drive company vehicles must be 21 years of age. All applicants must be 18
+   * years or older to apply." is two `age` requirements, both required, both extracted at
+   * the same confidence — so whichever sentence the posting printed first decided the rule,
+   * and a 19-year-old was told the posting requires 21+. Printing the sentences the other
+   * way round passed the same person.
+   */
+  it('does not let one of several stated minimum ages decide the rule', () => {
+    const vehicles = req('age', { min: 21 }, { confidence: 0.95 });
+    const toApply = req('age', { min: 18 }, { confidence: 0.95 });
+
+    for (const requirements of [
+      [vehicles, toApply],
+      [toApply, vehicles],
+    ]) {
+      const o = evaluateEligibility(
+        input({
+          profile: profile({
+            dateOfBirth: '2007-03-15',
+            derived: { ...profile().derived, age: 19 },
+          }),
+          requirements,
+        }),
+      );
+      expect(statusOf(o, 'age_minimum'), JSON.stringify(requirements.map((r) => r.id))).toBe(
+        'unknown',
+      );
+      expect(o.blockers).toEqual([]);
+    }
+  });
+
+  /** Someone below every minimum the posting states is still disqualified, on the lowest. */
+  it('fails below the lowest of several stated minimum ages, and quotes that one', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({
+          dateOfBirth: '2009-03-15',
+          derived: { ...profile().derived, age: 17, isMinor: true },
+        }),
+        requirements: [req('age', { min: 21 }), req('age', { min: 18 })],
+      }),
+    );
+    expect(statusOf(o, 'age_minimum')).toBe('fail');
+    expect(o.blockers[0]!.because).toMatch(/17.*18/);
   });
 
   /** A missing DOB must ask, not assume adulthood and not hide the posting. */
@@ -217,6 +286,53 @@ describe('education_level', () => {
       }),
     );
     expect(statusOf(o, 'education_level')).toBe('pass');
+  });
+
+  /**
+   * The checklist quotes the requirement a rule cites, so citing the wrong one prints a
+   * sentence that had nothing to do with the verdict. A posting reading "must be enrolled in
+   * a PhD program" beside "a bachelor's degree in mathematics is a plus" rejected an
+   * undergraduate and showed the bachelor's line — the one written to welcome them — as the
+   * reason they were turned away.
+   */
+  it('cites a level the posting insisted on, never one it merely liked', () => {
+    const aPlus = req('education_level', { levels: ['bachelor'] }, { necessity: 'preferred' });
+    const insisted = req('education_level', { levels: ['doctorate'] });
+    const o = evaluateEligibility(input({ requirements: [aPlus, insisted] }));
+
+    expect(statusOf(o, 'education_level')).toBe('fail');
+    expect(o.blockers[0]!.requirementId).toBe(insisted.id);
+  });
+
+  it('cites a required clause when it has to ask which level is meant', () => {
+    const aPlus = req('education_level', { levels: ['bachelor'] }, { necessity: 'preferred' });
+    const insisted = req('education_level', { levels: ['master'] });
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ derived: { ...profile().derived, academicLevel: 'none' } }),
+        requirements: [aPlus, insisted],
+      }),
+    );
+
+    const r = o.rules.find((x) => x.rule === 'education_level')!;
+    expect(r.status).toBe('unknown');
+    expect(r.requirementId).toBe(insisted.id);
+  });
+
+  /**
+   * A level that is not on the degree ladder cannot be ranked against one that is, and
+   * ranking it anyway made it satisfy nothing at all and hard-fail. Asking is the only
+   * honest answer for a bootcamp graduate against "Bachelor's required".
+   */
+  it('asks rather than fails when the level is not on the degree ladder', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ derived: { ...profile().derived, academicLevel: 'bootcamp' } }),
+        requirements: [req('education_level', { levels: ['bachelor'] })],
+      }),
+    );
+    expect(statusOf(o, 'education_level')).toBe('unknown');
+    expect(o.blockers).toEqual([]);
   });
 });
 
@@ -347,6 +463,32 @@ describe('enrollment', () => {
       }),
     );
     expect(statusOf(o, 'enrollment')).toBe('pass');
+  });
+
+  /**
+   * "Current students only" in the header and "recent graduates are also welcome to apply"
+   * in the small print is one posting saying both things, and reading whichever clause was
+   * extracted with the higher confidence let a coin toss filter every graduate out of a
+   * posting that had invited them in so many words. Both orders are checked, because the
+   * confidences tie as often as not and then text order decides.
+   */
+  it('lets a clause saying enrolment is not needed settle it, whatever its confidence', () => {
+    const studentsOnly = req('enrollment', { required: true }, { confidence: 0.8 });
+    const gradsWelcome = req('enrollment', { required: false }, { confidence: 0.7 });
+
+    for (const requirements of [
+      [studentsOnly, gradsWelcome],
+      [gradsWelcome, studentsOnly],
+    ]) {
+      const o = evaluateEligibility(
+        input({
+          profile: profile({ derived: { ...profile().derived, expectedGraduation: '2025-05' } }),
+          requirements,
+        }),
+      );
+      expect(statusOf(o, 'enrollment'), JSON.stringify(requirements.map((r) => r.id))).toBe('pass');
+      expect(o.blockers).toEqual([]);
+    }
   });
 });
 
@@ -496,7 +638,11 @@ describe('citizenship', () => {
     expect(statusOf(o, 'citizenship')).toBe('unknown');
   });
 
-  /** A preferred country must not widen — or narrow — one the posting actually insists on. */
+  /**
+   * A preferred country must not widen — or narrow — one the posting actually insists on,
+   * for somebody who holds neither. "Canadian citizens preferred" beside "US citizenship
+   * required" still rules out an Indian citizen, and the rejection quotes the rule.
+   */
   it('still fails on a stated citizenship requirement beside a preferred one', () => {
     const o = evaluateEligibility(
       input({
@@ -509,6 +655,30 @@ describe('citizenship', () => {
     );
     expect(statusOf(o, 'citizenship')).toBe('fail');
     expect(o.blockers[0]!.because).toContain('US');
+  });
+
+  /**
+   * The person that same posting is arguing about is the Canadian. Pooling only the
+   * countries the posting insisted on threw away the softer clause entirely, so "US
+   * citizenship required" beside "Canadian citizens may also apply" hard-failed exactly the
+   * applicant the second sentence was written for. A posting that says both is contradicting
+   * itself and only the user can settle it, so they are asked and shown the clause that
+   * named their own nationality.
+   */
+  it('asks rather than fails when a softer clause names a nationality the user holds', () => {
+    for (const necessity of ['preferred', 'unclear'] as const) {
+      const alsoWelcome = req('citizenship', { countries: ['CA'] }, { necessity });
+      const o = evaluateEligibility(
+        input({
+          profile: profile({ citizenships: ['CA'] }),
+          requirements: [req('citizenship', { countries: ['US'] }), alsoWelcome],
+        }),
+      );
+      const r = o.rules.find((x) => x.rule === 'citizenship')!;
+      expect(r.status, necessity).toBe('unknown');
+      expect(r.requirementId).toBe(alsoWelcome.id);
+      expect(o.blockers).toEqual([]);
+    }
   });
 });
 
@@ -554,18 +724,84 @@ describe('location', () => {
    * "New York, NY or Remote" is ONE Greenhouse location string, and parseLocation turns
    * it into a city with the remote flag set. Reading that as remote-only hard-failed a
    * user who lives in New York and simply prefers to go into an office.
+   *
+   * `workArrangement` is 'remote' here because that is what discovery stores for such a
+   * posting: parseWorkArrangement scrapes the word out of the description text, so a line
+   * like "our teams collaborate with remote colleagues" is enough to set it. Passing null
+   * was the one value the pipeline will not produce for that text, and the test could not
+   * fail.
    */
   it('does not fail a posting that offers remote alongside a city the user lives in', () => {
     const o = evaluateEligibility(
       input({
         profile: profile({ locationPrefs: { ...profile().locationPrefs, remoteOk: false } }),
         posting: posting({
-          workArrangement: null,
+          workArrangement: 'remote',
           locations: [{ city: 'Boston', region: 'MA', country: 'US', remote: true }],
         }),
       }),
     );
     expect(statusOf(o, 'location')).toBe('pass');
+  });
+
+  /**
+   * The word is scraped out of prose and the office is a field the board filled in, so the
+   * office wins. "Our teams collaborate with remote colleagues across the world" under a
+   * heading of "Location: New York, NY" parses as `remote` and hid an onsite job in the
+   * user's own city; "some full-time roles are hybrid" did the same to a posting that says
+   * interns are onsite five days a week.
+   */
+  it('does not fail on a scraped arrangement while the posting names an office', () => {
+    for (const workArrangement of ['remote', 'hybrid']) {
+      const o = evaluateEligibility(
+        input({
+          profile: profile({
+            locationPrefs: { ...profile().locationPrefs, remoteOk: false, hybridOk: false },
+          }),
+          posting: posting({
+            workArrangement,
+            locations: [{ city: 'Boston', region: 'MA', country: 'US', remote: false }],
+          }),
+        }),
+      );
+      expect(statusOf(o, 'location'), workArrangement).toBe('pass');
+      expect(o.blockers).toEqual([]);
+    }
+  });
+
+  /** An office somewhere the user has not said they would go is a question, not a rejection. */
+  it('asks about a hybrid posting in an unfamiliar city rather than failing it', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ locationPrefs: { ...profile().locationPrefs, hybridOk: false } }),
+        posting: posting({
+          workArrangement: 'hybrid',
+          locations: [{ city: 'Austin', region: 'TX', country: 'US', remote: false }],
+        }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('unknown');
+  });
+
+  /** With nowhere to go, the arrangement is all there is, and it still decides. */
+  it('still fails a hybrid posting that names no office at all', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ locationPrefs: { ...profile().locationPrefs, hybridOk: false } }),
+        posting: posting({ workArrangement: 'hybrid', locations: [] }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('fail');
+  });
+
+  it('still fails a remote posting that names no office at all', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({ locationPrefs: { ...profile().locationPrefs, remoteOk: false } }),
+        posting: posting({ workArrangement: 'remote', locations: [] }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('fail');
   });
 
   it('still fails a posting that is only remote', () => {
@@ -639,6 +875,8 @@ describe('term_overlap', () => {
     expect(statusOf(evaluateEligibility(input()), 'term_overlap')).toBe('pass');
   });
 
+  /** The posting says "fall 2027" and its dates say August to December: the two agree, so
+   *  the window is firm enough to turn a summer-only student away on. */
   it('fails a term that barely overlaps', () => {
     const o = evaluateEligibility(
       input({
@@ -667,6 +905,63 @@ describe('term_overlap', () => {
       input({ posting: posting({ term: { season: 'winter', year: 2027 } }) }),
     );
     expect(statusOf(o, 'term_overlap')).toBe('unknown');
+  });
+
+  /**
+   * `term.start`/`term.end` are not fields any job board publishes. They come from a regex
+   * hunting the description for any "<month> <year> to <month> <year>" it can find, and that
+   * regex cannot tell a term from an application window: "applications are accepted from
+   * September 2026 through November 2026 for our Summer 2027 program" was stored as a term
+   * of 2026-09..2026-11 and hard-failed every summer-2027 student on the deadline for the
+   * very job they were reading about. The posting's own season and year say otherwise, so
+   * the scraped window is a question at most.
+   */
+  it('does not hard-fail on a scraped window that contradicts the stated season', () => {
+    const o = evaluateEligibility(
+      input({
+        posting: posting({
+          term: { season: 'summer', year: 2027, start: '2026-09', end: '2026-11' },
+        }),
+      }),
+    );
+    expect(statusOf(o, 'term_overlap')).toBe('unknown');
+    expect(o.blockers).toEqual([]);
+  });
+
+  /** With no season or year printed, there is nothing to confirm the scraped dates either. */
+  it('does not hard-fail on a scraped window with nothing to corroborate it', () => {
+    const o = evaluateEligibility(
+      input({
+        posting: posting({
+          term: { season: null, year: null, start: '2026-09', end: '2026-11' },
+        }),
+      }),
+    );
+    expect(statusOf(o, 'term_overlap')).toBe('unknown');
+    expect(o.blockers).toEqual([]);
+  });
+
+  /**
+   * A posting naming a spring cohort and a summer one is naming alternatives, exactly as a
+   * posting naming two graduation windows is. Judging a summer student against whichever
+   * range was extracted most confidently told her she had no overlap with a term she was
+   * free for the whole of.
+   */
+  it('measures against every term the posting states, not the first one', () => {
+    const spring = req('term_dates', { start: '2027-01', end: '2027-03' }, { confidence: 0.95 });
+    const summer = req('term_dates', { start: '2027-06', end: '2027-08' }, { confidence: 0.8 });
+
+    for (const requirements of [
+      [spring, summer],
+      [summer, spring],
+    ]) {
+      const o = evaluateEligibility(
+        input({ posting: posting({ term: { season: null, year: null } }), requirements }),
+      );
+      expect(statusOf(o, 'term_overlap'), JSON.stringify(requirements.map((r) => r.id))).toBe(
+        'pass',
+      );
+    }
   });
 
   /**
@@ -795,6 +1090,61 @@ describe('experience_ceiling', () => {
     );
     expect(statusOf(o, 'experience_ceiling')).toBe('pass');
   });
+
+  /**
+   * A job with no end date goes on accruing months while `profile.derived` stands still at
+   * whatever it said the day the profile was last saved. Someone who had 1.6 years in
+   * January and 2.2 by August was still judged on the 1.6 and turned away from a posting
+   * asking for three, which the one-year tolerance would otherwise have let through.
+   */
+  it('counts experience accrued since the profile was last saved', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({
+          experience: [
+            {
+              type: 'job',
+              title: 'Developer',
+              organization: 'X',
+              startDate: '2024-06',
+              bullets: [],
+            },
+          ],
+          derived: { ...profile().derived, yearsProfessionalExperience: 1.6 },
+        }),
+        requirements: [req('experience_years', { min: 3 })],
+      }),
+    );
+    expect(statusOf(o, 'experience_ceiling')).toBe('pass');
+    expect(o.blockers).toEqual([]);
+  });
+
+  /** Several stated lengths are alternatives, and the lowest is the one that gates applying. */
+  it('does not let one of several stated experience minimums decide the rule', () => {
+    const senior = req('experience_years', { min: 5 }, { confidence: 0.95 });
+    const toApply = req('experience_years', { min: 1 }, { confidence: 0.95 });
+
+    for (const requirements of [
+      [senior, toApply],
+      [toApply, senior],
+    ]) {
+      const o = evaluateEligibility(input({ requirements }));
+      expect(statusOf(o, 'experience_ceiling'), JSON.stringify(requirements.map((r) => r.id))).toBe(
+        'unknown',
+      );
+      expect(o.blockers).toEqual([]);
+    }
+  });
+
+  it('still fails an "internship" whose every stated minimum is out of reach', () => {
+    const o = evaluateEligibility(
+      input({
+        requirements: [req('experience_years', { min: 5 }), req('experience_years', { min: 3 })],
+      }),
+    );
+    expect(statusOf(o, 'experience_ceiling')).toBe('fail');
+    expect(o.blockers[0]!.because).toContain('3 years');
+  });
 });
 
 describe('excluded_company', () => {
@@ -807,6 +1157,49 @@ describe('excluded_company', () => {
       }),
     );
     expect(statusOf(o, 'excluded_company')).toBe('fail');
+  });
+
+  /**
+   * An entry used to match anywhere in the company name, so short entries buried companies
+   * the user had never heard of and could not find in their own settings: "Meta" hid
+   * Metabase, "AI" hid Airbnb and Chainalysis, one "X" hid Netflix.
+   */
+  it('does not match an exclude-list entry in the middle of another company name', () => {
+    for (const [entry, company] of [
+      ['Meta', 'Metabase'],
+      ['AI', 'Airbnb'],
+      ['AI', 'Chainalysis'],
+      ['X', 'Netflix'],
+    ]) {
+      const o = evaluateEligibility(
+        input({
+          profile: profile({
+            preferences: { companySizes: [], industries: [], excludeCompanies: [entry!] },
+          }),
+          posting: posting({ company: company! }),
+        }),
+      );
+      expect(statusOf(o, 'excluded_company'), `${entry} vs ${company}`).toBe('pass');
+    }
+  });
+
+  /** Excluding a company still excludes its subsidiaries — whole words, not whole names. */
+  it('still matches an entry that is a whole word of the company name', () => {
+    for (const [entry, company] of [
+      ['Amazon', 'Amazon Web Services'],
+      ['Meta', 'Meta Platforms'],
+      ['IBM', 'IBM'],
+    ]) {
+      const o = evaluateEligibility(
+        input({
+          profile: profile({
+            preferences: { companySizes: [], industries: [], excludeCompanies: [entry!] },
+          }),
+          posting: posting({ company: company! }),
+        }),
+      );
+      expect(statusOf(o, 'excluded_company'), `${entry} vs ${company}`).toBe('fail');
+    }
   });
 });
 
@@ -953,6 +1346,9 @@ describe('properties that must always hold', () => {
 
     const qualifiesForNothing = profile({
       citizenships: ['IN'],
+      // The date of birth has to agree with the derived age: the age rule recomputes it
+      // against the clock it is handed rather than trusting a figure frozen at the last save.
+      dateOfBirth: '2010-03-15',
       workAuthorization: { country: 'US', status: 'requires_sponsorship', needsSponsorship: true },
       derived: {
         ...profile().derived,

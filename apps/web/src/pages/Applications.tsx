@@ -9,6 +9,7 @@ import {
   listApplications,
   saveAnswer,
   unapproveAnswer,
+  type Answer,
   type ApplicationDetail,
   type ApplicationSummary,
 } from '../lib/api';
@@ -154,17 +155,22 @@ function Detail({
   const [busy, setBusy] = useState<string | null>(null);
   const [newQuestion, setNewQuestion] = useState('');
   /**
-   * The two things the server says once and never says again.
+   * The three things the server says once and never says again.
    *
    * `unresolved` — the draft still had unsupported claims after the model's own revision —
-   * and the style note come back on the draft and the save responses only. Neither is
-   * stored with the answer, so the refresh that follows every action re-fetched a payload
-   * without them and both were thrown away unread. AnswerReview renders each of them, so
-   * the sentence telling someone the MODEL failed rather than they did had never once
-   * reached the screen. Kept beside the answers and merged in below.
+   * and the style note come back on the draft and the save responses only. `reusedFrom`
+   * comes back only on the response that adds a question. None of the three is stored with
+   * the answer, so the refresh that follows every action re-fetched a payload without them
+   * and they were thrown away unread. AnswerReview renders all three, so the sentence
+   * telling someone the MODEL failed rather than they did had never once reached the
+   * screen, and neither had the "reused" badge on an answer pulled from the library. Kept
+   * beside the answers and merged in below.
    */
   const [notes, setNotes] = useState<
-    Record<string, { styleNote?: string | null; unresolved?: boolean }>
+    Record<
+      string,
+      { styleNote?: string | null; unresolved?: boolean; reusedFrom?: Answer['reusedFrom'] }
+    >
   >({});
 
   const refresh = useCallback(() => {
@@ -311,7 +317,10 @@ function Detail({
             disabled={newQuestion.trim().length < 3 || busy !== null}
             onClick={() =>
               void run('add', async () => {
-                await addQuestion(id, newQuestion.trim());
+                const added = await addQuestion(id, newQuestion.trim());
+                if (added.reusedFrom) {
+                  setNotes((n) => ({ ...n, [added.id]: { reusedFrom: added.reusedFrom } }));
+                }
                 setNewQuestion('');
               })
             }

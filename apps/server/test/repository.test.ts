@@ -7,6 +7,7 @@ import {
   confirmProfile,
   ENCRYPTED_COLUMNS,
   getProfile,
+  getProfileHeader,
   isProfileConfirmed,
   saveProfile,
 } from '../src/core/profile/repository';
@@ -100,6 +101,43 @@ describe('profile repository', () => {
     expect(dump).not.toContain('eric@example.com');
     expect(dump).not.toContain('2006-03-15');
     expect(dump).not.toContain('12 Elm St');
+  });
+
+  /**
+   * A row that cannot be read back is not a bad row, it is a dead app. `getProfile` parses
+   * strictly, so an unusable value stored here failed on every later read — the G1 screen
+   * that would have corrected it, the re-upload the error message recommends, and the PUT a
+   * user might have tried by hand. The only remaining exit was deleting all their data.
+   */
+  it('refuses to store a profile it could not read back', () => {
+    saveProfile(draft(), NOW);
+
+    for (const [what, bad] of [
+      ['email', draft({ email: 'rosa.dean [at] gmail.com' })],
+      [
+        'projects.0.url',
+        draft({ projects: [{ name: 'P', description: 'd', url: 'github.com/rosa', bullets: [] }] }),
+      ],
+      [
+        'experience.0.organization',
+        draft({
+          experience: [{ organization: '', title: 'Intern', type: 'internship', bullets: [] }],
+        }),
+      ],
+    ] as const) {
+      expect(() => saveProfile(bad, NOW), what).toThrow(new RegExp(what.replace(/\./g, '\\.')));
+    }
+
+    // And the profile that was already there is still readable, so there is a way forward.
+    expect(getProfile()?.email).toBe('eric@example.com');
+  });
+
+  it('reads the stored id and confirmation stamp without decrypting anything', () => {
+    expect(getProfileHeader()).toBeNull();
+    saveProfile(draft(), NOW);
+    expect(getProfileHeader()).toEqual({ id: 'prof_test', confirmedAt: null });
+    confirmProfile(NOW);
+    expect(getProfileHeader()?.confirmedAt).toBe(NOW.toISOString());
   });
 
   it('recomputes derived fields on every save', () => {

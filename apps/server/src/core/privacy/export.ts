@@ -50,6 +50,10 @@ const TABLES = [
  * Keyed on the row id, matching how it was written. A value that cannot be decrypted is
  * reported as such rather than dropped: an export that silently omits a field the user
  * knows they entered is worse than one that says a field could not be read.
+ *
+ * What replaces it says only what is known. It used to name a cause — "the master key has
+ * changed since this was written" — which was a guess, and a wrong one every time this ran
+ * over a value that was never encrypted in the first place.
  */
 function decryptRow(row: Record<string, unknown>): Record<string, unknown> {
   const id = typeof row['id'] === 'string' ? row['id'] : '';
@@ -60,7 +64,7 @@ function decryptRow(row: Record<string, unknown>): Record<string, unknown> {
       try {
         out[key] = decryptField(value, id);
       } catch {
-        out[key] = '[could not be decrypted: the master key has changed since this was written]';
+        out[key] = '[could not be decrypted with the master key this app is using]';
       }
     } else {
       out[key] = value;
@@ -175,7 +179,12 @@ export async function deleteEverything(): Promise<DeleteResult> {
   // one is available, which is most of them.
   const key = deleteMasterKey();
   if (key.keyfile) deletedPaths.push(config.paths.masterKey);
-  if (!key.keychain) {
+  if (key.keychain === 'deleted') deletedPaths.push('OS credential store');
+  // Only a store we could not reach, or one that refused, is a failure worth reporting. This
+  // used to fire whenever the answer was anything but a clean delete, so every "delete
+  // everything" — including the overwhelmingly common case where there was no keychain entry
+  // in the first place — ended by telling the user to go and remove one by hand.
+  if (key.keychain === 'unreachable' || key.keychain === 'failed') {
     failed.push({
       path: 'OS credential store',
       reason: 'The keychain entry could not be removed. Delete it by hand if it matters to you.',

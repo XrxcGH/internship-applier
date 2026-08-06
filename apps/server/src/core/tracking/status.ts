@@ -131,6 +131,22 @@ export interface TrackedApplication {
    * ago. Null when nothing has come back yet.
    */
   respondedAt: string | null;
+  /**
+   * When this application first reached an interview or an offer, from the status-change
+   * history.
+   *
+   * The sibling of `respondedAt`, and needed for the same reason. `interview` is a status an
+   * application passes THROUGH: it becomes `rejected` or `offer` the moment the outcome is
+   * known, and the transition rules allow exactly that. So counting who is sitting in
+   * `interview` right now answers "who is mid-process today", not "who ever got that far" —
+   * a student who interviewed four times and was turned down four times saw "Reached
+   * interview: 0%" and concluded they had never once got past the screen.
+   *
+   * Optional only because a caller that has not read the event history has nothing to put
+   * here; when it is absent the present status is all there is to go on, and the undercount
+   * is back.
+   */
+  advancedAt?: string | null;
   deadlineAt: string | null;
   answerCount: number;
   approvedCount: number;

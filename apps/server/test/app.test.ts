@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { HealthResponse } from '@ia/shared';
-import { buildApp } from '../src/app';
+import { buildApp, canonicalTarget } from '../src/app';
+import { config } from '../src/config';
 import { runMigrations } from '../src/infra/db/migrate';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -92,6 +93,112 @@ describe('Host pinning', () => {
 });
 
 /**
+ * One path, one spelling.
+ *
+ * The router percent-decodes a path before matching, so `/%61pi/privacy/export` reaches the
+ * privacy handler exactly as `/api/privacy/export` does — while every guard compared the
+ * raw, still-encoded target against a literal string and saw nothing beginning `/api/`.
+ * Changing one character to its escape therefore turned off the token check AND both G1
+ * hooks at once: the whole decrypted export came back unauthenticated, and a discovery run
+ * executed against a profile that had never been confirmed.
+ *
+ * Nothing could catch it, either. NODE_ENV is `test` for the whole suite, so `config.isTest`
+ * switched the token branch off before any test could reach it — which is why `skipAuth`
+ * has to be passed as `false` here rather than left out.
+ */
+describe('request paths are decided on after decoding', () => {
+  it.each([
+    ['/api/privacy/export', '/%61pi/privacy/export'],
+    ['/api/privacy/export', '/ap%69/privacy/export'],
+    ['/api/tracker', '/%61pi/tracker'],
+    ['/api/matches', '/%61pi/matches'],
+  ])('%s is guarded however it is spelled (%s)', (plain, encoded) => {
+    expect(canonicalTarget(encoded)).toBe(plain);
+  });
+
+  it('leaves an ordinary target, its query string, and its parameters alone', () => {
+    expect(canonicalTarget('/api/matches?minScore=40&limit=10')).toBe(
+      '/api/matches?minScore=40&limit=10',
+    );
+    // A review flag really can contain a space and a percent sign — "honors.0.top 5%" — and
+    // the client encodes it exactly once. Decoding the path must not disturb the query.
+    expect(canonicalTarget('/api/profile/reviewed/honors.0.top%205%25?x=1')).toBe(
+      '/api/profile/reviewed/honors.0.top 5%?x=1',
+    );
+  });
+
+  it('never widens a path into one the router would not have matched', () => {
+    // `//api/x` is a different path to the router, which 404s it. Folding the empty segment
+    // away here would leave this guard more permissive than the thing it guards, so empty
+    // segments stay while `.` and `..` — the next spelling anyone would try — come out.
+    expect(canonicalTarget('//api/matches')).toBe('//api/matches');
+    expect(canonicalTarget('/%2e/api/matches')).toBe('/api/matches');
+    expect(canonicalTarget('/x/%2e%2e/api/matches')).toBe('/api/matches');
+    // A malformed escape is nobody's path. It is left as sent, which reads as guarded.
+    expect(canonicalTarget('/api/%zz')).toBe('/api/%zz');
+  });
+
+  describe('with the token check actually switched on', () => {
+    let guarded: FastifyInstance;
+
+    beforeAll(async () => {
+      guarded = await buildApp({ skipAuth: false });
+      await guarded.ready();
+    });
+
+    afterAll(async () => {
+      await guarded.close();
+    });
+
+    const get = (url: string, token?: string) =>
+      guarded.inject({
+        method: 'GET',
+        url,
+        headers: { host: '127.0.0.1:8787', ...(token ? { 'x-app-token': token } : {}) },
+        remoteAddress: '127.0.0.1',
+      });
+
+    it('refuses an encoded path exactly as it refuses the plain one', async () => {
+      for (const url of [
+        '/api/privacy/export',
+        '/%61pi/privacy/export',
+        '/ap%69/privacy/export',
+        '/api/tracker',
+        '/%61pi/tracker',
+      ]) {
+        const res = await get(url);
+        expect(res.statusCode, url).toBe(401);
+        expect(res.json().error.message, url).toMatch(/X-App-Token/);
+      }
+    });
+
+    it('still lets the real token through, and still exempts the two bootstrap routes', async () => {
+      expect((await get('/api/tracker', config.appToken)).statusCode).toBe(200);
+      expect((await get('/api/health')).statusCode).toBe(200);
+      expect((await get('/api/session')).statusCode).toBe(200);
+    });
+  });
+
+  it('holds gate G1 shut on an encoded path', async () => {
+    // No profile has been confirmed in this file, so both of these must refuse. `app` is
+    // built with skipAuth, which leaves the two route-level hooks as the only thing between
+    // an encoded path and a real discovery run.
+    for (const [method, url] of [
+      ['GET', '/api/matches'],
+      ['GET', '/%61pi/matches'],
+      ['GET', '/ap%69/matches?minScore=0'],
+      ['POST', '/api/discovery/run'],
+      ['POST', '/%61pi/discovery/run'],
+      ['POST', '/api/disc%6fvery/run'],
+    ] as const) {
+      const res = await app.inject({ method, url, payload: method === 'POST' ? {} : undefined });
+      expect(res.statusCode, url).toBe(409);
+      expect(res.json().error.code, url).toBe('PROFILE_NOT_CONFIRMED');
+    }
+  });
+});
+
+/**
  * Gate G4 (docs/07-form-automation.md): the tool fills forms, the user submits them.
  * This is a release gate, not a style check — it asserts that no route capable of
  * submitting an application can exist in the codebase.
@@ -156,7 +263,15 @@ describe('G4 — no auto-submit path exists', () => {
       //   page.locator('#submit-application').click()
       // where "submit" sits in the selector rather than in the click call. Checked per
       // line so an exclusion selector elsewhere in the file cannot trigger it.
+      //
+      // A line that is nothing but a comment is skipped, because it cannot click anything.
+      // The docblock at the top of fill.ts explains G4 by saying the fixture proves no form
+      // was submitted "rather than merely that no `.click()` was written" — a sentence about
+      // this very rule, which the rule then reported as a violation. A release gate that
+      // fails on prose describing it is a gate people start editing around. Lines that mix
+      // code and a trailing comment are still checked; only whole-comment lines are exempt.
       src.split('\n').forEach((line, i) => {
+        if (/^\s*(?:\/\/|\/?\*)/.test(line)) return;
         const hasClick = /\.click\s*\(/.test(line);
         const namesSubmit = /submit/i.test(line) && !/:not\(\[type\s*=\s*['"]?submit/i.test(line);
         if (hasClick && namesSubmit) {

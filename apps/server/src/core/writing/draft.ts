@@ -100,7 +100,7 @@ export function voiceInstructions(style: StyleProfile | undefined): string {
     lines.push(`They connect ideas with: ${style.favoredTransitions.slice(0, 4).join(', ')}.`);
   }
   if (style.openingPatterns.length > 0) {
-    lines.push(`They tend to open sentences: ${style.openingPatterns.slice(0, 3).join(' / ')}.`);
+    lines.push(`They open sentences with: ${style.openingPatterns.slice(0, 4).join(', ')}.`);
   }
   lines.push(
     style.hedgeRate > 1

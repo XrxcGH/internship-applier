@@ -44,9 +44,31 @@ export function decryptField(encoded: string, aad: string): string {
   return Buffer.concat([decipher.update(unb64(ctB64)), decipher.final()]).toString('utf8');
 }
 
-/** Encrypted-at-rest values are opaque; this is only for round-trip assertions. */
+/**
+ * Does this string have the exact shape `encryptField` produces?
+ *
+ * "Starts with v1: and has four colon-separated pieces" matched ordinary English. "v1:
+ * gather requirements; v2: prototype; v3: ship it" — a real answer to a real application
+ * question — is four pieces beginning with `v1:`, and the export path runs every string
+ * column of every table through this predicate. The user's own words were replaced in their
+ * export by a message saying the value could not be decrypted, while the database still held
+ * the sentence they wrote.
+ *
+ * So the test is the format itself, not its first two characters: base64url alphabet only,
+ * and a nonce and tag of exactly the encoded length their byte counts produce. The
+ * ciphertext piece may be empty, because encrypting the empty string legitimately produces
+ * nothing there. Prose cannot reach 16 unbroken base64url characters followed by 22 more;
+ * a space, a comma or a full stop ends it.
+ */
+const NONCE_CHARS = Math.ceil((NONCE_BYTES * 4) / 3);
+const TAG_CHARS = Math.ceil((TAG_BYTES * 4) / 3);
+const B64URL = '[A-Za-z0-9_-]';
+const SHAPE = new RegExp(
+  `^${PREFIX}:${B64URL}{${String(NONCE_CHARS)}}:${B64URL}{${String(TAG_CHARS)}}:${B64URL}*$`,
+);
+
 export function isEncrypted(value: string): boolean {
-  return value.startsWith(`${PREFIX}:`) && value.split(':').length === 4;
+  return SHAPE.test(value);
 }
 
 /**

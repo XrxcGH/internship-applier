@@ -7,6 +7,7 @@
  * state are the exception: a resume usually does print them, so they arrive as a suggestion
  * and stay flagged until the user has looked at them.
  */
+import { z } from 'zod';
 import { ulid } from 'ulid';
 import type { CandidateProfile, Skill } from '@ia/shared';
 import type { ResumeExtraction } from './extractProfile';
@@ -34,6 +35,29 @@ function asUrl(raw: string | null | undefined): string | undefined {
   if (!raw) return undefined;
   const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   return URL.canParse(candidate) ? candidate : undefined;
+}
+
+/**
+ * An address the schema will accept, or the empty string it treats as "not known yet".
+ *
+ * Every other field the extractor produces is either repaired on the way in or flagged for
+ * the user; the email address was neither. A resume that prints "rosa.dean [at] gmail.com"
+ * to dodge scrapers — or "rosa.dean(at)gmail.com", or a line break landing mid-address —
+ * was stored verbatim, and since nothing validates on write, the row only failed on the way
+ * back OUT. Every read of the profile threw, including the G1 screen where the address would
+ * have been corrected, so the tool was unusable and the one obvious remedy, re-uploading the
+ * resume, went through the same failing read first.
+ *
+ * '' is a legal, meaningful value here: the schema documents it as "no readable address",
+ * and `needsReview` below turns it into something G1 refuses to pass until the user types
+ * one. Stripping a `mailto:` is mechanical, the same class of repair as adding a missing
+ * scheme to a URL. Anything beyond that would be guessing at somebody's address.
+ */
+const EMAIL = z.string().email();
+
+function asEmail(raw: string | null | undefined): string {
+  const trimmed = (raw ?? '').trim().replace(/^mailto:/i, '');
+  return EMAIL.safeParse(trimmed).success ? trimmed : '';
 }
 
 /** A YYYY-MM the schema will accept, or nothing. A year alone does not name a month. */
@@ -174,6 +198,7 @@ function splitLocation(raw: string | null | undefined): {
 export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): CandidateProfile {
   const ts = now.toISOString();
   const home = splitLocation(x.location);
+  const email = asEmail(x.email);
 
   const skills: Skill[] = x.skills.map((s) => ({
     name: s.name,
@@ -185,7 +210,7 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
   const draft: CandidateProfile = {
     id: ulid(),
     fullName: x.fullName ?? '',
-    email: x.email ?? '',
+    email,
     phone: x.phone ?? undefined,
     dateOfBirth: null,
     address: { country: home.country ?? 'US' },
@@ -225,7 +250,12 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
     projects: x.projects.map((p) => ({
       name: p.name,
       description: p.description,
-      url: p.url ?? undefined,
+      // The schema demands a real URL here for exactly the same reason it does under
+      // `links`, and a resume writes a project's address the same way it writes a profile's
+      // — "github.com/rosa/parser". Repairing the three under `links` and not this one left
+      // half the mechanism working: one bare host name in a projects section still made
+      // every read of the profile throw.
+      url: asUrl(p.url),
       bullets: p.bullets,
     })),
     skills,
@@ -257,7 +287,10 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
       ...x.needsReview,
       ...REQUIRED_BY_G1,
       ...(x.fullName ? [] : ['fullName']),
-      ...(x.email ? [] : ['email']),
+      // Flagged whether the resume had no address at all or had one this app cannot use.
+      // From the user's side those are the same thing — the tool does not know how to reach
+      // them — and only one of the two used to reach the screen that asks.
+      ...(email ? [] : ['email']),
       // Experience duration feeds the seniority band and the experience-ceiling rule, so
       // a start date the extractor could not read — or wrote in a form the schema will
       // not take — has to reach the user rather than be filled in with a guess.

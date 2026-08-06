@@ -60,10 +60,31 @@ function segment(text: string, evidence: AnswerEvidence[]): Segment[] {
   return out;
 }
 
+/** The same word-sequence comparison the server's edit fraction makes, so "unchanged" means the same thing here. */
+function sameWords(a: string, b: string): boolean {
+  return (a.match(/\S+/g) ?? []).join(' ') === (b.match(/\S+/g) ?? []).join(' ');
+}
+
 function EditMeter({ answer }: { answer: Answer }) {
   const draftWords = (answer.draftText.match(/\S+/g) ?? []).length;
   if (draftWords === 0) return null;
   const pct = Math.min(100, Math.round((answer.editDistance / draftWords) * 100));
+
+  /**
+   * An answer nobody has approved is never described as approved.
+   *
+   * The server writes this line from the distance between the draft and the current text
+   * alone, and for a freshly drafted answer those are the same string — so every brand
+   * new answer arrived reading "You approved this unchanged." while the header beside it
+   * said "not approved" and the button below it still said "Approve (G3)". This is the
+   * one screen whose job is telling someone what they have and have not put their name
+   * to, so it cannot be the screen that invents an approval. Only the zero-edit line
+   * claims anything about approval; the others are true whether or not it happened.
+   */
+  const summary =
+    answer.approvedAt === null && sameWords(answer.draftText, answer.text)
+      ? 'Unedited so far.'
+      : answer.editSummary;
 
   return (
     <div className="flex items-center gap-3">
@@ -73,7 +94,7 @@ function EditMeter({ answer }: { answer: Answer }) {
           style={{ width: `${String(Math.max(pct, 2))}%`, background: 'var(--accent)' }}
         />
       </div>
-      <span className="text-faint text-[0.9375rem]">{answer.editSummary}</span>
+      <span className="text-faint text-[0.9375rem]">{summary}</span>
     </div>
   );
 }

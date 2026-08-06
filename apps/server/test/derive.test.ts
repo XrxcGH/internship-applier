@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { CandidateProfile } from '@ia/shared';
+import { CandidateProfile } from '@ia/shared';
+import type { ResumeExtraction } from '../src/core/ingestion/extractProfile';
+import { toDraftProfile } from '../src/core/ingestion/toProfile';
 import {
   ageFrom,
   deriveAcademicLevel,
@@ -166,5 +168,85 @@ describe('determinism', () => {
   it('produces identical output for identical input and clock', () => {
     const p = profile({ dateOfBirth: '2006-03-15' });
     expect(deriveProfile(p, NOW)).toEqual(deriveProfile(p, NOW));
+  });
+});
+
+/**
+ * Everything the extractor produces has to survive a round trip through the schema.
+ *
+ * The write path is typed and unvalidated; the read path parses strictly. A value the schema
+ * will not take therefore stores cleanly and fails on every later read — including the G1
+ * screen where it would have been corrected, and including the re-upload that is supposed to
+ * rebuild the profile. So the draft has to be parseable no matter what came back from the
+ * model, and anything that could not be used has to be flagged rather than dropped in
+ * silence.
+ */
+describe('turning an extraction into a profile the schema accepts', () => {
+  function extraction(over: Partial<ResumeExtraction> = {}): ResumeExtraction {
+    return {
+      fullName: 'Rosa Dean',
+      email: 'rosa@example.edu',
+      phone: '555-0100',
+      location: 'Boston, MA',
+      links: { github: null, linkedin: null, portfolio: null },
+      education: [],
+      experience: [],
+      projects: [],
+      skills: [],
+      certifications: [],
+      languages: [],
+      needsReview: [],
+      ...over,
+    };
+  }
+
+  it('keeps an address it can use, and repairs only what is mechanical', () => {
+    for (const [raw, expected] of [
+      ['rosa@example.edu', 'rosa@example.edu'],
+      ['  rosa@example.edu  ', 'rosa@example.edu'],
+      ['mailto:rosa@example.edu', 'rosa@example.edu'],
+    ] as const) {
+      const d = toDraftProfile(extraction({ email: raw }), NOW);
+      expect(d.email, raw).toBe(expected);
+      expect(d.needsReview, raw).not.toContain('email');
+    }
+  });
+
+  it('refuses an address it cannot use, and sends the user to fill it in', () => {
+    // Resumes obfuscate addresses to dodge scrapers, and PDF text extraction breaks them.
+    for (const raw of [
+      'rosa.dean [at] gmail.com',
+      'rosa.dean(at)gmail.com',
+      'rosa.dean@gmail',
+      'rosa dean@gmail.com',
+      'not an address at all',
+      null,
+    ]) {
+      const d = toDraftProfile(extraction({ email: raw }), NOW);
+      expect(d.email, String(raw)).toBe('');
+      expect(d.needsReview, String(raw)).toContain('email');
+      expect(CandidateProfile.safeParse(d).success, String(raw)).toBe(true);
+    }
+  });
+
+  it('repairs a project URL the same way it repairs a profile link', () => {
+    const d = toDraftProfile(
+      extraction({
+        links: { github: 'github.com/rosa', linkedin: null, portfolio: null },
+        projects: [
+          { name: 'Parser', description: 'A parser', url: 'github.com/rosa/parser', bullets: [] },
+          { name: 'Nameless', description: 'No link', url: 'not a url', bullets: [] },
+        ],
+      }),
+      NOW,
+    );
+
+    expect(d.links.github).toBe('https://github.com/rosa');
+    expect(d.projects[0]?.url).toBe('https://github.com/rosa/parser');
+    expect(
+      d.projects[1]?.url,
+      'a link that cannot be repaired is dropped, not guessed at',
+    ).toBeUndefined();
+    expect(CandidateProfile.safeParse(d).success).toBe(true);
   });
 });

@@ -322,7 +322,12 @@ i {
     opacity 0.16s ease;
 }
 
-.u-nav-link:hover:not(:disabled) {
+/* Keyed on aria-disabled, because that is how a locked nav item is marked. The buttons
+   stopped carrying the `disabled` attribute so their "confirm your profile first" reason
+   would stay reachable to a screen reader, and these two rules kept keying on `:disabled`
+   — which nothing matched any more. So a locked destination brightened to full ink on
+   hover exactly like an available one, inviting a click that does nothing. */
+.u-nav-link:hover:not([aria-disabled='true']) {
   color: var(--ink);
 }
 
@@ -343,7 +348,7 @@ i {
   transform-origin: left;
 }
 
-.u-nav-link:disabled {
+.u-nav-link[aria-disabled='true'] {
   opacity: 0.38;
   cursor: not-allowed;
 }

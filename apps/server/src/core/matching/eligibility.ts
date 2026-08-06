@@ -12,6 +12,7 @@
  * and quote them; the judgement is plain TypeScript over structured fields.
  */
 import type { ConfirmedProfile, JobRequirement, RuleResult } from '@ia/shared';
+import { ageFrom, deriveYearsExperience } from '../ingestion/deriveFields';
 import { validateValue } from './requirementValues';
 
 export interface PostingFacts {
@@ -68,15 +69,44 @@ const na = (rule: string, because: string): RuleResult => ({
   because,
 });
 
-function firstOfKind(reqs: JobRequirement[], kind: string): JobRequirement | undefined {
-  // Prefer a `required` requirement over a `preferred` one, then higher confidence.
-  return reqs
-    .filter((r) => r.kind === kind)
-    .sort(
-      (a, b) =>
-        Number(b.necessity === 'required') - Number(a.necessity === 'required') ||
-        b.confidence - a.confidence,
-    )[0];
+/**
+ * The requirement that speaks for a group of same-kind clauses none of which binds.
+ *
+ * An ambiguous clause outranks a merely preferred one: if any of them could not be read
+ * confidently, the honest answer is a question rather than a clean pass.
+ */
+function speaksFor(reqs: JobRequirement[]): JobRequirement {
+  return reqs.find((r) => r.necessity === 'unclear') ?? reqs[0]!;
+}
+
+interface StatedMinimum {
+  req: JobRequirement;
+  min: number;
+}
+
+/**
+ * Every minimum a posting actually states, lowest first.
+ *
+ * A posting states more than one of the same kind far more often than it looks: "interns
+ * who drive company vehicles must be 21 years of age. All applicants must be 18 years or
+ * older to apply." is two `age` requirements, both `required`, both extracted at the same
+ * confidence. Picking one of them by a sort let a clause written for a subset of applicants
+ * decide the whole rule — a 19-year-old was told the posting requires 21+ and lost it,
+ * purely because the vehicle sentence was printed first. Putting the sentences in the other
+ * order passed the same person.
+ *
+ * So every stated minimum is read, and the outcome is decided by where the user falls
+ * against all of them: clearing the highest passes, falling below the lowest is the only
+ * thing that can disqualify, and landing in between is a question — the posting has told
+ * that user two different things and only they can say which one is aimed at them.
+ */
+function statedMinima(reqs: JobRequirement[]): StatedMinimum[] {
+  const out: StatedMinimum[] = [];
+  for (const req of reqs) {
+    const value = typedValue<{ min: number }>(req);
+    if (value) out.push({ req, min: value.min });
+  }
+  return out.sort((a, b) => a.min - b.min);
 }
 
 /**
@@ -115,40 +145,84 @@ function toYearMonth(d: Date): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+/**
+ * `profile.derived` is computed when the profile is saved and never again, so a rule that
+ * reads it is judging the user as they were on the day they last touched their profile
+ * while every other half of the comparison uses the clock passed in here.
+ *
+ * That gap is a birthday. A student who filled in the wizard at 17 stayed 17 for every
+ * matching run afterwards, so "must be 18 to apply" hard-failed them for months after they
+ * turned 18 — a false `ineligible` on a fact the profile already contained. Experience
+ * drifts the same way: an open-ended job goes on accruing months while the stored figure
+ * stands still, and it was the stale 1.6 years that fell short of a three-year requirement
+ * the real 2.2 clears.
+ *
+ * Anything derived from a date and a clock is therefore recomputed here against `now`. The
+ * rest of `derived` — academic level, expected graduation — comes from dates the user typed
+ * and does not move on its own, so it is read as stored.
+ */
+function currentAge(profile: ConfirmedProfile, now: Date): number | null {
+  // The stored age is still the answer for a profile with no date of birth on it.
+  return ageFrom(profile.dateOfBirth, now) ?? profile.derived.age;
+}
+
+function currentExperienceYears(profile: ConfirmedProfile, now: Date): number {
+  // Experience only accrues, so the stored figure can only ever be stale downwards; taking
+  // the larger of the two means an incomplete experience list can never invent a shortfall
+  // that the stored figure did not already have.
+  return Math.max(profile.derived.yearsProfessionalExperience, deriveYearsExperience(profile, now));
+}
+
 // ---------------------------------------------------------------- the rules
 
-export function ageMinimum({ profile, requirements }: RuleInput): RuleResult {
-  const req = firstOfKind(requirements, 'age');
-  if (!req) return na('age_minimum', 'The posting does not state a minimum age.');
+export function ageMinimum({ profile, requirements, now }: RuleInput): RuleResult {
+  const reqs = requirements.filter((r) => r.kind === 'age');
+  if (reqs.length === 0) return na('age_minimum', 'The posting does not state a minimum age.');
 
-  const soft = softRequirement('age_minimum', req, 'A minimum age');
-  if (soft) return soft;
+  const binding = reqs.filter((r) => r.necessity === 'required');
+  if (binding.length === 0) {
+    return softRequirement('age_minimum', speaksFor(reqs), 'A minimum age')!;
+  }
 
-  const value = typedValue<{ min: number }>(req);
-  if (!value) {
+  const minima = statedMinima(binding);
+  if (minima.length === 0) {
     return unknown('age_minimum', 'A minimum age is mentioned but could not be parsed.', {
-      requirementId: req.id,
+      requirementId: binding[0]!.id,
     });
   }
 
-  const age = profile.derived.age;
+  const lowest = minima[0]!;
+  const highest = minima[minima.length - 1]!;
+
+  const age = currentAge(profile, now);
   if (age === null) {
     return unknown(
       'age_minimum',
-      `This posting requires you to be at least ${value.min}. Add your date of birth to check.`,
-      { requirementId: req.id, profileRef: 'dateOfBirth' },
+      `This posting requires you to be at least ${lowest.min}. Add your date of birth to check.`,
+      { requirementId: lowest.req.id, profileRef: 'dateOfBirth' },
     );
   }
 
-  return age >= value.min
-    ? pass('age_minimum', `You are ${age}; the posting requires ${value.min}+.`, {
-        requirementId: req.id,
-        profileRef: 'derived.age',
-      })
-    : fail('age_minimum', `You are ${age}; this posting requires ${value.min}+.`, {
-        requirementId: req.id,
-        profileRef: 'derived.age',
-      });
+  if (age >= highest.min) {
+    return pass('age_minimum', `You are ${age}; the posting requires ${highest.min}+.`, {
+      requirementId: highest.req.id,
+      profileRef: 'derived.age',
+    });
+  }
+
+  if (age < lowest.min) {
+    return fail('age_minimum', `You are ${age}; this posting requires ${lowest.min}+.`, {
+      requirementId: lowest.req.id,
+      profileRef: 'derived.age',
+    });
+  }
+
+  return unknown(
+    'age_minimum',
+    `You are ${age}, and this posting states more than one minimum age ` +
+      `(${minima.map((m) => m.min).join(' and ')}) — check which one applies to you.`,
+    { requirementId: highest.req.id, profileRef: 'derived.age' },
+  );
 }
 
 const LEVEL_ORDER = ['high_school', 'associate', 'bachelor', 'master', 'doctorate'];
@@ -190,16 +264,16 @@ export function educationLevel({ profile, requirements }: RuleInput): RuleResult
 
   if (!parsedAny) {
     return unknown('education_level', 'An education requirement could not be parsed.', {
-      requirementId: reqs[0]!.id,
+      requirementId: (reqs.find((r) => r.necessity === 'required') ?? reqs[0]!).id,
     });
   }
 
   if (wanted.size === 0) {
-    // An ambiguous clause outranks a merely preferred one: if any of them could not be
-    // read confidently, the honest answer is a question rather than a clean pass.
-    const soft = [...merelyLiked.values()];
-    const speaksFor = soft.find((r) => r.necessity === 'unclear') ?? soft[0]!;
-    return softRequirement('education_level', speaksFor, 'A degree level')!;
+    return softRequirement(
+      'education_level',
+      speaksFor([...merelyLiked.values()]),
+      'A degree level',
+    )!;
   }
 
   const openToAny = wanted.get('any');
@@ -209,16 +283,31 @@ export function educationLevel({ profile, requirements }: RuleInput): RuleResult
     });
   }
 
+  // Whatever the user is measured against has to be a level the posting insists on, or the
+  // checklist quotes a sentence that had nothing to do with the verdict: a posting reading
+  // "must be enrolled in a PhD program" beside "a bachelor's in mathematics is a plus"
+  // rejected an undergraduate and printed the bachelor's sentence — the one welcoming
+  // them — as the reason. Only `wanted` is ever cited from here down.
+  const binding = [...wanted.values()];
+
   const mine = ACADEMIC_TO_LEVEL[profile.derived.academicLevel] ?? 'none';
-  if (mine === 'none') {
-    return unknown('education_level', 'No education history on file to check against.', {
-      requirementId: reqs[0]!.id,
-      profileRef: 'education',
-    });
+  const mineRank = LEVEL_ORDER.indexOf(mine);
+
+  // A level that is not on the degree ladder cannot be compared with one that is, and
+  // comparing it anyway meant a rank of -1 satisfied nothing and hard-failed the user. That
+  // covers 'none' and anything else off the ladder — a bootcamp today, whatever the profile
+  // schema learns to say next.
+  if (mine === 'none' || mineRank === -1) {
+    return unknown(
+      'education_level',
+      mine === 'none'
+        ? 'No education history on file to check against.'
+        : `Your education (${mine}) is not one of the degree levels this posting names — check it.`,
+      { requirementId: binding[0]!.id, profileRef: 'education' },
+    );
   }
 
   // "Enrolled in a Bachelor's" is satisfied by anyone at or above that level.
-  const mineRank = LEVEL_ORDER.indexOf(mine);
   const met = [...wanted].find(([level]) => {
     const rank = LEVEL_ORDER.indexOf(level);
     return rank === -1 ? false : mineRank >= rank;
@@ -232,7 +321,7 @@ export function educationLevel({ profile, requirements }: RuleInput): RuleResult
     : fail(
         'education_level',
         `This posting wants ${[...wanted.keys()].join(' or ')}; your level is ${mine}.`,
-        { requirementId: reqs[0]!.id, profileRef: 'derived.academicLevel' },
+        { requirementId: binding[0]!.id, profileRef: 'derived.academicLevel' },
       );
 }
 
@@ -283,8 +372,11 @@ export function graduationWindow({ profile, requirements }: RuleInput): RuleResu
 
   const binding = parsed.filter((w) => w.req.necessity === 'required');
   if (binding.length === 0) {
-    const speaksFor = parsed.find((w) => w.req.necessity === 'unclear') ?? parsed[0]!;
-    return softRequirement('graduation_window', speaksFor.req, 'A graduation window')!;
+    return softRequirement(
+      'graduation_window',
+      speaksFor(parsed.map((w) => w.req)),
+      'A graduation window',
+    )!;
   }
 
   // Naming every window the user was actually measured against, so the sentence cannot
@@ -297,24 +389,45 @@ export function graduationWindow({ profile, requirements }: RuleInput): RuleResu
 }
 
 export function enrollment({ profile, requirements, now }: RuleInput): RuleResult {
-  const req = firstOfKind(requirements, 'enrollment');
-  if (!req) return na('enrollment', 'The posting does not require active enrolment.');
+  const reqs = requirements.filter((r) => r.kind === 'enrollment');
+  if (reqs.length === 0) return na('enrollment', 'The posting does not require active enrolment.');
 
-  const value = typedValue<{ required: boolean }>(req);
-  if (!value) {
+  // A posting says this twice as a matter of course — "current students only" in the
+  // header, "recent graduates are also welcome to apply" in the small print — and reading
+  // whichever of them was extracted with the higher confidence let a coin toss filter out
+  // every graduate on a posting that had written them an invitation in so many words.
+  // Every clause is read, and the one saying enrolment is NOT needed settles it however
+  // tentatively it was worded, because a posting cannot both welcome graduates and
+  // disqualify them.
+  const parsed: Array<{ req: JobRequirement; required: boolean }> = [];
+  for (const r of reqs) {
+    const value = typedValue<{ required: boolean }>(r);
+    if (value) parsed.push({ req: r, required: value.required });
+  }
+
+  if (parsed.length === 0) {
     return unknown('enrollment', 'An enrolment requirement could not be parsed.', {
-      requirementId: req.id,
+      requirementId: reqs[0]!.id,
     });
   }
-  if (!value.required)
-    return pass('enrollment', 'Enrolment is not required.', { requirementId: req.id });
+
+  const welcomesGraduates = parsed.find((p) => !p.required);
+  if (welcomesGraduates) {
+    return pass('enrollment', 'Enrolment is not required.', {
+      requirementId: welcomesGraduates.req.id,
+    });
+  }
 
   // Whether enrolment is needed at all is settled first, because a posting that says it is
   // not should pass however tentatively it said so. Only then does how firmly the posting
   // asks for it matter: "preferably still enrolled" was read as a rule and filtered recent
   // graduates out of postings that had merely expressed a wish.
-  const soft = softRequirement('enrollment', req, 'Active enrolment');
-  if (soft) return soft;
+  const demands = parsed.map((p) => p.req);
+  const binding = demands.filter((r) => r.necessity === 'required');
+  if (binding.length === 0) {
+    return softRequirement('enrollment', speaksFor(demands), 'Active enrolment')!;
+  }
+  const req = binding[0]!;
 
   const grad = profile.derived.expectedGraduation;
   if (!grad) {
@@ -430,14 +543,18 @@ export function citizenship({ profile, requirements }: RuleInput): RuleResult {
   // "Requires US citizenship and an active security clearance" is two requirements, and
   // reading only one of them dropped the clearance advisory on the floor — the user was
   // told the citizenship requirement was met and never heard about the clearance at all.
-  // Countries are pooled across the clauses, which can only widen who qualifies.
   //
-  // Only the countries a posting insists on are pooled. "U.S. citizens preferred" is
-  // ordinary wording on defence-adjacent postings and it hard-failed everyone who is not
-  // one, on a sentence that had not actually ruled them out.
-  const countries: string[] = [];
-  let countriesFrom: JobRequirement | undefined;
-  const merelyLiked: JobRequirement[] = [];
+  // Which countries qualify is read from EVERY clause, however firmly each is worded, and
+  // how firmly they are worded decides only what happens to someone who matches none of
+  // them. Pooling just the `required` clauses meant a posting that requires US citizenship
+  // and adds "Canadian citizens may also apply" hard-failed a Canadian on the strength of
+  // the first sentence while the second sentence was written for exactly that person.
+  // "U.S. citizens preferred" beside a hard rule is the opposite case and must not widen
+  // anything, which is why a softer clause is only ever consulted about the user's own
+  // nationality, never added to the list the rejection quotes.
+  const required: string[] = [];
+  let requiredFrom: JobRequirement | undefined;
+  const merelyLiked: Array<{ req: JobRequirement; countries: string[] }> = [];
   let clearanceFrom: JobRequirement | undefined;
   let parsedAny = false;
 
@@ -447,10 +564,10 @@ export function citizenship({ profile, requirements }: RuleInput): RuleResult {
     parsedAny = true;
     if (value.countries?.length) {
       if (r.necessity === 'required') {
-        countries.push(...value.countries);
-        countriesFrom ??= r;
+        required.push(...value.countries);
+        requiredFrom ??= r;
       } else {
-        merelyLiked.push(r);
+        merelyLiked.push({ req: r, countries: value.countries });
       }
     }
     if (value.clearanceRequired) clearanceFrom ??= r;
@@ -462,22 +579,34 @@ export function citizenship({ profile, requirements }: RuleInput): RuleResult {
     });
   }
 
-  if (countriesFrom && countries.length) {
+  const holds = (countries: string[]): boolean =>
+    countries.some((c) => profile.citizenships.some((m) => m.toUpperCase() === c.toUpperCase()));
+
+  if (requiredFrom && required.length) {
     if (profile.citizenships.length === 0) {
       return unknown(
         'citizenship',
-        `This posting requires ${countries.join(' or ')} citizenship; yours is not on file.`,
-        { requirementId: countriesFrom.id, profileRef: 'citizenships' },
+        `This posting requires ${required.join(' or ')} citizenship; yours is not on file.`,
+        { requirementId: requiredFrom.id, profileRef: 'citizenships' },
       );
     }
-    const ok = countries.some((c) =>
-      profile.citizenships.some((mine) => mine.toUpperCase() === c.toUpperCase()),
-    );
-    if (!ok) {
+    if (!holds(required)) {
+      // A softer clause naming a nationality the user actually holds is the posting
+      // contradicting itself, and the user is the only one who can resolve it. Hiding the
+      // posting on the strict sentence alone would bury the sentence that invited them.
+      const invited = merelyLiked.find((m) => holds(m.countries));
+      if (invited) {
+        return unknown(
+          'citizenship',
+          `This posting requires ${required.join(' or ')} citizenship but also mentions ` +
+            `${invited.countries.join(' or ')}, which you hold — check whether you qualify.`,
+          { requirementId: invited.req.id, profileRef: 'citizenships' },
+        );
+      }
       return fail(
         'citizenship',
-        `Requires ${countries.join(' or ')} citizenship; you hold ${profile.citizenships.join(', ')}.`,
-        { requirementId: countriesFrom.id, profileRef: 'citizenships' },
+        `Requires ${required.join(' or ')} citizenship; you hold ${profile.citizenships.join(', ')}.`,
+        { requirementId: requiredFrom.id, profileRef: 'citizenships' },
       );
     }
   }
@@ -490,14 +619,17 @@ export function citizenship({ profile, requirements }: RuleInput): RuleResult {
     );
   }
 
-  if (!countriesFrom && merelyLiked.length > 0) {
-    // An ambiguous clause outranks a merely preferred one: if any of them could not be
-    // read confidently, the honest answer is a question rather than a clean pass.
-    const speaksFor = merelyLiked.find((r) => r.necessity === 'unclear') ?? merelyLiked[0]!;
-    return softRequirement('citizenship', speaksFor, 'A citizenship requirement')!;
+  if (!requiredFrom && merelyLiked.length > 0) {
+    return softRequirement(
+      'citizenship',
+      speaksFor(merelyLiked.map((m) => m.req)),
+      'A citizenship requirement',
+    )!;
   }
 
-  return pass('citizenship', 'Citizenship requirement met.', { requirementId: reqs[0]!.id });
+  return pass('citizenship', 'Citizenship requirement met.', {
+    requirementId: (requiredFrom ?? reqs[0]!).id,
+  });
 }
 
 /**
@@ -516,8 +648,19 @@ export function location({ profile, posting }: RuleInput): RuleResult {
   // location, which parseLocation turns into {city:'New York', remote:true} — so a
   // `.some(l => l.remote)` test used to hard-fail a user living in New York who simply
   // prefers to go in. A remote flag is disqualifying only when nowhere else is offered.
+  //
+  // `workArrangement` gets the same treatment, and for a sharper reason: it is one word
+  // scraped out of the description, not a field any board fills in. "Our teams collaborate
+  // with remote colleagues across the world" on a posting headed "Location: New York, NY"
+  // came back `remote`, and "some full-time roles are hybrid" came back `hybrid` on a
+  // posting that says interns are onsite five days a week — both then hid an office job in
+  // the user's own city from them. An office the posting names outranks a word from its
+  // prose, so neither arrangement can hard-fail while the posting offers somewhere to go;
+  // the location comparison below decides those, and it can only pass or ask.
+  const offices = posting.locations.filter((l) => l.city || l.region);
+
   const remoteOnly =
-    arrangement === 'remote' ||
+    (arrangement === 'remote' && offices.length === 0) ||
     (posting.locations.length > 0 &&
       posting.locations.every((l) => l.remote && !l.city && !l.region));
 
@@ -536,7 +679,7 @@ export function location({ profile, posting }: RuleInput): RuleResult {
     });
   }
 
-  if (arrangement === 'hybrid' && !prefs.hybridOk) {
+  if (arrangement === 'hybrid' && !prefs.hybridOk && offices.length === 0) {
     return fail('location', 'This posting is hybrid and you have hybrid turned off.', {
       evidence: 'workArrangement=hybrid',
       profileRef: 'locationPrefs.hybridOk',
@@ -651,105 +794,151 @@ const SEASON_MONTHS: Record<string, { start: number; end: number }> = {
   spring: { start: 3, end: 5 },
 };
 
+/** The months "Summer 2027" covers, or null when the posting names no season and year. */
+function seasonWindow(term: PostingFacts['term']): { start: string; end: string } | null {
+  if (!term.season || !term.year) return null;
+  const months = SEASON_MONTHS[term.season];
+  if (!months) return null;
+  return {
+    start: `${term.year}-${String(months.start).padStart(2, '0')}`,
+    end: `${term.year}-${String(months.end).padStart(2, '0')}`,
+  };
+}
+
 /**
- * Explicit dates when the posting gives them, otherwise an approximate window derived
- * from "Summer 2027" and similar.
+ * The window a posting's term covers, and whether it is firm enough to reject somebody on.
  *
  * Measured against real postings, almost none state explicit start and end dates, so
  * requiring them made `term_overlap` return `unknown` for 100% of a 302-posting run —
  * which badged the entire queue and destroyed the signal the tri-state exists to carry.
  * A season plus a year is enough to answer the only question this rule asks.
+ *
+ * `term.start`/`term.end` look like structured fields and are nothing of the kind: no board
+ * publishes them, and every one of them comes from a regex that hunts the description for
+ * any "<month> <year> to <month> <year>" it can find. That regex cannot tell a term from an
+ * application window, so "applications are accepted from September 2026 through November
+ * 2026 for our Summer 2027 program" was stored as a term of 2026-09..2026-11 — and, being
+ * treated as exact, hard-failed every summer-2027 student on the deadline for the job they
+ * were reading about. A window is only firm when the posting's own season and year back it
+ * up; on its own it can raise a question and nothing more.
  */
 export function deriveTermWindow(term: PostingFacts['term']): {
   window: { start: string; end: string } | null;
   approximate: boolean;
+  /** Where the window came from, so the sentence shown to the user can say so. */
+  source: 'text' | 'season' | null;
 } {
-  if (term.start && term.end)
-    return { window: { start: term.start, end: term.end }, approximate: false };
+  const season = seasonWindow(term);
 
-  if (term.season && term.year) {
-    const months = SEASON_MONTHS[term.season];
-    if (months) {
-      return {
-        window: {
-          start: `${term.year}-${String(months.start).padStart(2, '0')}`,
-          end: `${term.year}-${String(months.end).padStart(2, '0')}`,
-        },
-        approximate: true,
-      };
-    }
+  if (term.start && term.end) {
+    const window = { start: term.start, end: term.end };
+    const corroborated = season !== null && (overlapWeeks(window, season) ?? 0) > 0;
+    return { window, approximate: !corroborated, source: 'text' };
   }
 
-  return { window: null, approximate: false };
+  if (season) return { window: season, approximate: true, source: 'season' };
+
+  return { window: null, approximate: false, source: null };
+}
+
+interface TermCandidate {
+  window: { start: string; end: string };
+  approximate: boolean;
+  /** How the sentence shown to the user should name this window. */
+  inferredAs: string;
+  /** Why it cannot be relied on, when it cannot. */
+  caveat: string;
+  requirementId?: string;
 }
 
 export function termOverlap({ profile, posting, requirements }: RuleInput): RuleResult {
   const derived = deriveTermWindow(posting.term);
-  let window = derived.window;
-  let approximate = derived.approximate;
-  let inferredAs = `a ${posting.term.season} ${posting.term.year} term`;
-  let requirementId: string | undefined;
+  const candidates: TermCandidate[] = [];
 
-  // Dates a posting only states in prose ("runs June through August 2027") never reach
-  // posting.term — they come back as a term_dates requirement — so the rule went
-  // not_applicable on postings that plainly said when the role runs. Extracted dates are
-  // treated as approximate, which means they can raise a question but can never hard-fail
-  // anyone on a date nobody parsed from a structured field.
-  if (!window) {
-    const req = firstOfKind(requirements, 'term_dates');
-    const value = req ? typedValue<{ start?: string; end?: string }>(req) : null;
-    if (req && value?.start && value.end) {
-      window = { start: value.start, end: value.end };
-      approximate = true;
-      inferredAs = `a ${value.start} to ${value.end} term`;
-      requirementId = req.id;
+  if (derived.window) {
+    candidates.push({
+      window: derived.window,
+      approximate: derived.approximate,
+      inferredAs:
+        derived.source === 'season'
+          ? `a ${posting.term.season} ${posting.term.year} term`
+          : `a ${derived.window.start} to ${derived.window.end} term`,
+      caveat:
+        derived.source === 'season'
+          ? 'The posting gives no exact dates'
+          : 'Those dates were read out of the description and nothing in the posting confirms they are the term',
+    });
+  } else {
+    // Dates a posting states only in prose ("runs June through August 2027") reach the rule
+    // as term_dates requirements, and without them it went not_applicable on postings that
+    // plainly said when the role runs. A posting naming more than one window — a spring
+    // cohort and a summer one — is naming alternatives, so every one of them is measured
+    // and the best overlap decides; taking whichever was extracted most confidently judged
+    // a summer student against the spring dates. Extracted dates stay approximate, so they
+    // can raise a question and never hard-fail anyone.
+    for (const req of requirements.filter((r) => r.kind === 'term_dates')) {
+      const value = typedValue<{ start?: string; end?: string }>(req);
+      if (!value?.start || !value.end) continue;
+      candidates.push({
+        window: { start: value.start, end: value.end },
+        approximate: true,
+        inferredAs: `a ${value.start} to ${value.end} term`,
+        caveat: 'The posting gives these dates only in its text',
+        requirementId: req.id,
+      });
     }
   }
 
-  if (!window) {
+  if (candidates.length === 0) {
     // The posting simply doesn't say when the role runs. That's missing information
     // about the posting, not an unresolved question about the user's eligibility, so
     // flagging it would put a badge on nearly every row and mean nothing.
     return na('term_overlap', 'The posting does not say when the role runs.');
   }
 
+  const cite = (c: TermCandidate) => (c.requirementId ? { requirementId: c.requirementId } : {});
+
   if (!profile.availability.start || !profile.availability.end) {
     return unknown(
       'term_overlap',
       'Your availability window is not set, so overlap cannot be checked.',
-      {
-        profileRef: 'availability',
-        ...(requirementId ? { requirementId } : {}),
-      },
+      { profileRef: 'availability', ...cite(candidates[0]!) },
     );
   }
 
-  const weeks = overlapWeeks(window, profile.availability);
+  let best: { candidate: TermCandidate; weeks: number } | null = null;
+  for (const candidate of candidates) {
+    const weeks = overlapWeeks(candidate.window, profile.availability);
+    if (weeks === null) continue;
+    if (!best || weeks > best.weeks) best = { candidate, weeks };
+  }
 
-  if (weeks === null) {
+  if (!best) {
     return unknown(
       'term_overlap',
       'Either the posting or your availability has unreadable dates, so overlap cannot be checked.',
-      requirementId ? { requirementId } : {},
+      cite(candidates[0]!),
     );
   }
 
-  // An inferred window is a guess about the calendar, not about the user. Never let it
-  // produce a hard rejection.
-  if (approximate && weeks < MIN_OVERLAP_WEEKS) {
-    return unknown(
-      'term_overlap',
-      `Inferred ${inferredAs} from the posting, which looks like ` +
-        `about ${Math.round(weeks)} week(s) of overlap with your availability. The posting gives no exact dates — check it.`,
-      { profileRef: 'availability', ...(requirementId ? { requirementId } : {}) },
-    );
-  }
+  const { candidate, weeks } = best;
 
   if (weeks >= MIN_OVERLAP_WEEKS) {
     return pass('term_overlap', `Overlaps your availability by about ${Math.round(weeks)} weeks.`, {
       profileRef: 'availability',
-      ...(requirementId ? { requirementId } : {}),
+      ...cite(candidate),
     });
+  }
+
+  // A window nothing in the posting confirms is a guess about the calendar, not a fact
+  // about the user. Never let one produce a hard rejection.
+  if (candidate.approximate) {
+    return unknown(
+      'term_overlap',
+      `Inferred ${candidate.inferredAs} from the posting, which looks like ` +
+        `about ${Math.round(weeks)} week(s) of overlap with your availability. ${candidate.caveat} — check it.`,
+      { profileRef: 'availability', ...cite(candidate) },
+    );
   }
 
   // The verdict is decided on the exact overlap while the sentence quoted a rounded one, so
@@ -761,7 +950,7 @@ export function termOverlap({ profile, posting, requirements }: RuleInput): Rule
     'term_overlap',
     `Overlaps your availability by only about ${short} weeks; ${MIN_OVERLAP_WEEKS} are needed.`,
     {
-      evidence: `term ${posting.term.start ?? '?'}..${posting.term.end ?? '?'}`,
+      evidence: `term ${candidate.window.start}..${candidate.window.end}`,
       profileRef: 'availability',
     },
   );
@@ -800,48 +989,78 @@ export function postingOpen({ posting }: RuleInput): RuleResult {
 
 const EXPERIENCE_TOLERANCE_YEARS = 1;
 
-export function experienceCeiling({ profile, requirements }: RuleInput): RuleResult {
-  const req = firstOfKind(requirements, 'experience_years');
-  if (!req) return na('experience_ceiling', 'No professional-experience requirement stated.');
+export function experienceCeiling({ profile, requirements, now }: RuleInput): RuleResult {
+  const reqs = requirements.filter((r) => r.kind === 'experience_years');
+  if (reqs.length === 0) {
+    return na('experience_ceiling', 'No professional-experience requirement stated.');
+  }
 
   // Wording that could not be read confidently used to be reported as "listed as
   // preferred" — a claim about the posting that it never made. It is a question now.
-  const soft = softRequirement('experience_ceiling', req, 'Professional experience');
-  if (soft) return soft;
+  const binding = reqs.filter((r) => r.necessity === 'required');
+  if (binding.length === 0) {
+    return softRequirement('experience_ceiling', speaksFor(reqs), 'Professional experience')!;
+  }
 
-  const value = typedValue<{ min: number }>(req);
-  if (!value) {
+  // "One year of programming experience required; three years of Python preferred, five for
+  // the senior track" is several requirements of one kind, and the same rule applies to
+  // them as to a minimum age: the lowest is the one that gates applying at all.
+  const minima = statedMinima(binding);
+  if (minima.length === 0) {
     return unknown('experience_ceiling', 'An experience requirement could not be parsed.', {
-      requirementId: req.id,
+      requirementId: binding[0]!.id,
     });
   }
 
-  const mine = profile.derived.yearsProfessionalExperience;
+  const lowest = minima[0]!;
+  const highest = minima[minima.length - 1]!;
+  const mine = currentExperienceYears(profile, now);
   const ceiling = mine + EXPERIENCE_TOLERANCE_YEARS;
 
-  return value.min <= ceiling
-    ? pass('experience_ceiling', `Wants ${value.min}y; you have about ${mine}y.`, {
-        requirementId: req.id,
-        profileRef: 'derived.yearsProfessionalExperience',
-      })
-    : fail(
-        'experience_ceiling',
-        `Requires ${value.min} years of professional experience; you have about ${mine}.`,
-        { requirementId: req.id, profileRef: 'derived.yearsProfessionalExperience' },
-      );
+  if (highest.min <= ceiling) {
+    return pass('experience_ceiling', `Wants ${highest.min}y; you have about ${mine}y.`, {
+      requirementId: highest.req.id,
+      profileRef: 'derived.yearsProfessionalExperience',
+    });
+  }
+
+  if (lowest.min > ceiling) {
+    return fail(
+      'experience_ceiling',
+      `Requires ${lowest.min} years of professional experience; you have about ${mine}.`,
+      { requirementId: lowest.req.id, profileRef: 'derived.yearsProfessionalExperience' },
+    );
+  }
+
+  return unknown(
+    'experience_ceiling',
+    `You have about ${mine} years, and this posting states more than one length of ` +
+      `experience (${minima.map((m) => m.min).join(' and ')} years) — check which one applies to you.`,
+    { requirementId: highest.req.id, profileRef: 'derived.yearsProfessionalExperience' },
+  );
 }
 
 export function excludedCompany({ profile, posting }: RuleInput): RuleResult {
   const company = posting.company.toLowerCase().trim();
 
-  // An entry matches anywhere in the company name, which is what makes "Amazon" catch
-  // "Amazon Web Services". The sentence, though, claimed the company itself was on the
-  // list — so a user who had excluded Meta was told "Metabase is on your exclude list"
-  // about a company they had never heard of and could not find in their own settings.
-  // Naming the entry that actually matched makes the rejection something they can act on.
+  // An entry matches whole words in the company name, which is what makes "Amazon" catch
+  // "Amazon Web Services". It used to match anywhere at all, and a bare substring buried
+  // companies the user had never heard of: "Meta" hid Metabase, "AI" hid Airbnb and
+  // Chainalysis, and a single "X" hid Netflix — a false `ineligible` the user could not
+  // explain even after reading their own exclude list. The word boundary is the whole fix;
+  // the exact-match arm below keeps an entry like "Yahoo!" working, since punctuation at
+  // the end of a word has no boundary after it.
+  //
+  // The sentence, too, claimed the company itself was on the list, so the same user was
+  // told "Metabase is on your exclude list" about a name they could not find in their own
+  // settings. Naming the entry that actually matched makes the rejection something they
+  // can act on.
   const hit = profile.preferences.excludeCompanies.find((entry) => {
     const needle = entry.toLowerCase().trim();
-    return needle !== '' && company.includes(needle);
+    if (needle === '') return false;
+    if (needle === company) return true;
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'u').test(company);
   });
 
   if (!hit) return pass('excluded_company', 'Not on your exclude list.');

@@ -414,3 +414,188 @@ describe('gate G4', () => {
     expect(db.select().from(schema.application).all()[0]!.submittedAt).toBeNull();
   });
 });
+
+/**
+ * Gate G2, reversed.
+ *
+ * Approving a match creates an application. Changing that decision to skipped or rejected
+ * used to replace the decision row, answer `applicationId: null` and leave the application
+ * standing — so the posting disappeared from the match queue, which hides anything decided,
+ * while the tracker went on showing the card, every gate in `load()` went on passing for it,
+ * and it could be walked all the way to `submitted`. The response saying there was no
+ * application was the only part a client could see, and it was false.
+ */
+describe('gate G2 — undoing an approval takes the application with it', () => {
+  let matchId: string;
+
+  beforeEach(() => {
+    const postingId = ulid();
+    db.insert(schema.jobPosting)
+      .values({
+        id: postingId,
+        canonicalUrl: `https://example.com/j/${postingId}`,
+        applyUrl: `https://example.com/j/${postingId}/apply`,
+        company: 'Kestrel Analytics',
+        title: 'Backend Intern',
+        descriptionText: 'Summer internship.',
+        fingerprint: postingId,
+      })
+      .run();
+
+    matchId = ulid();
+    db.insert(schema.match)
+      .values({
+        id: matchId,
+        postingId,
+        profileId: PROFILE.id,
+        eligibility: 'eligible',
+        rules: [],
+        blockers: [],
+        score: 70,
+        breakdown: {},
+        rationale: 'test',
+      })
+      .run();
+  });
+
+  afterEach(() => {
+    // Leave the file's own fixture as the only application again — several tests above read
+    // `db.select().from(schema.application).all()[0]`.
+    for (const row of db.select().from(schema.application).all()) {
+      if (row.matchId !== matchId) continue;
+      db.delete(schema.applicationAnswer)
+        .where(eq(schema.applicationAnswer.applicationId, row.id))
+        .run();
+      db.delete(schema.applicationEvent)
+        .where(eq(schema.applicationEvent.applicationId, row.id))
+        .run();
+      db.delete(schema.application).where(eq(schema.application.id, row.id)).run();
+    }
+    db.delete(schema.decision).where(eq(schema.decision.matchId, matchId)).run();
+  });
+
+  const decide = (action: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/api/matches/${matchId}/decision`,
+      payload: { action, reason: 'changed my mind' },
+    });
+
+  it.each(['rejected', 'skipped', 'saved'])(
+    'deletes the application it created when the decision becomes %s',
+    async (action) => {
+      const approved = await decide('approved');
+      const created = approved.json().applicationId as string;
+      expect(created).toBeTruthy();
+
+      const reversed = await decide(action);
+      expect(reversed.statusCode).toBe(200);
+      expect(reversed.json().applicationId).toBeNull();
+      expect(reversed.json().deletedApplicationId).toBe(created);
+
+      // The claim in that body is now true: there is no application for this match.
+      expect(
+        db.select().from(schema.application).where(eq(schema.application.matchId, matchId)).all(),
+      ).toEqual([]);
+
+      // And nothing downstream is still holding one.
+      expect(load(created)).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+      const list = await app.inject({ method: 'GET', url: '/api/applications' });
+      expect((list.json().applications as Array<{ id: string }>).map((a) => a.id)).not.toContain(
+        created,
+      );
+      const tracker = await app.inject({ method: 'GET', url: '/api/tracker' });
+      expect((tracker.json().applications as Array<{ id: string }>).map((a) => a.id)).not.toContain(
+        created,
+      );
+    },
+  );
+
+  it('takes the answers with it rather than orphaning them', async () => {
+    const created = (await decide('approved')).json().applicationId as string;
+    db.insert(schema.applicationAnswer)
+      .values({
+        id: ulid(),
+        applicationId: created,
+        questionText: 'Why here?',
+        fieldKey: 'q1',
+        answerType: 'long_text',
+        draftText: 'Because.',
+        finalText: 'Because.',
+      })
+      .run();
+
+    await decide('rejected');
+    expect(
+      db
+        .select()
+        .from(schema.applicationAnswer)
+        .where(eq(schema.applicationAnswer.applicationId, created))
+        .all(),
+    ).toEqual([]);
+  });
+
+  it('refuses instead of deleting an application the user has already submitted', async () => {
+    const created = (await decide('approved')).json().applicationId as string;
+    db.update(schema.application)
+      .set({ status: 'submitted', submittedAt: new Date().toISOString() })
+      .where(eq(schema.application.id, created))
+      .run();
+
+    const reversed = await decide('rejected');
+    expect(reversed.statusCode).toBe(409);
+    expect(reversed.json().error.code).toBe('APPLICATION_IN_PROGRESS');
+    expect(reversed.json().error.details.applicationId).toBe(created);
+
+    // Still there, and still submitted. Nothing the user did in the world was thrown away.
+    const row = db
+      .select()
+      .from(schema.application)
+      .where(eq(schema.application.id, created))
+      .all();
+    expect(row).toHaveLength(1);
+    expect(row[0]!.status).toBe('submitted');
+  });
+
+  it('says nothing was deleted when the match was never approved', async () => {
+    const res = await decide('rejected');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ action: 'rejected', applicationId: null });
+    expect(res.json().deletedApplicationId).toBeUndefined();
+  });
+});
+
+/**
+ * The list of fields the user still has to fill in by hand.
+ *
+ * A finished run writes it onto the application, and the panel that shows it reads the run
+ * in memory — which is gone when the browser is closed, when a second run starts and when
+ * the server restarts. Nothing returned the stored copy, so after any of those the fields
+ * still needing a person existed only in a column no endpoint would give back.
+ */
+describe('skipped fields survive the run that found them', () => {
+  it('comes back from GET /api/applications/:id', async () => {
+    const skipped = [
+      { label: 'Social Security Number', reason: 'redline', category: 'government_id' },
+      { label: 'Preferred pronouns', reason: 'unclassified' },
+    ];
+    db.update(schema.application)
+      .set({ skippedFields: skipped })
+      .where(eq(schema.application.id, applicationId))
+      .run();
+
+    const res = await app.inject({ method: 'GET', url: `/api/applications/${applicationId}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().skippedFields).toEqual(skipped);
+  });
+
+  it('is an empty list, not missing, when no run has finished yet', async () => {
+    db.update(schema.application)
+      .set({ skippedFields: null })
+      .where(eq(schema.application.id, applicationId))
+      .run();
+
+    const res = await app.inject({ method: 'GET', url: `/api/applications/${applicationId}` });
+    expect(res.json().skippedFields).toEqual([]);
+  });
+});

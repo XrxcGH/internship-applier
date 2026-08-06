@@ -499,7 +499,16 @@ describe('plural labels are caught too', () => {
     ['Background check', 'Background checks', 'consent'],
     ['Background screening', 'Background screenings', 'consent'],
     ['Drug test', 'Drug tests', 'consent'],
+    ['Drug screen', 'Drug screens', 'consent'],
     ['Credit check', 'Credit checks', 'consent'],
+    // Criminal history, which had no entry here at all while the pattern was singular-only.
+    // A US background-disclosure section labels itself with the bare plural more often than
+    // the singular.
+    ['Conviction', 'Convictions', 'eeo_demographic'],
+    ['Felony', 'Felonies', 'eeo_demographic'],
+    ['Arrest', 'Arrests', 'eeo_demographic'],
+    ['Misdemeanor', 'Misdemeanors', 'eeo_demographic'],
+    ['Criminal record', 'Criminal records', 'eeo_demographic'],
     ['Consumer report', 'Consumer reports', 'consent'],
     ['Security question', 'Security questions', 'credential'],
     ['Verification code', 'Verification codes', 'credential'],
@@ -549,6 +558,450 @@ describe('plural labels are caught too', () => {
   it('catches the bare "Disability" label EEO sections actually use', () => {
     expect(redline('Disability')?.category).toBe('eeo_demographic');
     expect(redline('Disability status')?.category).toBe('eeo_demographic');
+  });
+});
+
+/**
+ * The gerund, which is the same gap as the plural one word class over.
+ *
+ * `drug (test|screen)s?` caught "Drug test" and "Drug tests" and missed "Drug screening",
+ * "Drug screenings" and "Drug testing" — which is how most US forms label that box — so a
+ * drug-testing authorization was not on the redline list at all and reached the answer
+ * engine like an ordinary question. Its sibling clause in the very same pattern already
+ * spelled "background screening" out, which is how the gap lasted so long: the phrasing in
+ * front of whoever wrote it happened to be the one that worked.
+ *
+ * So every noun in these lists is asserted in all three forms, not just the two that were
+ * reported.
+ */
+describe('gerunds are caught as well as plurals', () => {
+  const ALL_FORMS: Array<[string[], string]> = [
+    [['Drug test', 'Drug tests', 'Drug testing'], 'consent'],
+    [['Drug screen', 'Drug screens', 'Drug screening', 'Drug screenings'], 'consent'],
+    [['Background check', 'Background checks', 'Background checking'], 'consent'],
+    [['Background screening', 'Background screenings'], 'consent'],
+    [['Background verification', 'Background verifications'], 'consent'],
+    [['Credit check', 'Credit checks', 'Credit report'], 'consent'],
+  ];
+
+  for (const [labels, category] of ALL_FORMS) {
+    it(`catches every form of "${labels[0]}"`, () => {
+      for (const label of labels) expect(redline(label)?.category, label).toBe(category);
+    });
+  }
+
+  it('catches the same authorization under its other names', () => {
+    // The same box, worded the way a form that also tests for alcohol words it.
+    for (const label of [
+      'Pre-employment drug screening',
+      'Drug and alcohol screening consent',
+      'Substance abuse screening',
+      'Are you willing to undergo drug screening?',
+      'Willing to submit to drug and alcohol screening?',
+      'Do you consent to a pre-employment drug screening?',
+    ]) {
+      expect(redline(label)?.category, label).toBe('consent');
+    }
+  });
+});
+
+/**
+ * Permission to contact someone, which is a question about permission and not about who.
+ *
+ * The rule used to name four workplace words — employer, supervisor, manager, reference —
+ * and only `references?` carried its plural. So "May we contact your current employer?" was
+ * caught, and "May we contact your previous employers?" was not. Worse, every academic party
+ * a student is actually asked about fell straight through: "May we contact your school?" and
+ * "Do you give permission for us to contact your university?" were classified as school
+ * fields at 0.9 confidence and the tool typed the applicant's institution name into them,
+ * answering a question nobody had asked in a box where the applicant was being asked to
+ * grant or withhold permission.
+ *
+ * The fix stops naming parties, so the list below deliberately includes ones nobody has
+ * reported yet — a registrar, a coach, a landlord. If a future edit goes back to enumerating
+ * nouns, these are the cases that will catch it.
+ */
+describe('permission to contact anyone is consent', () => {
+  const ASKED = [
+    // The workplace nouns that were already listed, now in both numbers.
+    'May we contact your current employer?',
+    'May we contact your previous employers?',
+    'May we contact your supervisor?',
+    'May we contact your supervisors?',
+    'May we contact your manager?',
+    'May we contact your managers?',
+    'May we contact your references?',
+    // The academic parties a student form actually asks about.
+    'May we contact your school?',
+    'May we contact your schools?',
+    'May we contact your university?',
+    'May we contact your college?',
+    'May we contact your school to verify your enrollment?',
+    'Permission to contact school',
+    'Permission to contact your registrar',
+    'May we contact your professor?',
+    'May we contact your academic advisor?',
+    'May we contact your teacher?',
+    'May we contact your coach?',
+    'May we contact your landlord?',
+    // Phrased as permission rather than as a modal, and in the passive.
+    'Do you give permission for us to contact your school?',
+    'Do you authorize us to contact your university?',
+    'Do you consent to us contacting your school?',
+    'Do you agree to be contacted by our recruiters?',
+    'Your references may be contacted',
+    'The employer may contact your current supervisor',
+    'Contacting your references requires your permission',
+    // Two questions in one label, which is how a compact form asks it.
+    'May we contact this employer? Who should we ask for?',
+  ];
+
+  for (const label of ASKED) {
+    it(`refuses to answer for the user: "${label.slice(0, 46)}"`, () => {
+      expect(redline(label), label).not.toBeNull();
+      expect(redline(label)!.category, label).toBe('consent');
+    });
+  }
+
+  /**
+   * The other direction, and it is not a formality: over-blocking here would hand the user
+   * their own phone number field to type. Asking HOW to reach the applicant is not asking
+   * permission to investigate them.
+   */
+  it('still fills the fields that ask how to reach the applicant', () => {
+    for (const label of [
+      'How can we contact you?',
+      'How may we contact you?',
+      'Preferred contact method',
+      'Contact information',
+      'Best time to contact you',
+      'Who should we contact if we have questions?',
+      'Contact person at your school',
+      'Reference name',
+      'Reference email',
+      'Manager name',
+      'Supervisor name',
+      'Current employer',
+      'Previous employer',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+  });
+});
+
+/**
+ * Criminal history, which had both mistakes at once.
+ *
+ * It was singular-only, so "Convictions", "Felonies", "Misdemeanors" and "Have you ever been
+ * arrested?" matched nothing — and on a form with generated field names, which is the case
+ * the redline module reads labels for in the first place, an arrest disclosure was
+ * classified as an essay and an approved answer was typed into it.
+ *
+ * And bare `criminal` was too broad in the other direction. Criminal Justice is a real US
+ * undergraduate major, so an essay prompt on a law-enforcement or public-defender posting —
+ * exactly the postings that major applies to — was refused with a note about jurisdiction
+ * that was untrue of the question.
+ */
+describe('criminal history in every form a US disclosure uses', () => {
+  const ASKED = [
+    // Bare section headings, both numbers.
+    'Conviction',
+    'Convictions',
+    'Felony',
+    'Felonies',
+    'Arrest',
+    'Arrests',
+    'Arrested',
+    'Misdemeanor',
+    'Misdemeanors',
+    'Misdemeanours',
+    'Criminal history',
+    'Criminal record',
+    'Criminal records',
+    'Pending criminal charges',
+    // Interrogative, which is how the question is actually put.
+    'Have you ever been arrested?',
+    'Have you ever been arrested or charged with a crime?',
+    'Have you ever been convicted of a felony?',
+    'Have you ever been convicted of a crime?',
+    'Have you ever pled guilty or no contest to a crime?',
+    'Have you ever been incarcerated?',
+    'Were you ever convicted of a misdemeanor?',
+    'Any convictions in the last seven years?',
+    'Have your records been expunged?',
+    // Third person, and two questions in one label.
+    'Has the applicant ever been convicted of a felony?',
+    'Have you ever been arrested? If yes, please explain the circumstances.',
+  ];
+
+  for (const label of ASKED) {
+    it(`catches "${label.slice(0, 46)}"`, () => {
+      expect(redline(label)?.category, label).toBe('eeo_demographic');
+    });
+  }
+
+  it('catches a criminal background check under whichever category reaches it first', () => {
+    // The consent pattern gets there first and calls it an authorization to investigate you,
+    // which is also true. What matters is that it never reaches the fill path.
+    expect(redline('Criminal background check')).not.toBeNull();
+  });
+
+  it('leaves Criminal Justice alone, because it is a major', () => {
+    for (const label of [
+      'Criminal Justice',
+      'Major: Criminal Justice',
+      'Minor in Criminal Justice',
+      'Why are you interested in a career in criminal justice?',
+      'Describe your coursework in Criminal Justice.',
+      // Academic probation is not a criminal record, and a student form asks about it.
+      'Have you ever been placed on academic probation?',
+      'Academic probation',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+  });
+});
+
+/**
+ * Salary history with a word in the middle.
+ *
+ * The qualifier had to sit immediately against the pay word, so "Current salary" was caught
+ * and "Current annual salary", "Current base salary" and "Most recent annual salary" — the
+ * way a real form prints that box — matched nothing and were classified `unknown`. The user
+ * was told the tool could not work out what the field was asking instead of being told this
+ * question is restricted in several US states and is theirs to decline.
+ *
+ * The rate wordings are the other half: "Current rate of pay" and "Current hourly rate" are
+ * the Workday and Greenhouse phrasings and contain no pay noun the old list named at all.
+ */
+describe('salary history survives an adjective in the middle', () => {
+  const HISTORY = [
+    'Current annual salary',
+    'Current base salary',
+    'Current total compensation',
+    'Most recent annual salary',
+    'Prior year compensation',
+    'Your current annual salary',
+    'Previous annual base salary',
+    'Current rate of pay',
+    'Current hourly rate',
+    'What is your current rate of pay?',
+    'Last hourly rate',
+  ];
+
+  for (const label of HISTORY) {
+    it(`catches "${label}"`, () => {
+      expect(redline(label)?.category, label).toBe('financial');
+      expect(redline(label)!.note, label).toMatch(/salary history/i);
+    });
+  }
+
+  /**
+   * The widened window shares its shape with the allowlist's `unless`, so widening one
+   * without the other would start refusing forward-looking questions. This is that half.
+   */
+  it('still fills a forward-looking question with an adjective in it', () => {
+    for (const label of [
+      'Desired hourly rate',
+      'Expected rate of pay',
+      'Desired annual salary',
+      'Expected base salary',
+      'Salary expectations',
+      'Current salary expectations',
+      'Target pay rate',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+    // And a label carrying both halves is still history, because the first half is the one
+    // that matters.
+    expect(redline('What is your current salary and your expected salary range?')?.category).toBe(
+      'financial',
+    );
+  });
+});
+
+/**
+ * Consent in the second and third person, and with no verb at all.
+ *
+ * The rule was `\bi (agree|consent|authorize)\b` — first person only. "I agree to the terms"
+ * was caught, and a standard TCPA or GDPR checkbox was not consent at all: "Do you agree to
+ * receive SMS text messages at the number provided?" reached the essay path, where an
+ * approved answer of "Yes" ticks a checkbox. That is the same mechanism the attestation rule
+ * grew a second-person branch to stop, and consent had never been given one.
+ */
+describe('consent is recognised in every person', () => {
+  const CONSENT = [
+    // First person, which already worked.
+    'I agree to the Terms of Service',
+    'I consent to a drug screening',
+    // Second person.
+    'You agree to our Terms of Service',
+    'You consent to receive marketing communications',
+    'You hereby consent to the processing of your data',
+    'By submitting, you authorize us to verify the information provided',
+    'Do you consent to the collection and processing of your personal data?',
+    'Do you agree to receive SMS text messages at the number provided?',
+    // Third person.
+    'The applicant consents to the terms above',
+    // No verb at all — the whole label, as printed.
+    'Consent',
+    'Consent to processing of personal data',
+    'Data processing consent',
+    'Consent to receive text messages',
+  ];
+
+  for (const label of CONSENT) {
+    it(`refuses to answer for the user: "${label.slice(0, 46)}"`, () => {
+      expect(redline(label)?.category, label).toBe('consent');
+    });
+  }
+
+  it('does not mistake an opinion question for a consent box', () => {
+    // "you agree" has to bring "to" with it: a work-style assessment asks whether you agree
+    // WITH something, and refusing those would be the opposite mistake.
+    for (const label of [
+      'Do you agree with our engineering values?',
+      'Do you agree with the following statement about teamwork?',
+      'Are you able to work 40 hours per week?',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+  });
+});
+
+/**
+ * "I understand that …", which is how the closing paragraph of a US application is worded.
+ *
+ * The attestation rule recognised the statement by its verb and "understand" was not on the
+ * list, so "I understand that any false statement or omission on this application may result
+ * in refusal of employment or dismissal" was not an attestation. Phrased as a question it was
+ * long enough to be classified as an essay at 0.85, so an approved answer of "Yes" ticked it —
+ * the same harm "certify" and "confirm" were each added to stop, reached through a third verb.
+ */
+describe('the closing boilerplate of a US application', () => {
+  const ATTESTATIONS = [
+    'I understand that any false statement may result in dismissal',
+    'I understand and agree to the above',
+    'I understand that any false statement or omission on this application may result in refusal of employment or dismissal.',
+    'Do you understand and agree that any misrepresentation may result in dismissal?',
+    'By checking this box, you understand that false information is grounds for termination',
+    // The imperative, which has no subject in it at all.
+    'Please confirm that the information above is accurate',
+    'Please certify that the details you have given are correct',
+    'Acknowledge that the above is true',
+  ];
+
+  for (const label of ATTESTATIONS) {
+    it(`refuses to sign: "${label.slice(0, 46)}"`, () => {
+      expect(redline(label)?.category, label).toBe('attestation');
+    });
+  }
+
+  it('leaves an ordinary comprehension question alone', () => {
+    // "understand" brings "that" or "and agree" with it for exactly this reason.
+    for (const label of [
+      'Do you understand the role?',
+      'Do you understand the requirements of this position?',
+      'Confirm your email address',
+      'Please confirm your phone number',
+      'Please verify your email',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+  });
+});
+
+/**
+ * The words that are also ordinary technical vocabulary.
+ *
+ * Each of these refused a field the tool exists to fill AND told the user something untrue
+ * about it — that a Swift skills question was bank details, that a coursework box was payment
+ * details, that a concurrency essay prompt was voluntary self-identification. A redline that
+ * fires on the wrong field costs more than the typing: the note beside it is a claim, and the
+ * claim was false.
+ */
+describe('technical vocabulary that is not a redline', () => {
+  it('does not read the Swift programming language as a SWIFT banking code', () => {
+    for (const label of [
+      'Which programming languages do you know? (Java, Swift, Python)',
+      'Do you have experience with Swift?',
+      'Describe your experience building iOS apps in Swift',
+      'Swift/Objective-C proficiency',
+      'Rate your Swift skills',
+      'SwiftUI experience',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+    // The banking sense always names itself, and still stops the fill.
+    expect(redline('SWIFT code')?.category).toBe('financial');
+    expect(redline('SWIFT/BIC')?.category).toBe('financial');
+    expect(redline('SWIFT number')?.category).toBe('financial');
+  });
+
+  it('does not read a CSC course number as a card security code', () => {
+    for (const label of [
+      'Relevant coursework (e.g. CSC 226, MATH 241)',
+      'Have you taken CSC 101?',
+      'CSC courses completed',
+      'CSC 316 Data Structures grade',
+      'Which CSC electives have you completed?',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+    // An unlabelled input takes its placeholder as its label, so this is the same field.
+    expect(checkRedline({ label: 'e.g. CSC 226, MATH 241' })).toBeNull();
+    // The card sense is caught by the branches that name a card.
+    expect(redline('Card security code')?.category).toBe('financial');
+    expect(redline('cc-csc')?.category).toBe('financial');
+  });
+
+  it('does not read a race condition as voluntary self-identification', () => {
+    for (const label of [
+      'Describe a time you debugged a race condition in concurrent code',
+      'Tell us about a race condition you fixed',
+      'Have you run into data races in Go?',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+    expect(redline('Race / Ethnicity')?.category).toBe('eeo_demographic');
+    expect(redline('Racial background')?.category).toBe('eeo_demographic');
+  });
+
+  it('does not read an AI skills question as an AI disclosure', () => {
+    // The verb stem `generat` matched the word "generative", so the phrase "generative AI"
+    // satisfied both halves of the pattern by itself and every AI skills question on the page
+    // was refused — with a note claiming it asked whether AI helped with the application.
+    for (const label of [
+      'What excites you about generative AI?',
+      'Tell us about a project where you used generative AI',
+      'Tell us about your experience with generative AI',
+      'Describe your experience using AI and machine learning frameworks',
+      'Which AI tools have you used in your coursework?',
+      'Have you used Copilot in your development workflow? Describe how.',
+      'Have you used large language models in a research project?',
+      'Have you built an AI assistant?',
+      'Why do you want to work on AI at our company?',
+      'Describe a machine learning model you built',
+    ]) {
+      expect(redline(label), label).toBeNull();
+    }
+  });
+
+  it('still raises the disclosure question the AI category exists for', () => {
+    // Narrowing must not cost the question itself, including the wording that has no
+    // authorship verb in it and is only recognisable by what is being handed in.
+    for (const label of [
+      'Did you use AI to write any part of this application?',
+      'Did you use ChatGPT for this application?',
+      'Was any part of this written with the help of AI?',
+      'Was this essay generated by AI?',
+      'Did you receive assistance from a large language model?',
+      'Did you receive help from AI tools in preparing your responses?',
+      'Please disclose any use of generative AI in preparing this application',
+      'AI usage disclosure',
+    ]) {
+      expect(redline(label)?.category, label).toBe('ai_disclosure');
+    }
   });
 });
 

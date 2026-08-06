@@ -61,17 +61,53 @@ export default tseslint.config(
     },
   },
   {
-    // G4 guard: nothing in the form-filling module may ever click a submit control.
-    // See docs/07-form-automation.md. This rule is a release gate, not a style preference.
-    files: ['apps/server/src/core/filling/**/*.ts'],
+    /**
+     * G4 guard: nothing on the server may ever submit an employer's form.
+     * See docs/07-form-automation.md. This rule is a release gate, not a style preference.
+     *
+     * It used to be one selector,
+     *
+     *     CallExpression[callee.property.name='click'][callee.object.name=/[Ss]ubmit/]
+     *
+     * and `callee.object.name` only exists when the receiver is a bare identifier. So it
+     * caught `submitBtn.click()` and could not see `page.click('button[type=submit]')` —
+     * the ordinary Playwright way to submit a form, and the first thing anyone adding "just
+     * advance the wizard" would reach for. `npm run lint` passed on it.
+     *
+     * The rule that keeps this honest: the word "submit" can sit in the receiver, in a
+     * selector string, in a locator chained ahead of the click, or nowhere at all (Enter
+     * submits a single-input form; so does requestSubmit). A selector per one of those is a
+     * gate with a hole in it, so all of them are here, and anything new goes in beside them.
+     *
+     * Scoped to the whole server rather than core/filling: the browser session is reachable
+     * from a route handler, and the routes were never covered by any of the three gates.
+     * apps/web is left out on purpose — a submit button in the interface is the user
+     * pressing it, which is the point of G4.
+     */
+    files: ['apps/server/src/**/*.ts'],
     rules: {
       'no-restricted-syntax': [
         'error',
-        {
-          selector: "CallExpression[callee.property.name='click'][callee.object.name=/[Ss]ubmit/]",
+        ...[
+          // A click on something whose identifier names it: submitBtn.click().
+          "CallExpression[callee.property.name='click'][callee.object.name=/[Ss]ubmit/]",
+          // A click whose target names it anywhere in the call — page.click('[type=submit]'),
+          // page.locator('#submit-application').click(), getByRole('button', {name:'Submit'}).
+          "CallExpression[callee.property.name='click'] Literal[value=/submit/i]",
+          "CallExpression[callee.property.name='click'] TemplateElement[value.raw=/submit/i]",
+          // Submitting without a click at all.
+          "CallExpression[callee.property.name='requestSubmit']",
+          "CallExpression[callee.property.name='submit'][arguments.length=0]",
+          "NewExpression[callee.name='SubmitEvent']",
+          "NewExpression[callee.name='Event'] > Literal[value='submit']",
+          "CallExpression[callee.property.name='dispatchEvent'] Literal[value='submit']",
+          // Enter is the submit button of any single-input form.
+          'CallExpression[callee.property.name=/^(press|down)$/] > Literal[value=/^Enter$/i]',
+        ].map((selector) => ({
+          selector,
           message:
-            'The tool must never click a submit control. The user submits their own application (G4, docs/07-form-automation.md).',
-        },
+            'The tool must never submit an application. The user does that themselves (G4, docs/07-form-automation.md).',
+        })),
       ],
     },
   },

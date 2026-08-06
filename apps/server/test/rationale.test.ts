@@ -82,6 +82,70 @@ describe('buildRationale', () => {
     expect(text).toMatch(/the pay is low or unpaid/);
   });
 
+  /**
+   * `scoreMatch` gives an explicitly unpaid posting a compensation score of 0.1 with real
+   * evidence behind it, which beats the 0 of a candidate who matches none of the required
+   * skills. With no floor on the lead sentence, the best-of-a-bad-lot dimension won and the
+   * review queue recommended an unpaid internship with "Worth a look because the pay is
+   * good" — the sentence the user reads while deciding whether to spend an evening on it.
+   */
+  it('does not praise the best of a bad lot', () => {
+    const text = buildRationale({
+      company: 'Acme',
+      title: 'SWE Intern',
+      eligibility: 'eligible',
+      rules: [passRule],
+      score: outcome(
+        { compensation: 0.1, requiredSkillCoverage: 0 },
+        { compensation: true, requiredSkillCoverage: true },
+      ),
+    });
+    expect(text).not.toMatch(/Worth a look because/);
+    expect(text).not.toMatch(/the pay is good/);
+    expect(text).toMatch(/nothing here argues for it/i);
+    expect(text).toMatch(/you match few of the required skills/);
+  });
+
+  /**
+   * When the weak dimension is the ONLY evidenced one it supplied both halves, and the
+   * rationale praised and condemned the same 0.1 in one breath.
+   */
+  it('never calls the same dimension both the reason to apply and the reason to be rejected', () => {
+    const text = buildRationale({
+      company: 'Acme',
+      title: 'SWE Intern',
+      eligibility: 'eligible',
+      rules: [passRule],
+      score: outcome({ compensation: 0.1 }, { compensation: true }),
+    });
+    expect(text).not.toMatch(/the pay is good/);
+    expect(text).toMatch(/the pay is low or unpaid/);
+  });
+
+  /**
+   * "Says too little to rank it" is a claim about the posting, and it is false of a posting
+   * that stated its pay and its skills and simply scored badly on both. The two fallbacks
+   * are not interchangeable.
+   */
+  it('distinguishes a posting with no data from a posting whose data is all bad', () => {
+    const noData = buildRationale({
+      company: 'Acme',
+      title: 'SWE Intern',
+      eligibility: 'eligible',
+      rules: [passRule],
+      score: outcome({ compensation: 0.1 }, {}),
+    });
+    const badData = buildRationale({
+      company: 'Acme',
+      title: 'SWE Intern',
+      eligibility: 'eligible',
+      rules: [passRule],
+      score: outcome({ compensation: 0.1 }, { compensation: true }),
+    });
+    expect(noData).toMatch(/says too little to rank it/i);
+    expect(badData).not.toMatch(/says too little to rank it/i);
+  });
+
   it('always includes a downside, which is the whole point of the sentence', () => {
     const text = buildRationale({
       company: 'Acme',

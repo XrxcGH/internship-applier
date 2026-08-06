@@ -335,7 +335,12 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
 
           // What the run found is recorded either way. The form really was filled, and
           // dropping that on the floor because the status moved underneath us would lose
-          // the one list telling the user which fields still need them.
+          // the list of fields the user still has to fill in themselves.
+          //
+          // This copy is the one that survives. The list the review panel shows comes from
+          // the run in memory, and that is discarded when the browser is closed, when a
+          // second run starts and when the server stops — so it is this column, read back
+          // by GET /api/applications/:id, that can still answer the question afterwards.
           db.update(schema.application)
             .set({
               ...(next ? { status: next } : {}),

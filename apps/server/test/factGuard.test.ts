@@ -121,6 +121,15 @@ function fixture(): ConfirmedProfile {
 const QUESTION = 'Tell us about a time you built something you are proud of.';
 const EVIDENCE = retrieveEvidence(fixture(), QUESTION, { limit: 20 });
 
+/** The same student with one field swapped, for cases that need a particular shape. */
+const evidenceFor = (patch: Partial<ConfirmedProfile>) =>
+  retrieveEvidence({ ...fixture(), ...patch } as ConfirmedProfile, QUESTION, { limit: 20 });
+
+const skilledWith = (names: string[]) =>
+  evidenceFor({
+    skills: names.map((name) => ({ name, category: 'tool', evidence: [] })),
+  } as Partial<ConfirmedProfile>);
+
 const verdictOf = (claim: string): string | null =>
   checkClaimDeterministically(claim, EVIDENCE).verdict;
 
@@ -284,6 +293,119 @@ describe('honest drafts are not flagged', () => {
   });
 });
 
+// ────────────────────────────────────────────────────── names that are not employers
+
+describe('a bare acronym is not an invented employer', () => {
+  /**
+   * Every line here is true, ordinary, and the sort of thing any engineer writes about
+   * their own work. Each one used to come back blocking at G3 — `"CSV" does not appear
+   * anywhere on your profile` about a file format, `"HTTP"` about a protocol — on the one
+   * screen with no override, where the only remedy offered is to add the fact to a
+   * profile that has no field for it.
+   */
+  it('leaves technology named in passing alone', () => {
+    for (const line of [
+      'The HTTP layer was the easy part.',
+      'It replaced a CSV export that three people maintained by hand.',
+      'The CSS on that page was awful.',
+      'I deployed it to AWS one Friday afternoon.',
+      'The SQL was the slowest thing in the request.',
+      'I rewrote the HTML by hand because the generator kept mangling it.',
+      'Our CI kept timing out on the same test.',
+      'The ML side of it was mostly reading papers.',
+      'I wrote a REST API for the billing service.',
+      'The JSON payload was three megabytes.',
+    ]) {
+      expect(verdictOf(line), line).toBeNull();
+    }
+  });
+
+  // The other half. IBM and NASA are employers as surely as CSV is a file format, and the
+  // only thing that separates them is what the sentence says the writer did there.
+  it('still catches an acronym the writer claims to have worked at', () => {
+    for (const line of [
+      'I interned at IBM last summer.',
+      'I worked at NASA on flight software.',
+      'I spent two summers at SAP.',
+      'I studied at MIT before transferring.',
+    ]) {
+      expect(verdictOf(line), line).toBe('unsupported');
+    }
+  });
+
+  it('does not exempt a name with an ordinary word beside it', () => {
+    expect(verdictOf('I built the ingest layer at IBM Research last summer.')).toBe('unsupported');
+  });
+});
+
+describe('a short name on the profile does not vouch for an invented employer', () => {
+  const MIT = evidenceFor({ education: [{ ...fixture().education[0]!, institution: 'MIT' }] });
+
+  /**
+   * "smith barney" contains "mit". Matching by bare characters meant the fabrication came
+   * back with no verdict at all, and inside a sentence carrying any ordinary amount of
+   * profile content it came back green — worse than a missed flag, because a green tick
+   * is what tells the user at G3 that there is nothing left to check.
+   */
+  it('rejects an invented employer whose letters swallow a known one', () => {
+    for (const line of [
+      'I interned at Smith Barney last summer.',
+      'I interned at Summit Consulting last summer.',
+    ]) {
+      expect(checkClaimDeterministically(line, MIT).verdict, line).toBe('unsupported');
+    }
+  });
+
+  it('gives the same sentence the same answer whichever employer it invents', () => {
+    const sentence = (employer: string): string =>
+      `Last summer at ${employer} I built a tide chart that works offline because kayakers have no signal.`;
+    for (const employer of ['Smith Barney', 'Goldman Sachs']) {
+      expect(guardDraft(sentence(employer), MIT).blocking.length, employer).toBe(1);
+    }
+  });
+
+  it("still accepts the profile's own name, shortened or extended", () => {
+    expect(checkClaimDeterministically('I study computer science at MIT.', MIT).verdict).toBeNull();
+    expect(
+      checkClaimDeterministically('I ran the study at the MIT Media Lab.', MIT).verdict,
+    ).toBeNull();
+    expect(verdictOf('The Learning Center gave me my first teaching experience.')).toBeNull();
+  });
+});
+
+describe('a plural on the profile supports the singular in the draft', () => {
+  /**
+   * The profile said "Design Patterns" and the draft said "Design Pattern", so the user
+   * was blocked at G3 by a message saying the term does not appear anywhere on their
+   * profile. It did, one letter away. The remedy the message offers — add the fact — had
+   * already been done, and nothing on that screen said the plural was the whole problem.
+   */
+  it('does not call a term missing over one letter', () => {
+    expect(
+      checkClaimDeterministically(
+        'The Design Pattern I leaned on was the outbox.',
+        skilledWith(['Design Patterns', 'Python']),
+      ).verdict,
+    ).toBeNull();
+
+    expect(
+      checkClaimDeterministically(
+        'The Design Patterns I leaned on saved me twice.',
+        skilledWith(['Design Pattern', 'Python']),
+      ).verdict,
+    ).toBeNull();
+  });
+
+  it('still catches a term that really is absent', () => {
+    const r = checkClaimDeterministically(
+      'The Design Paradigm I leaned on was the outbox.',
+      skilledWith(['Design Patterns', 'Python']),
+    );
+    expect(r.verdict).toBe('unsupported');
+    expect(r.reason).toContain('Design Paradigm');
+  });
+});
+
 // ───────────────────────────────────────────────────────────── the pieces
 
 describe('duration extraction', () => {
@@ -297,6 +419,48 @@ describe('duration extraction', () => {
   it('ignores vague quantities rather than guessing a number', () => {
     expect(extractDurations('several years of experience')).toEqual([]);
     expect(extractDurations('many months later')).toEqual([]);
+  });
+
+  /**
+   * "2.5 years" used to match at the word boundary between the dot and the 5, so a half
+   * was read as a whole and the guard measured five years against a thirty-month job.
+   * Half-years are how students describe their own time; every one of them was wrong.
+   */
+  it('reads a decimal and its fraction as one count, not two', () => {
+    expect(extractDurations('for 2.5 years')[0]!.months).toBe(30);
+    expect(extractDurations('for 1.5 years')[0]!.months).toBe(18);
+    expect(extractDurations('about 3.5 months of work')[0]!.months).toBeCloseTo(3.5, 2);
+    expect(extractDurations('over 20.5 years')[0]!.months).toBe(246);
+    expect(extractDurations('a 2.5-year stint')[0]!.months).toBe(30);
+    // And the raw text is the whole number, since it is quoted back to the user.
+    expect(extractDurations('for 2.5 years')[0]!.raw).toContain('2.5');
+  });
+});
+
+describe('half-years are not read as whole ones', () => {
+  // Nothing on this profile is longer than the degree, at 44 months.
+  it('does not flag an honest half-year', () => {
+    expect(verdictOf('I have been writing code for 2.5 years.')).toBeNull();
+    expect(verdictOf('I have been writing code for 3.5 years.')).toBeNull();
+  });
+
+  it('still catches an inflated one', () => {
+    expect(verdictOf('I have been writing code professionally for 8.5 years.')).toBe('overstated');
+    // 10.2 read as "2 years" sat under the ceiling and was waved through.
+    expect(verdictOf('I have been writing code professionally for 10.2 years.')).toBe('overstated');
+  });
+
+  /**
+   * The message quotes the draft back at the user so they can find the sentence. When the
+   * fraction was dropped it quoted "5 years" at someone who had written "2.5 years", and
+   * G3 has no override — they were told to fix a phrase that was not in their draft.
+   */
+  it('quotes a phrase that is actually in the draft', () => {
+    const draft = 'I have been writing code professionally for 8.5 years.';
+    const r = checkClaimDeterministically(draft, EVIDENCE);
+    const quoted = /"([^"]+)"/.exec(r.reason ?? '')?.[1];
+    expect(quoted).toBeTruthy();
+    expect(draft).toContain(quoted);
   });
 });
 

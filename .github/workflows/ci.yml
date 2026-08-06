@@ -42,28 +42,22 @@ jobs:
         run: npm run build
 
       # Release gate — see docs/07-form-automation.md.
-      # The tool fills forms; the user submits them. Nothing may click a submit control.
+      # The tool fills forms; the user submits them. Nothing may submit one.
       #
-      # grep answers 1 for "found nothing" and 2 for "could not look" — an unreadable or
-      # missing path. The old form sent stderr to /dev/null and treated both the same, so
-      # renaming apps/server/src would have printed "ok" having scanned no files at all.
+      # This was a grep for `submit[A-Za-z]*\.click|click\(\).*submit`, and `click\(\)` in it
+      # means literally empty parentheses — so `page.click('button[type=submit]')`, the
+      # ordinary Playwright way to submit a form, matched neither alternative and the step
+      # printed "ok — no submit-click found". scripts/g4-scan.ts carries the patterns now,
+      # self-tests against the submit paths a person would actually write before it reports
+      # anything, and exits 2 rather than 0 if it scanned nothing.
       - name: G4 guard — no auto-submit path
-        run: |
-          if [ ! -d apps/server/src ]; then
-            echo "::error::apps/server/src is missing, so the G4 scan checked nothing."
-            exit 1
-          fi
-          status=0
-          grep -rniE 'submit[A-Za-z]*\.click|click\(\).*submit' apps/server/src || status=$?
-          if [ "$status" -eq 0 ]; then
-            echo "::error::Found a submit click in server source. The user submits their own application (G4)."
-            exit 1
-          fi
-          if [ "$status" -ne 1 ]; then
-            echo "::error::grep exited $status, so the G4 scan did not complete."
-            exit 1
-          fi
-          echo "ok — no submit-click found"
+        run: npx tsx scripts/g4-scan.ts
+
+      # `ApiErrorCode` promises in its own doc block that every code a route sends is listed
+      # there, and twice it wasn't — a client calling ApiError.parse on the reply got a
+      # ZodError instead of the code it needed to branch on. The promise is checked now.
+      - name: Audit error codes
+        run: npx tsx scripts/audit-error-codes.ts
 
       # Gates on high/critical. The one standing moderate finding (esbuild via
       # drizzle-kit) is assessed as unreachable in docs/13-dependency-audit.md;

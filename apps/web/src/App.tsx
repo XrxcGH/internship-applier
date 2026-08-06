@@ -41,7 +41,10 @@ const GATES = [
 const MILESTONES = [
   { id: 'M0', label: 'Skeleton', done: true },
   { id: 'M1', label: 'Resume → profile', done: true },
-  { id: 'M2', label: 'Discovery', done: true },
+  // Server only, and said so here: the endpoints exist and work, but nothing in this
+  // interface calls them, so a flat "Discovery · done" on the overview told a first-time
+  // user to go and find a screen that has never been built.
+  { id: 'M2', label: 'Discovery (server only)', done: true },
   { id: 'M3', label: 'Matching', done: true },
   { id: 'M4', label: 'Review queue', done: true },
   { id: 'M5', label: 'Writing engine', done: true },

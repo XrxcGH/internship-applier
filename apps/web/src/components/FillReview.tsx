@@ -74,6 +74,18 @@ function workingLabel(run: FillRunView): string {
 /** How often to re-ask the server whether the run has finished, in milliseconds. */
 const POLL_MS = 1500;
 
+/**
+ * How many polls in a row may fail before this screen admits it is no longer live.
+ *
+ * More than one, because a single dropped request during a fill is not worth a banner
+ * over. Not unbounded, which is what an empty catch amounts to: with the server gone the
+ * panel kept asking every second and a half, kept failing, and kept the sentence "This
+ * screen updates on its own when it is finished" on display over a run it could no longer
+ * see. Three misses is about four and a half seconds, which is a dead connection rather
+ * than a hiccup.
+ */
+const POLL_FAILURES_ALLOWED = 3;
+
 export function FillReview({
   applicationId,
   applyUrl,
@@ -102,6 +114,8 @@ export function FillReview({
    * landing in that moment closed the browser the user had just signed into.
    */
   const [checked, setChecked] = useState(false);
+  /** Set once the poll below has given up, so nothing on screen goes on promising to update itself. */
+  const [pollLost, setPollLost] = useState(false);
   /**
    * Remembered locally, because marking submitted clears the run.
    *
@@ -166,10 +180,13 @@ export function FillReview({
   useEffect(() => {
     if (!follow) return;
     let cancelled = false;
+    let failures = 0;
+    setPollLost(false);
     const timer = setInterval(() => {
       getFill(applicationId)
         .then((r) => {
           if (cancelled) return;
+          failures = 0;
           setRun(r);
           // A finished fill moves the application to awaiting_submit on the server, so the
           // rest of the panel is out of date the instant the run stops working.
@@ -177,7 +194,16 @@ export function FillReview({
         })
         .catch(() => {
           // A single dropped poll is not worth an error banner over a run that is still
-          // going. The next tick asks again, and a real failure surfaces as a failed run.
+          // going, so the next tick just asks again. A server that has died, or a socket
+          // that broke mid-run, is different: every tick fails, and swallowing all of them
+          // left this panel asking forever while telling the user it would update itself.
+          // Count them, and stop pretending after the third.
+          if (cancelled) return;
+          failures += 1;
+          if (failures >= POLL_FAILURES_ALLOWED) {
+            clearInterval(timer);
+            setPollLost(true);
+          }
         });
     }, POLL_MS);
     return () => {
@@ -307,8 +333,10 @@ export function FillReview({
         <div className="u-card-flat px-5 py-5">
           <p className="u-eyebrow mb-2">Working</p>
           <p className="text-dim">
-            {workingLabel(run)} The browser is open in front of you — watch it there. This screen
-            updates on its own when it is finished.
+            {workingLabel(run)} The browser is open in front of you — watch it there.{' '}
+            {pollLost
+              ? 'This screen has lost contact with the server and is no longer following the run. Reload the page once the server answers again.'
+              : 'This screen updates on its own when it is finished.'}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
             <Button

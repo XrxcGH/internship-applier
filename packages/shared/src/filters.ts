@@ -3,15 +3,31 @@ import { z } from 'zod';
 /**
  * Search filters — see docs/05-matching.md § Filters.
  *
- * Three rules govern this whole file:
+ * MOST OF THIS FILE IS NOT WIRED UP YET, AND THAT IS THE FIRST THING TO KNOW ABOUT IT.
+ *
+ * `queryPlanner.ts` is the only consumer, and it reads seven leaves: `term.seasons`,
+ * `term.years`, `positionTypes`, `location.cities`, `role.roleFamilies`,
+ * `role.titleIncludes` and `company.onlyCompanies`. Everything else — the whole of
+ * CompensationFilter, EligibilityFilter, ApplicationFilter, ArrangementFilter, ViewFilter
+ * and ProgramFlag, and the remaining Term, Location, Role and Company leaves — parses,
+ * validates, and is then dropped on the floor. `POST /api/discovery/plan` accepts a fully
+ * populated body and returns the same plan it would have returned for `{}`, without a note
+ * saying so. Nothing in the web app sends one, so no user is affected today; an API caller
+ * is, silently, and a contributor reading this header as a specification would be.
+ *
+ * Three rules govern the parts that ARE live:
  *
  * 1. Every filter is OPTIONAL — nobody has to state a preference to get results. What an
  *    omitted filter falls back to is mostly permissive, but not uniformly, and the
- *    exceptions are deliberate: the term block (summer, 2027, six weeks of overlap), the
- *    US country default, the internship-and-co-op position types, and the `exclude*` flags
- *    that mirror hard eligibility all narrow to the cycle a user is actually applying for.
- *    Nothing else here narrows anything by default, because a tool that silently excludes
- *    opportunities is worse than one that shows too many.
+ *    exceptions are deliberate: the term block (summer, 2027) and the internship-and-co-op
+ *    position types narrow to the cycle a user is actually applying for. Nothing else here
+ *    narrows anything by default, because a tool that silently excludes opportunities is
+ *    worse than one that shows too many. This rule used to cite `minOverlapWeeks` and the
+ *    US `location.countries` default as narrowing too, and neither one narrows anything:
+ *    what actually decides overlap is `MIN_OVERLAP_WEEKS`, a constant in eligibility.ts
+ *    that no filter can move, and `location.countries` has no reader at all. A default
+ *    described as restrictive that is in fact inert is the more dangerous kind of wrong —
+ *    it invites someone to relax it and conclude the search is broader than it is.
  * 2. Filters that mirror a hard eligibility rule (age, graduation window, work
  *    authorization) are *preferences about what to show*, not the rules themselves.
  *    Eligibility is still computed deterministically in matching/eligibility.ts.
@@ -36,7 +52,13 @@ export const TermFilter = z.object({
   endsBetween: z.object({ from: z.string().optional(), to: z.string().optional() }).default({}),
   /** Co-ops and rotational programs often span two terms. */
   allowMultiTerm: z.boolean().default(true),
-  /** Minimum weeks a posting's term must overlap your availability. */
+  /**
+   * Minimum weeks a posting's term must overlap your availability.
+   *
+   * Not wired up: nothing reads it. The number that actually decides the `term_overlap`
+   * rule is `MIN_OVERLAP_WEEKS` in matching/eligibility.ts, and setting this one to 20 has
+   * exactly the same effect as leaving it at 6 — none.
+   */
   minOverlapWeeks: z.number().int().nonnegative().default(6),
   includeUndatedPostings: z.boolean().default(true),
 });
@@ -97,6 +119,7 @@ export const ArrangementFilter = z.object({
 export const LocationFilter = z.object({
   cities: z.array(z.string()).default([]),
   regions: z.array(z.string()).default([]),
+  /** Not wired up: nothing reads it, so this default excludes no posting from anywhere. */
   countries: z.array(z.string()).default(['US']),
   /** Applied from the profile's base location. Ignored for remote postings. */
   radiusKm: z.number().nonnegative().optional(),

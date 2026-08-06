@@ -201,10 +201,20 @@ export function Settings() {
 
       <Section n="03" title="Your data" step={5}>
         <div className="u-card-flat px-5 py-5">
+          {/* This list named three things and left out the two largest. Your resume goes
+              to the model whole at G1, before there is any answer to draft, and the full
+              text of a posting goes with it whenever requirements are extracted, which is
+              the default on every Recompute. A closed list is worth keeping — it is what
+              someone comes to this page to read — but it has to be the real one, and it
+              now points at the ledger above, which counts every model call as it is made.
+              Anything added that talks to the network belongs in this paragraph. */}
           <p className="text-dim u-prose">
-            Everything is stored on this machine. The only things that ever leave it are the
-            job-source lookups you run, whatever is sent to the model when you draft an answer, and
-            the application sites themselves. You can take all of it with you at any time.
+            Everything is stored on this machine. Some of it does leave, and this is the whole list:
+            the job-source lookups discovery runs, your resume when the model reads it at G1, the
+            text of a posting when its requirements are extracted, whatever is sent to the model
+            while you draft or check an answer, and the application sites themselves. Every one of
+            those model calls is counted in the ledger above, by purpose. You can take all of it
+            with you at any time.
           </p>
           <div className="mt-4">
             <Button

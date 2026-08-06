@@ -160,7 +160,7 @@ type AppEvent =
   | { type: 'match.new'; matchId: string; score: number }
   | { type: 'draft.progress'; applicationId: string; questionId: string; stage: string }
   | { type: 'fill.step'; applicationId: string; field: string; status: 'ok'|'mismatch'|'skipped'|'failed'; note?: string }
-  | { type: 'fill.needs_input'; applicationId: string; reason: 'login'|'captcha'|'unknown_field'; detail: string }
+  | { type: 'fill.needs_input'; applicationId: string; reason: 'login'|'captcha'|'unknown_field'; detail: string }  // 'unknown_field' is never sent — see below
   | { type: 'fill.done'; applicationId: string; filled: number; mismatched: number; failed: number; skipped: number }
   | { type: 'task.failed'; taskId: string; kind: string; error: string };
 ```
@@ -169,6 +169,13 @@ Each event carries a monotonic `seq`, and a heartbeat comment goes out every 20s
 connection alive. The stream is served and the events are published; **the frontend does not
 consume it yet** — there is no `EventSource` anywhere in `apps/web/src`, and each screen
 refetches instead. Reconnect-and-replay from `Last-Event-ID` is therefore untested.
+
+`fill.needs_input` never carries `reason: 'unknown_field'`. `detectIntervention` is the only
+thing that builds an intervention and it returns `login`, `captcha` or nothing at all — a
+field the classifier cannot place is skipped and listed in the pre-submit review, which is
+not a reason to stop and hand the browser back. It matters because the review screen treats
+every reason that is not `login` as a bot check, so a run halted on `unknown_field` would
+tell the user to solve a challenge that is not on the page.
 
 ## Server-side invariants
 
@@ -186,5 +193,12 @@ Enforced in the route layer, above the core modules:
    check that cannot run is not a check that passed.
 4. `submitted_at` is written only by a user action: `mark-submitted` or a `/status`
    transition to `submitted`. No fill or drafting path can write it.
-5. Decrypted 🔒 fields are returned only on the profile and export routes. Date of birth is
-   never included in a fill plan, whatever a form field is classified as.
+5. Decrypted 🔒 fields are returned on the profile route, the export route, and as
+   `readBack` on the fill-run routes. **The last of those used to be left out**, which made
+   this read as a stronger promise than the code keeps: `serializeRun` puts the value read
+   off the page into every field result, so `GET /api/applications/:id/fill` and both POST
+   variants return the decrypted name, email, phone and address. That is not a leak — same
+   local user, loopback-only, the same values the profile route already returns — and it is
+   the point of read-back verification, which is worthless if the value read back does not
+   come back. Date of birth is never included in a fill plan, whatever a form field is
+   classified as.

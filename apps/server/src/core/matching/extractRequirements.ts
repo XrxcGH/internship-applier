@@ -78,11 +78,21 @@ const MONTHS: Record<string, number> = {
   dec: 12,
 };
 
-/** Widens a match to its surrounding sentence so the stored quote reads naturally. */
+/**
+ * Widens a match to its surrounding sentence so the stored quote reads naturally.
+ *
+ * A line break ends the quote as firmly as a full stop does. Postings reach us from the
+ * ATS with their `<li>` markers already stripped, so a whole requirements section arrives
+ * as a run of short lines carrying no punctuation at all; reading to the nearest full stop
+ * then quoted the entire section, and the "evidence" printed beside a rejection was several
+ * paragraphs long and led with a heading from a different part of the posting.
+ */
 function sentenceAround(text: string, index: number, length: number): string {
-  const start = Math.max(0, text.lastIndexOf('.', index) + 1);
+  const start = Math.max(0, text.lastIndexOf('.', index) + 1, text.lastIndexOf('\n', index) + 1);
   const afterDot = text.indexOf('.', index + length);
-  const end = afterDot === -1 ? Math.min(text.length, index + length + 120) : afterDot + 1;
+  const afterLine = text.indexOf('\n', index + length);
+  let end = afterDot === -1 ? Math.min(text.length, index + length + 120) : afterDot + 1;
+  if (afterLine !== -1 && afterLine < end) end = afterLine;
   return text.slice(start, end).trim().slice(0, 400);
 }
 
@@ -97,15 +107,43 @@ function sentenceAround(text: string, index: number, length: number): string {
  * clearance, and "Sponsorship is not available; security clearance is required" is another.
  * Reading only as far back as the last `.` swallowed both, so a student saw no clearance
  * requirement on a posting that has one and applied for something they cannot be hired for.
+ *
+ * Two of these conjunctions are taken back again by `isSoftBreak` below — read that next,
+ * because this list on its own overstates where a statement ends.
  */
 const CLAUSE_BREAK =
   /[.,;:!?()\n\r–—]|\b(?:and|but|or|nor|yet|so|however|although|though|while|whereas)\b/gi;
 
 /**
- * The bounds of the clause containing the match at `index`.
+ * A break that adds another item to the same statement instead of starting a new one.
+ *
+ * "or" and "nor" join alternatives that share one subject and one verb, so a negation
+ * stated once at the front governs everything after them. Counting them as full clause
+ * breaks meant the second alternative was read on its own with the cancelling word out of
+ * view, and every one of these produced a hard requirement out of a sentence that waives
+ * it: "you do not need to be enrolled in a degree program OR returning to school" became an
+ * enrolment requirement that hid the posting from the recent graduate it was written to
+ * invite, and "Neither U.S. citizenship NOR a security clearance is required" produced both
+ * a US-citizenship requirement and a clearance requirement — the two hardest things a
+ * student can fail on — from a sentence denying both. A comma that only introduces one of
+ * these ("enrolled in a program, or returning to school") is part of the same list and is
+ * soft for the same reason.
+ *
+ * "and", "but" and a bare comma or semicolon are NOT soft and must not be made soft. "This
+ * role does not offer relocation, and an active security clearance is required" states a
+ * real clearance requirement, and carrying the "not" across the "and" would throw it away.
+ */
+function isSoftBreak(text: string, m: RegExpExecArray): boolean {
+  if (/^(?:or|nor)$/i.test(m[0])) return true;
+  return m[0] === ',' && /^\s*(?:or|nor)\b/i.test(text.slice(m.index + m[0].length));
+}
+
+/**
+ * The bounds of the statement containing the match at `index`.
  *
  * Breaks that fall inside the match itself are ignored, which matters because the
- * citizenship pattern matches "U.S. citizenship" — full of full stops of its own.
+ * citizenship pattern matches "U.S. citizenship" — full of full stops of its own. Soft
+ * breaks are stepped over, because what follows them is still the same statement.
  */
 function clauseBounds(text: string, index: number, length: number): [number, number] {
   CLAUSE_BREAK.lastIndex = 0;
@@ -113,6 +151,7 @@ function clauseBounds(text: string, index: number, length: number): [number, num
   let end = text.length;
   let m: RegExpExecArray | null;
   while ((m = CLAUSE_BREAK.exec(text)) !== null) {
+    if (isSoftBreak(text, m)) continue;
     if (m.index + m[0].length <= index) start = m.index + m[0].length;
     else if (m.index >= index + length) {
       end = m.index;
@@ -121,6 +160,19 @@ function clauseBounds(text: string, index: number, length: number): [number, num
   }
   return [start, end];
 }
+
+/**
+ * The words that cancel a requirement the surrounding words otherwise appear to state.
+ *
+ * One list, shared by every negation check in this file, because they all failed the same
+ * way one at a time: the citizenship check knew "no" and "not" but not "neither", so it
+ * read "Neither U.S. citizenship nor a clearance is required" as a demand for both. When a
+ * phrasing has to be added here, add its siblings in the same edit — the contraction, the
+ * plural, and the "need not" form of whatever it is — because whichever one is left out is
+ * the one the next posting will use.
+ */
+const NEGATED =
+  /\b(?:no|not|never|neither|nor|none|without|cannot|can'?t|won'?t|doesn'?t|don'?t|isn'?t|aren'?t|regardless|any nationality|all nationalities)\b/i;
 
 /** The words employers use to say "we would like this, but you can apply without it". */
 const SOFTENER =
@@ -145,10 +197,33 @@ function softenerWindow(text: string, index: number, length: number): string {
   return text.slice(start, Math.max(end, index + length));
 }
 
-/** A line that introduces the bullets under it rather than stating a requirement itself. */
+/**
+ * The section headings postings actually use, matched as a whole line.
+ *
+ * Anchored at both ends on purpose. A keyword test that matched anywhere in the line would
+ * call "Experience with Python" and "Strong communication skills" headings, which is
+ * exactly the mistake this replaced.
+ */
+const SECTION_HEADING =
+  /^(?:the\s+)?(?:minimum|basic|preferred|required|desired|desirable|ideal|bonus|additional|other|core|key|technical)?[\s-]*(?:qualifications?|requirements?|skills?|experience|criteria|competencies)\s*$|^(?:nice[\s-]to[\s-]haves?|bonus points?|what we(?:'|’)?re looking for|what you(?:'|’)?ll need|who you are|about (?:you|us|the role|the team)|responsibilities|benefits|perks|eligibility|education)\s*$/i;
+
+/**
+ * A line that introduces the items under it rather than stating a requirement itself.
+ *
+ * Either it ends in a colon, or it is a short line that reads as one of the headings above.
+ * The old test — short, unbulleted, no terminal punctuation — described the requirement
+ * lines themselves just as well as the headings. That barely showed on hand-written bullet
+ * lists, but every posting that arrives through an ATS has had its `<li>` markers stripped
+ * before we see it, so each item is a short unpunctuated line and "Experience with Python"
+ * was taken for the heading of the line beneath it. Only the first item under a real
+ * heading was ever softened; from the second item on, a "Preferred qualifications" section
+ * asking for three years of experience produced a hard three-year requirement and hid the
+ * internship from a student with none.
+ */
 function isHeadingLine(line: string): boolean {
   if (/:\s*$/.test(line)) return true;
-  return line.length <= 60 && !/^[-*•]/.test(line) && !/[.!?,;]$/.test(line);
+  if (/^[-*•]/.test(line) || /[.!?,;]$/.test(line)) return false;
+  return line.length <= 60 && SECTION_HEADING.test(line);
 }
 
 /**
@@ -158,10 +233,15 @@ function isHeadingLine(line: string): boolean {
  * and then write the bullets underneath as flat statements. Reading only the bullet, a
  * posting whose preferred section asked for three years of experience produced a hard
  * three-year requirement and hid an internship from a student with none.
+ *
+ * The walk back reaches over the intervening items to the nearest real heading, and it
+ * looks a long way — a preferred section with a dozen items is ordinary. Overshooting into
+ * an earlier section can only soften a requirement, which costs the user a posting she has
+ * to read for herself; stopping short hard-fails her on a line the posting called optional.
  */
 function governingHeading(text: string, index: number): string | null {
   const lineStart = text.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
-  const before = text.slice(Math.max(0, lineStart - 600), lineStart);
+  const before = text.slice(Math.max(0, lineStart - 1200), lineStart);
   const lines = before
     .split('\n')
     .map((l) => l.trim())
@@ -188,9 +268,20 @@ function statedAsPreferred(text: string, index: number, length: number): boolean
   return heading !== null && SOFTENER.test(heading);
 }
 
-/** The ways a posting names someone who is settled here but is not a citizen. */
+/**
+ * The ways a posting names someone who may work here without being a citizen.
+ *
+ * Green cards are only half of it. "Must be a U.S. citizen or otherwise authorized to work
+ * in the United States" is the commonest form of this sentence by a distance, and naming
+ * only permanent residence meant it fell through to a US-only citizenship requirement: a
+ * student on OPT, who the sentence explicitly includes, was told she was ineligible with
+ * that same sentence quoted underneath. Anything that names a second, non-citizen way to
+ * be hireable belongs in this list — a work-authorisation phrase, a status, a visa
+ * category — because none of them can be written down as a country code, and a citizenship
+ * requirement can hold nothing but country codes.
+ */
 const ACCEPTS_SETTLED_NON_CITIZENS =
-  /\bpermanent\s+residen(?:t|ts|cy|ce)\b|\bgreen[\s-]?card\b|\bU\.?S\.?\s+national\b/i;
+  /\bpermanent\s+residen(?:t|ts|cy|ce)\b|\bgreen[\s-]?card\b|\bU\.?S\.?\s+nationals?\b|\bU\.?S\.?\s+persons?\b|\b(?:authoriz|authoris)(?:ed|ation)\s+to\s+work\b|\bwork\s+(?:authoriz|authoris)ation\b|\b(?:eligible|able|permitted|entitled|allowed|cleared)\s+to\s+work\b|\bright\s+to\s+work\b|\brefugees?\b|\basylees?\b|\basylum\b|\bDACA\b/i;
 
 export function deterministicRequirements(description: string): Candidate[] {
   const out: Candidate[] = [];
@@ -224,12 +315,20 @@ export function deterministicRequirements(description: string): Candidate[] {
   // "authorized to work in the US without sponsorship" is a genuine refusal and just as
   // common.
   //
-  // The check reads the raw text in front of the match rather than the clause, because
-  // `or` is itself a clause break: for "with or without ..." the clause starts after the
-  // "or" and the invitation is already out of view. Only the offending match is skipped —
-  // a posting can carry both an inclusive line and a real refusal.
+  // The check reads the handful of characters immediately in front of the match rather
+  // than anything clause-scoped: what makes this an invitation is the "with" on the far
+  // side of the "or", and nothing further out changes the answer. Only the offending match
+  // is skipped — a posting can carry both an inclusive line and a real refusal.
+  //
+  // Half the employers write this with "sponsorship" as the noun ("we do not offer
+  // sponsorship") and half with "sponsor" as the verb ("we do not sponsor work visas"),
+  // so both need their own branch. The verb branch used to be spliced into the noun one,
+  // where it could only ever have fired on the string "sponsor sponsorship" — meaning
+  // "we cannot sponsor visas", "we will not sponsor applicants for work visas" and
+  // "does not sponsor H-1B visas" all produced no work-authorization requirement at all,
+  // and a student who needs a visa was shown a posting whose first line rules her out.
   for (const m of description.matchAll(
-    /\b(?:not?(?:\s+be)?\s+(?:able to\s+)?(?:provide|offer|sponsor)|unable to (?:provide|offer|sponsor)|without(?: the need for)?)\s*(?:visa\s+)?sponsorship\b|\bdoes not (?:provide|offer) (?:visa )?sponsorship\b|\bno (?:visa )?sponsorship\b/gi,
+    /\b(?:not?(?:\s+be)?\s+(?:able to\s+)?(?:provide|offer|sponsor)|unable to (?:provide|offer|sponsor)|without(?: the need for)?)\s*(?:visa\s+)?sponsorship\b|\bdoes not (?:provide|offer) (?:visa )?sponsorship\b|\bno (?:visa )?sponsorship\b|\b(?:do(?:es)?\s+not|did\s+not|will\s+not|would\s+not|won'?t|can\s?not|can'?t|(?:are|is|am|was|were)\s+not\s+able\s+to|(?:are|is|am|was|were)\s+unable\s+to|unable\s+to|not\s+able\s+to)\s+sponsor\b(?!\s+(?:events?|conferences?|teams?|meetups?|hackathons?|scholarships?))|\bmust\s+not\s+require\s+(?:visa\s+)?sponsorship\b/gi,
   )) {
     const at = m.index ?? 0;
     const lead = description.slice(Math.max(0, at - 40), at);
@@ -275,24 +374,28 @@ export function deterministicRequirements(description: string): Candidate[] {
   // The window is the clause, not the sentence: on "This role does not offer relocation,
   // and U.S. citizenship is required" a sentence-wide check found the "not" that belonged
   // to relocation and threw away a citizenship requirement the posting really states.
+  // It does reach over an "or" or a "nor" in either direction, because those keep one
+  // statement going: "U.S. citizenship or work authorization is not required" waives the
+  // requirement it appears to state, and the "not" is two alternatives away.
+  //
+  // The plural has to be in the pattern. `citizen(?:ship)?` cannot match "citizens" — the
+  // word boundary lands on the "s" — so "Applicants must be United States citizens" and
+  // "open only to U.S. citizens" recorded no restriction at all and showed a barred
+  // posting as eligible.
   for (const m of description.matchAll(
-    /\b(?:must be a |requires? )?(?:U\.?S\.?|United States) citizen(?:ship)?\b(?:\s+is\s+required)?/gi,
+    /\b(?:must be a |requires? )?(?:U\.?S\.?|United States) citizens?(?:hip)?\b(?:\s+is\s+required)?/gi,
   )) {
     const [from, to] = clauseBounds(description, m.index ?? 0, m[0].length);
-    const clause = description.slice(from, to);
-    if (
-      /\b(not|no|without|need not|regardless|any nationality|all nationalities)\b/i.test(clause)
-    ) {
-      continue;
-    }
+    if (NEGATED.test(description.slice(from, to))) continue;
 
     // "U.S. citizenship or permanent residency is required" welcomes green-card holders,
-    // but a citizenship requirement can only carry a list of countries, so recording it as
-    // US-only told a lawful permanent resident they did not qualify for a posting that
-    // names them in the same breath. The alternative always sits on the far side of an
-    // "or", which ends the clause, so the whole sentence is searched for it. What such a
-    // posting is really saying is "you must already be able to work here" — that is a
-    // work-authorization fact, and it is one the rules deliberately never fail anyone on.
+    // and "or otherwise authorized to work in the United States" welcomes anyone with a
+    // visa, but a citizenship requirement can only carry a list of countries, so recording
+    // either as US-only told the person the posting names in the same breath that they did
+    // not qualify. The alternative always sits on the far side of an "or", so the whole
+    // sentence is searched for it. What such a posting is really saying is "you must
+    // already be able to work here" — that is a work-authorization fact, and it is one the
+    // rules deliberately never fail anyone on.
     if (ACCEPTS_SETTLED_NON_CITIZENS.test(sentenceAround(description, m.index ?? 0, m[0].length))) {
       push(
         {
@@ -328,12 +431,17 @@ export function deterministicRequirements(description: string): Candidate[] {
   // Only the text before the phrase is examined. A "without" that comes after it is
   // usually part of the requirement rather than a cancellation of it — "a clearance is
   // required for applicants without prior federal experience" is still a clearance.
+  //
+  // That lead-in now reaches back over an "or" or a "nor", because a posting that denies
+  // two things at once denies them in one breath: "No US citizenship or security clearance
+  // is required" and "Neither sponsorship nor an active clearance is required" both used to
+  // put "This posting requires a security clearance" on screen above the sentence saying it
+  // does not.
   for (const m of description.matchAll(
     /\b(?:active\s+)?(?:security\s+)?clearance\s+(?:is\s+)?(?:required|needed)\b|\bmust (?:be able to )?obtain .{0,20}clearance\b/gi,
   )) {
     const [from] = clauseBounds(description, m.index ?? 0, m[0].length);
-    const lead = description.slice(from, m.index ?? 0);
-    if (/\b(?:no|not|without)\b/i.test(lead)) continue;
+    if (NEGATED.test(description.slice(from, m.index ?? 0))) continue;
     push(
       {
         kind: 'citizenship',
@@ -381,12 +489,17 @@ export function deterministicRequirements(description: string): Candidate[] {
   // last full stop instead threw away real requirements: "We do not offer relocation;
   // candidates must be currently enrolled" and "Interns must be enrolled in an accredited
   // university and will not be considered otherwise" both state one.
+  //
+  // The clause does run back over an "or", though, because these phrases come in lists:
+  // "you do not need to be currently enrolled in a degree program or returning to school"
+  // waives both halves, and reading the second half alone left an empty lead-in with the
+  // "not" one word out of reach, so the sentence written to invite a recent graduate was
+  // the sentence that filtered her out.
   for (const m of description.matchAll(
     /\b(?:currently\s+)?(?:enrolled|pursuing|matriculated)\s+(?:in|at)\b|\bmust be a (?:current|full[- ]time)\s+student\b|\breturn(?:ing)? to school\b/gi,
   )) {
     const [from] = clauseBounds(description, m.index ?? 0, m[0].length);
-    const lead = description.slice(from, m.index ?? 0);
-    if (/\b(?:no|not|without)\b/i.test(lead)) continue;
+    if (NEGATED.test(description.slice(from, m.index ?? 0))) continue;
     push(
       {
         kind: 'enrollment',
@@ -405,7 +518,17 @@ export function deterministicRequirements(description: string): Candidate[] {
       /\b(?:bachelor'?s?|B\.?S\.?|B\.?A\.?|undergraduate)\s+(?:degree|program|student)?/gi,
       'bachelor',
     ],
-    [/\b(?:master'?s?|M\.?S\.?|M\.?Eng\.?|graduate)\s+(?:degree|program|student)/gi, 'master'],
+    // "graduate" gets its own branch, and deliberately cannot be followed by "program".
+    // Outside the US a "Graduate Program" is the name of the entry-level scheme itself —
+    // "Join our 2027 Graduate Program", "Our Graduate Programme welcomes final-year
+    // undergraduates" — so the old alternation read the friendliest new-grad postings on
+    // the board as demanding a master's and hard-failed every undergraduate who saw them.
+    // discovery/normalize.ts already reads the same two words as `new_grad`, which is the
+    // right reading. Only the words that can mean nothing but graduate school qualify.
+    [
+      /\b(?:master'?s?|M\.?S\.?|M\.?Eng\.?)\s+(?:degree|program|student)|\bgraduate\s+(?:degree|students?|school|studies)\b/gi,
+      'master',
+    ],
     [/\b(?:Ph\.?D\.?|doctoral|doctorate)\s+(?:degree|program|student|candidate)?/gi, 'doctorate'],
   ];
   // A degree level is as often a wish as a rule — "Master's preferred", "PhD candidates

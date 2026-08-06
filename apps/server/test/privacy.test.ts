@@ -116,6 +116,27 @@ describe('export', () => {
     expect(res.body).not.toMatch(/"fullName":\s*"v1:/);
   });
 
+  /**
+   * The export walks every string column of every table and decrypts anything that looks
+   * encrypted. Looking encrypted used to mean "starts with v1: and has four colon-separated
+   * pieces", which is a shape ordinary writing reaches on its own — and the answers, posting
+   * descriptions and templates that reached it were replaced in the export by a message
+   * saying they could not be decrypted, while the database still held the real sentence.
+   */
+  it('hands back an answer that happens to look like ciphertext, word for word', async () => {
+    const text = 'v1: gather requirements; v2: prototype; v3: ship it';
+    db.insert(schema.answerTemplate)
+      .values({ id: ulid(), questionKey: `why-us-${ulid()}`, canonicalText: text })
+      .run();
+
+    const body = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/privacy/export' })).body,
+    ) as { data: Record<string, Array<Record<string, unknown>>> };
+
+    const stored = body.data['answerTemplate']?.map((r) => r['canonicalText']);
+    expect(stored).toContain(text);
+  });
+
   it('says plainly what the file contains', async () => {
     const body = JSON.parse(
       (await app.inject({ method: 'GET', url: '/api/privacy/export' })).body,
@@ -197,6 +218,24 @@ describe('delete', () => {
       const { n } = sqlite.prepare(`SELECT COUNT(*) AS n FROM "${name}"`).get() as { n: number };
       expect(n, `${name} still has rows after "delete everything"`).toBe(0);
     }
+  });
+
+  /**
+   * "Delete everything" ended by listing what it could not delete, and the OS credential
+   * store was always on that list — the check treated "there was no entry to remove" the
+   * same as "we could not reach the store". So every successful wipe told the user to go
+   * and hunt down a keychain entry by hand, on machines where there was nothing left to
+   * find, at the exact moment they were being asked to trust that the deletion was real.
+   */
+  it('does not report a keychain failure when there was nothing to fail', async () => {
+    seed();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/privacy/delete-all',
+      payload: { confirm: DELETE_CONFIRMATION },
+    });
+    const body = res.json() as { failed: Array<{ path: string; reason: string }> };
+    expect(body.failed.map((f) => f.path)).not.toContain('OS credential store');
   });
 
   it('accepts the phrase regardless of casing or surrounding space', async () => {

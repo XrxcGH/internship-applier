@@ -63,6 +63,18 @@ export const CONFIDENCE_FLOOR = 0.75;
  * Only tokens with an unambiguous meaning for us are listed. `organization` is
  * deliberately absent: on an application form it may be the applicant's current employer
  * or the school, and guessing between them is exactly the mistake worth not making.
+ *
+ * `url` is absent for exactly the same reason, and it used to be here. The token says the box
+ * holds a web address and never whose, and a declared token is resolved before the rule table
+ * — so it defeated the linkedin, github and portfolio rules that the table deliberately
+ * orders above the generic "website". A GitHub box carrying `autocomplete="url"` was
+ * classified `website` at 0.99 and filled with the applicant's portfolio address, which reads
+ * back identically to what was typed and so was reported as a field filled correctly. A URL
+ * field whose label names no host still reaches the website rule below, so nothing is lost.
+ *
+ * EVERY TOKEN LEFT IN THIS TABLE NAMES SOMETHING READ OFF THE APPLICANT'S OWN PROFILE, which
+ * is why `classifyField` refuses a declared token on a label that is asking about somebody
+ * else. See NOT_THE_APPLICANT.
  */
 const AUTOCOMPLETE: Record<string, FieldSemantic> = {
   'given-name': 'first_name',
@@ -78,7 +90,6 @@ const AUTOCOMPLETE: Record<string, FieldSemantic> = {
   'postal-code': 'postal',
   country: 'country',
   'country-name': 'country',
-  url: 'website',
 };
 
 interface Rule {
@@ -89,6 +100,17 @@ interface Rule {
   /** When this matches too, the rule does not apply and matching carries on. */
   unless?: RegExp;
 }
+
+/**
+ * One regex out of several, so a disqualifier can be assembled from named pieces.
+ *
+ * Worth having because the same wording is a disqualifier for one rule and the whole
+ * question for another — "University graduation date" must not name a school, and it must
+ * name a graduation date. Writing the shared half twice is how the two halves drift apart,
+ * and a drift here is silent: one rule stops matching and the field is filled by whichever
+ * rule catches it next.
+ */
+const anyOf = (...parts: RegExp[]): RegExp => new RegExp(parts.map((p) => p.source).join('|'), 'i');
 
 /**
  * Qualifiers that mean an address word is not asking where the user lives.
@@ -116,14 +138,123 @@ const NOT_A_MAILING_ADDRESS =
   /\bbirth\b|\bborn\b|\bcitizen(ship)?s?\b|\bnationalit(y|ies)\b|\bnational origin\b/i;
 
 /**
+ * Labels that are asking about somebody who is not the applicant.
+ *
+ * A references section, a work-history row and a parent/guardian block ask for a name, an
+ * email address, a phone number and sometimes a profile link — the same words the
+ * applicant's own fields use, which is all the rules below were matching on. So "Reference 1
+ * Email" was filled with the applicant's own address at 0.97, "Supervisor's phone" with their
+ * mobile, "Reference full name" and "Reference first name" with their own name, "Employer
+ * city" with the city they live in, and "Supervisor's LinkedIn profile" with their own
+ * profile. Read-back compares against the value the plan chose, so every one of those came
+ * back in the pre-submit review as a field filled correctly. The result is a form that tells
+ * an employer a professor's email address is rosa@example.edu, and a referee who is never
+ * contacted because nobody's real details were ever on the page.
+ *
+ * These fall to `unknown` rather than to a redline, and the difference matters. A redline is
+ * a refusal to fill something the tool could fill; here the profile simply does not hold
+ * anyone else's contact details, so `unknown` is the honest answer — the box is left empty
+ * and shown to the user, which is the treatment "Referee name" already got purely because no
+ * rule happened to match the word.
+ *
+ * TWO RULES FOR ANYONE EXTENDING THIS. Every rule whose value is read off the applicant's own
+ * profile carries this disqualifier, including the declared-autocomplete shortcut, because a
+ * form is free to put `autocomplete="email"` on a referee's box. And every noun here spells
+ * its plural: forms number these rows ("Reference 2 Email") and pluralize the headings
+ * ("References"), so a singular on its own leaves half the shapes still being filled.
+ */
+const NOT_THE_APPLICANT =
+  /\breferences?\b|\brefs?\b|\breferees?\b|\brecommend(ers?|ations?)\b|\bsupervisors?\b|\bmanagers?\b|\bprofessors?\b|\binstructors?\b|\badvis(o|e)rs?\b|\bmentors?\b|\bemployers?\b|\bcompan(y|ies)\b|\bguardians?\b|\bparents?\b|\bspouse\b|\bnext of kin\b|\bemergency\b|\bschools?\b|\buniversit(y|ies)\b|\bcolleges?\b|\binstitutions?\b|\bregistrars?\b|\bdepartments?\b|\bteachers?\b|\bcoach(es)?\b|\bcounsel(l)?ors?\b/i;
+
+/**
+ * A graduation word that is actually asking WHEN.
+ *
+ * This is both the graduation_date rule's own test and half of the school rule's
+ * disqualifier, which is why it is named once and used twice. The bare adjective is not
+ * enough on its own: while the rule matched a lone "graduate", "Are you an undergraduate or
+ * graduate student?", "Graduate degree" and "Graduate program of interest" were all
+ * classified graduation_date at 0.93 and answered with "2028-05" — a date typed into a
+ * degree-level question, sitting above the degree and enrollment_status rules that were
+ * written for exactly those labels and could never be reached.
+ *
+ * "Expected graduation" carries no date word at all and is still a date question, so the
+ * expectation words count as the date sense on their own.
+ */
+const GRADUATION_IS_A_DATE =
+  /\bgraduat\w*\b.{0,20}\b(dates?|years?|months?|terms?|semesters?)\b|\b(date|year|month|term|semester|when)\b.{0,20}\bgraduat|\b(expected|anticipated|projected|planned|upcoming)\b.{0,12}\bgraduat/i;
+
+/**
+ * A school word attached to the school's own contact details rather than to its name.
+ *
+ * "School website" and "University homepage" are asking for the institution's address on the
+ * web. Whichever rule claims them, the answer is wrong in a different way — the school rule
+ * types "Cornell University" into a URL box, the website rule types the applicant's own
+ * portfolio address into the school's — so the field belongs to nobody here and the honest
+ * answer is `unknown`.
+ *
+ * An email address, a phone number or a postal address behind a school word is the same
+ * shape with the same two wrong answers. This tool holds contact details for nobody but the
+ * applicant, and offering those is how "University email address" came to be answered with
+ * the student's own.
+ */
+const THE_SCHOOLS_OWN_LINK =
+  /\b(website|web site|url|homepage|blog|e-?mail|phone|telephone|fax|contact|address)\b/i;
+
+/** Class-standing questions: "Year in school" asks how far along, not which school. */
+const ASKS_HOW_FAR_ALONG =
+  /\byear\b.{0,20}\bin school\b|\bclass (standing|year)\b|\bacademic year\b/i;
+
+/**
+ * The date columns of a repeating history row.
+ *
+ * An education row is "School / Degree / Start date / End date", and each of those column
+ * headings is a label of its own. "School start date" and "Institution start date" matched
+ * the school rule, which sits above every date rule and wins first — so the name of the
+ * user's university was typed into a date box and read back unchanged. "Degree start date"
+ * did the same thing with the degree rule.
+ */
+const A_ROW_DATE_COLUMN =
+  /\b(start|end|from|to|begin|beginning|completion) ?dates?\b|\bdates? (attended|of attendance|of employment|of enrollment)\b/i;
+
+/**
  * Wording that turns a school word into context rather than the question.
  *
- * "University graduation date" asks when, not where; "Year in school" asks how far along.
- * Neither is answered by the name of the institution. See the `unless` on the school rule
- * for what went wrong while these were missing.
+ * "University graduation date" asks when, not where; "Year in school" asks how far along;
+ * "College end date" is a column in a table of history. None of the three is answered by the
+ * name of the institution. See the `unless` on the school rule for what went wrong while
+ * these were missing.
  */
-const ASKS_WHEN_NOT_WHICH =
-  /\bgraduat\w*\b.{0,20}\b(dates?|years?|months?|terms?|semesters?)\b|\b(date|year|month|when)\b.{0,20}\bgraduat|\byear\b.{0,20}\bin school\b|\bclass (standing|year)\b|\bacademic year\b/i;
+const ASKS_WHEN_NOT_WHICH = anyOf(GRADUATION_IS_A_DATE, ASKS_HOW_FAR_ALONG, A_ROW_DATE_COLUMN);
+
+/** Everything that stops a school word from being a request for the institution's name. */
+const NOT_WHICH_SCHOOL = anyOf(ASKS_WHEN_NOT_WHICH, THE_SCHOOLS_OWN_LINK);
+
+/**
+ * A date that belongs to a row of history rather than to this internship.
+ *
+ * `start_date` and `end_date` are answered from the profile's availability window, and they
+ * matched any label containing "start date" or "end date" — which is precisely how every
+ * work-history and education table labels its date columns. "Previous employer start date",
+ * a label that says in so many words that it is history, was filled with the date the user
+ * becomes available, verified by read-back, and reported to them as correct. That is a false
+ * statement about someone's employment history, made in their name, in the document they are
+ * about to submit, with the review screen arguing the field is right.
+ *
+ * The lookahead is the other half of the rule and it is not optional. A history word does not
+ * settle it when the label ALSO says it is asking about availability: "Desired employment
+ * start date" and "Preferred position start date" are asking when the applicant can begin,
+ * and refusing those would hand back the one date the profile can actually answer. So the
+ * availability sense, wherever it appears in the label, wins — and only in its absence does a
+ * history word disqualify the date.
+ */
+const A_HISTORY_ROW_DATE = new RegExp(
+  String.raw`^(?!.*\b(availab(le|ility)|earliest|soonest|desired|preferred|anticipated)\b).*` +
+    String.raw`(\bemploy(ment|er|ers|ed)\b|\bcompan(y|ies)\b|\bpositions?\b|\bjobs?\b|\broles?\b` +
+    String.raw`|\bschools?\b|\buniversit(y|ies)\b|\bcolleges?\b|\binstitutions?\b|\bdegrees?\b` +
+    String.raw`|\bprograms?\b|\battend(ed|ance)?\b|\benrolled\b|\bexperiences?\b` +
+    String.raw`|\bhistor(y|ies)\b|\bprevious(ly)?\b|\bprior\b|\bformer\b|\bmost recent\b)`,
+  'i',
+);
 
 /** The semantics whose value is read off the profile's address, whatever named them. */
 const FROM_MAILING_ADDRESS = new Set<FieldSemantic>([
@@ -140,63 +271,104 @@ const FROM_MAILING_ADDRESS = new Set<FieldSemantic>([
  * "company name", or it swallows all of them.
  */
 const RULES: Rule[] = [
-  // ── Identity ──────────────────────────────────────────────────────────────
-  { semantic: 'first_name', test: /\b(first|given|fore) ?name\b|\bfname\b/i, confidence: 0.97 },
+  // ── Identity. Every one of these answers with the applicant's own details, so every one
+  //    of them carries the same disqualifier: see NOT_THE_APPLICANT above.
+  {
+    semantic: 'first_name',
+    test: /\b(first|given|fore) ?name\b|\bfname\b/i,
+    confidence: 0.97,
+    unless: NOT_THE_APPLICANT,
+  },
   {
     semantic: 'last_name',
     test: /\b(last|family|sur) ?name\b|\blname\b|\bsurname\b/i,
     confidence: 0.97,
+    unless: NOT_THE_APPLICANT,
   },
   {
     semantic: 'full_name',
     test: /\b(full|legal|preferred|display) ?name\b|\byour name\b|\bname of applicant\b/i,
     confidence: 0.9,
+    unless: NOT_THE_APPLICANT,
   },
-  { semantic: 'email', test: /\be-?mail\b/i, confidence: 0.97 },
+  { semantic: 'email', test: /\be-?mail\b/i, confidence: 0.97, unless: NOT_THE_APPLICANT },
   {
     semantic: 'phone',
     test: /\b(phone|mobile|cell|telephone|contact number)\b/i,
     confidence: 0.94,
+    unless: NOT_THE_APPLICANT,
   },
 
   // ── Address. Region before city, because "state" is the more distinctive word.
   //    Every rule here answers from the profile's mailing address, so every one of them
-  //    carries the same disqualifier: see NOT_A_MAILING_ADDRESS above.
+  //    carries the same two disqualifiers: the address answers no origin question (see
+  //    NOT_A_MAILING_ADDRESS) and it is not the address of the company, the school or the
+  //    referee whose row the column belongs to (see NOT_THE_APPLICANT).
   {
     semantic: 'address_line1',
     test: /\b(street|mailing|home|current) address\b|\baddress ?(line ?)?1\b|\baddr1\b/i,
     confidence: 0.9,
-    unless: NOT_A_MAILING_ADDRESS,
+    unless: anyOf(NOT_A_MAILING_ADDRESS, NOT_THE_APPLICANT),
   },
   {
     semantic: 'postal',
     test: /\b(zip|postal)( ?code)?\b|\bpostcode\b/i,
     confidence: 0.95,
-    unless: NOT_A_MAILING_ADDRESS,
+    unless: anyOf(NOT_A_MAILING_ADDRESS, NOT_THE_APPLICANT),
   },
   {
     semantic: 'region',
     test: /\b(state|province|region|county)\b/i,
     confidence: 0.85,
-    unless: NOT_A_MAILING_ADDRESS,
+    unless: anyOf(NOT_A_MAILING_ADDRESS, NOT_THE_APPLICANT),
   },
   {
     semantic: 'city',
     test: /\b(city|town|locality)\b/i,
     confidence: 0.9,
-    unless: NOT_A_MAILING_ADDRESS,
+    unless: anyOf(NOT_A_MAILING_ADDRESS, NOT_THE_APPLICANT),
   },
-  { semantic: 'country', test: /\bcountry\b/i, confidence: 0.92, unless: NOT_A_MAILING_ADDRESS },
+  {
+    semantic: 'country',
+    test: /\bcountry\b/i,
+    confidence: 0.92,
+    unless: anyOf(NOT_A_MAILING_ADDRESS, NOT_THE_APPLICANT),
+  },
 
-  // ── Links. Specific hosts before the generic "website".
-  { semantic: 'linkedin', test: /\blinked ?in\b/i, confidence: 0.98 },
-  { semantic: 'github', test: /\bgit ?hub\b|\bgitlab\b/i, confidence: 0.98 },
+  // ── Links. Specific hosts before the generic "website", and none of them is the link of
+  //    the reference or the employer whose row it sits in.
+  {
+    semantic: 'linkedin',
+    test: /\blinked ?in\b/i,
+    confidence: 0.98,
+    unless: NOT_THE_APPLICANT,
+  },
+  {
+    semantic: 'github',
+    test: /\bgit ?hub\b|\bgitlab\b/i,
+    confidence: 0.98,
+    unless: NOT_THE_APPLICANT,
+  },
   {
     semantic: 'portfolio',
     test: /\bportfolio\b|\bpersonal (site|website)\b|\bbehance\b|\bdribbble\b/i,
     confidence: 0.92,
+    unless: NOT_THE_APPLICANT,
   },
-  { semantic: 'website', test: /\b(website|web site|url|homepage|blog)\b/i, confidence: 0.8 },
+  // The generic link rule, and the one that needed the widest disqualifier: it matches the
+  // bare word "URL", which is how a form labels the address of the company, the school, the
+  // job posting and the place the applicant heard about the role. Every one of those was
+  // answered with the applicant's own portfolio address, read back identically, and reported
+  // filled correctly — an employer's website box telling them their own URL is rosa.dev.
+  {
+    semantic: 'website',
+    test: /\b(website|web site|url|homepage|blog)\b/i,
+    confidence: 0.8,
+    unless: anyOf(
+      NOT_THE_APPLICANT,
+      /\borgani[sz]ations?\b|\bschools?\b|\buniversit(y|ies)\b|\bcolleges?\b|\bpostings?\b|\bjob (ad|ads|listing|listings)\b|\b(how|where) did you hear\b/,
+    ),
+  },
 
   // ── Education. Uploads first, since "transcript" also appears in prose.
   {
@@ -218,23 +390,31 @@ const RULES: Rule[] = [
     //
     // The disqualifier needs the graduation word paired with a date, a year or a "when".
     // The bare adjective must not disqualify anything, or "Graduate school" — which is
-    // asking which one — would fall through to a date rule. ("Graduate program" never
-    // reaches this rule: it carries no school word, so an earlier rule claims it first.)
-    unless: ASKS_WHEN_NOT_WHICH,
+    // asking which one — would fall through to a date rule. It also has to cover the date
+    // columns of an education row, because "School start date" and "College end date" are
+    // asking when just as plainly as "graduation date" is, and the school's own web address.
+    unless: NOT_WHICH_SCHOOL,
   },
   // graduation_date sits ABOVE degree deliberately. Matching is first-wins, and the
   // broad /\bdegree\b/ swallowed "Degree date" and "Degree completion date" — typing a
   // degree level into a date field and making this rule's own \bdegree date\b branch
   // unreachable.
+  //
+  // What it must NOT swallow in return is the bare adjective in "Graduate degree" or "Are
+  // you an undergraduate or graduate student?", which is what GRADUATION_IS_A_DATE is for.
   {
     semantic: 'graduation_date',
-    test: /\bgraduation\b|\bgraduat(e|ing|ion)\b|\bdegree (date|completion)\b|\bcompletion date\b/i,
+    test: anyOf(GRADUATION_IS_A_DATE, /\bdegree (date|completion)\b|\bcompletion date\b/),
     confidence: 0.93,
   },
   {
     semantic: 'degree',
     test: /\bdegree\b|\bqualification\b|\b(bachelor|master|doctora|phd)\b/i,
     confidence: 0.9,
+    // Same reason as the school rule above it: "Degree start date" is a date column in a
+    // history row, and while this rule claimed it the user's degree level — "Bachelor of
+    // Science" — was typed into a date box and reported back as filled correctly.
+    unless: ASKS_WHEN_NOT_WHICH,
   },
   {
     semantic: 'major',
@@ -269,15 +449,20 @@ const RULES: Rule[] = [
   { semantic: 'cover_letter_upload', test: /\bcover letter\b/i, confidence: 0.95 },
 
   // ── Logistics ─────────────────────────────────────────────────────────────
+  // Both date rules answer from the profile's availability window, so both carry the same
+  // disqualifier: a date column in a table of past jobs or past schooling is not it. See
+  // A_HISTORY_ROW_DATE.
   {
     semantic: 'start_date',
     test: /\b(start|available|availability|commence|join)( ?ing)? date\b|\bearliest start\b|\bwhen can you start\b/i,
     confidence: 0.92,
+    unless: A_HISTORY_ROW_DATE,
   },
   {
     semantic: 'end_date',
     test: /\b(end|finish|until) date\b|\bavailable until\b/i,
     confidence: 0.9,
+    unless: A_HISTORY_ROW_DATE,
   },
   {
     semantic: 'hours_available',
@@ -289,9 +474,16 @@ const RULES: Rule[] = [
     test: /\b(salary|compensation|pay|rate) (expectation|requirement|range)\b|\b(desired|expected|target) (salary|compensation|pay|rate)\b/i,
     confidence: 0.92,
   },
+  // The word "source" has to arrive carrying the referral sense. On its own it claimed
+  // "Open source contributions", "Source code repository" and "Funding source", and since
+  // the planner has no value for this semantic the user was shown "Your profile has no
+  // referral source to fill in." beside a box asking about their open-source work — a
+  // sentence that is not true of the field it is printed next to. Those fields were also
+  // counted as fillable in the summary line, having been recognized as something the
+  // planner can never fill.
   {
     semantic: 'referral_source',
-    test: /\bhow did you hear\b|\bhow (did|do) you (find|learn)\b|\breferral source\b|\bwhere did you hear\b|\bsource\b/i,
+    test: /\bhow did you hear\b|\bhow (did|do) you (find|learn)\b|\bwhere did you hear\b|\b(referral|lead|traffic|application|candidate) sources?\b|\bsources? of (referral|application)\b/i,
     confidence: 0.88,
   },
 ];
@@ -348,13 +540,27 @@ export function classifyField(d: FieldDescriptor): Classification {
 
   const auto = d.autocomplete?.trim().toLowerCase();
   const declared = auto ? AUTOCOMPLETE[auto] : undefined;
-  // The one place a declared token is not the last word. `autocomplete="country"` is the
-  // browser's vocabulary for the country of a postal address, so a form that puts it on a
-  // "Country of birth" box has answered a different question than the one on screen — and
-  // trusting it would type the user's home country into their birthplace by the same route
-  // the label rules used to.
-  if (declared && !(FROM_MAILING_ADDRESS.has(declared) && NOT_A_MAILING_ADDRESS.test(normalized))) {
-    return { semantic: declared, confidence: 0.99, via: 'autocomplete' };
+  // The two places a declared token is not the last word, and both are the same mistake:
+  // the token says what KIND of thing the box holds and never whose, or about whom.
+  //
+  // `autocomplete="country"` is the browser's vocabulary for the country of a postal
+  // address, so a form that puts it on a "Country of birth" box has answered a different
+  // question than the one on screen — and trusting it would type the user's home country
+  // into their birthplace by the same route the label rules used to.
+  //
+  // Every token in AUTOCOMPLETE is answered from the applicant's own profile, so a label
+  // naming somebody else disqualifies all of them equally. A references section that marks
+  // its boxes `autocomplete="name"` and `autocomplete="email"` — which is exactly what a form
+  // does to make the browser's own autofill work — would otherwise walk straight past the
+  // disqualifier the rule table carries and put the applicant's details in a referee's row at
+  // 0.99, the highest confidence this file hands out.
+  if (declared) {
+    const aboutSomeoneElse = NOT_THE_APPLICANT.test(normalized);
+    const wrongAddressSense =
+      FROM_MAILING_ADDRESS.has(declared) && NOT_A_MAILING_ADDRESS.test(normalized);
+    if (!aboutSomeoneElse && !wrongAddressSense) {
+      return { semantic: declared, confidence: 0.99, via: 'autocomplete' };
+    }
   }
 
   if (!normalized) return { semantic: 'unknown', confidence: 0, via: 'none' };

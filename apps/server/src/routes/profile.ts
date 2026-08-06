@@ -58,7 +58,14 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
         .code(404)
         .send({ error: { code: 'NOT_FOUND', message: 'No profile yet. Upload a resume first.' } });
     }
-    const target = decodeURIComponent(req.params.path);
+    // The router has already decoded this segment, and decoding it a second time was wrong
+    // in both directions. A flag containing a percent sign — the extractor writes whatever
+    // it read, and "honors.0.top 5%" is a real honour — arrived as `100%off`, threw a
+    // URIError out of the handler and came back as a 500 saying the server had broken;
+    // since G1 refuses to confirm a profile while any flag is outstanding, that flag could
+    // never be cleared and the wizard could not be finished. A flag containing `%2F` was
+    // quietly turned into `a/b`, matched nothing, and was left in place just as permanently.
+    const target = req.params.path;
     return saveProfile({ ...p, needsReview: p.needsReview.filter((f) => f !== target) });
   });
 }

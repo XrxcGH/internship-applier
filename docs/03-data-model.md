@@ -183,7 +183,7 @@ this posting), `seen_at`. Unique on `(posting_id, source_id)`.
 | `posted_at` / `closes_at` | text | `closes_at` nullable |
 | `is_open` | integer | Refreshed by `refresh.ts` |
 | `ats_vendor` | text | Detected: greenhouse/lever/ashby/workday/icims/taleo/smartrecruiters/workable/unknown |
-| `apply_effort` | json | `{steps, essayCount, requiresAccount, estMinutes}` |
+| `apply_effort` | json | `{steps, essayCount, requiresAccount, estMinutes}`. **Nothing writes it**: no adapter, no refresh and no manual-posting path sets it, so it is always null and the Application-effort dimension in docs/05 scores every posting the same neutral 0.6 |
 | `fingerprint` | text | `company \| normalized title \| primary city` — second dedupe key, indexed |
 | `embedding` | blob | Reserved for similarity search. **Nothing writes it**: dedupe stage 3 is token-set equality over titles, not embeddings (docs/04 § Dedupe) |
 | `requirements_extracted_at` | text | When requirements were last extracted, whatever the outcome. Null and "extracted, found none" are different states and the cache has to tell them apart |
@@ -229,7 +229,7 @@ posting on every render would be a different answer from the one the user was sh
 | `deadline_at` | text | Copied from posting for reminder scheduling |
 | `screenshot_path` | text | Final pre-submit full-page capture. **Nothing writes it** — no screenshot is captured anywhere in the app (docs/07 § G4). The column is kept because the pre-submit review is the place one would belong. |
 | `skipped_fields` | json | Redlined/unclassifiable fields the user must handle |
-| `notes` 🔒 | text | |
+| `notes` | text | Plaintext — no writer yet. This carried a 🔒 while nothing in the app wrote it at all, which promised a protection that did not exist and would have had whoever built the first notes feature take the column as handled. Whatever writes it must call `encryptField(value, applicationId)` and add the 🔒 in the same commit |
 
 `application_answer` — the audit trail that makes G3 meaningful:
 
@@ -275,8 +275,18 @@ generation risk and keeps a consistent story across applications.
 Enforced in code, and where possible as DB constraints or triggers:
 
 1. Nothing downstream of ingestion reads a `profile` with `confirmed_at IS NULL`.
-2. `application.status` may not advance to `filled` while any `application_answer` for it
-   has `approved_at IS NULL`.
+2. Gate G3 — no form is filled from an answer the user has not approved. `load()` in
+   `routes/filling.ts` refuses to start or continue a fill run while any
+   `application_answer` for the application has `approved_at IS NULL`, and that is the
+   boundary that matters, because it is the only one on the way to an employer's page.
+
+   **This is not a constraint on the `status` column, and this list used to say it was.**
+   `POST /api/applications/:id/status` checks `canTransition` and nothing else, and
+   `answers_ready → filled` is a legal user transition, so a client can set the status to
+   `filled` with every answer unapproved: the tracker board then shows `filled` and the CSV
+   export says `filled` for an application whose answers have never been read. There is no
+   DB trigger either. Nothing has been filled — G3 held where it counts — but the column
+   lies, and anyone auditing this list was told a check existed that did not.
 3. `application.submitted_at` is written only where the user themselves says the application
    was submitted. Two endpoints do that: `POST /api/applications/:id/mark-submitted`, and
    `POST /api/applications/:id/status` when the target status is `submitted`. Both are

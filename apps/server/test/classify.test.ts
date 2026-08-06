@@ -262,3 +262,288 @@ describe('origin questions are not the mailing address', () => {
     expect(classifyField({ label: 'Country', autocomplete: 'country' }).via).toBe('autocomplete');
   });
 });
+
+/**
+ * A referee's email address is not the applicant's, and the rules were matching on the word
+ * "email" alone.
+ *
+ * "Reference 1 Email" was filled with the applicant's own address at 0.97, "Supervisor's
+ * phone" with their mobile, "Reference full name" and "Reference first name" with their own
+ * name, and "Employer city" with the city they live in. Read-back compares against the value
+ * the plan chose, so every one came back in the pre-submit review as filled correctly: an
+ * employer is told a professor's email is rosa@example.edu, and the referee is never
+ * contacted. `unknown` is the honest answer — the profile does not hold anyone else's
+ * details, so the box is left empty and handed to the user.
+ */
+describe('fields that belong to somebody who is not the applicant', () => {
+  const NOT_YOURS = [
+    // The school is a party to the application too, and its contact details are no more the
+    // applicant's than a referee's are. This half was missing while the employer and
+    // reference words were listed, so "University email address" was answered with the
+    // student's own address — the exact substitution this rule exists to prevent.
+    'University email address',
+    'School phone number',
+    'Registrar email',
+    'Institution contact email',
+    'Department phone number',
+    'Counselor email',
+    'College email address',
+    'Reference 1 Email',
+    'Reference 2 Email',
+    'References email address',
+    'Recommender email',
+    'Recommendation contact email',
+    "Supervisor's email",
+    'Professor email',
+    'Instructor email address',
+    'Academic advisor email',
+    'Manager phone',
+    'Reference phone',
+    'Recommender phone number',
+    'Employer phone number',
+    'Reference full name',
+    'Reference legal name',
+    'Reference first name',
+    'Supervisor last name',
+    'Parent/guardian email',
+    'Mentor email',
+    "Reference's LinkedIn URL",
+    "Supervisor's LinkedIn profile",
+    'Employer city',
+    'Company zip code',
+    'Previous employer country',
+    'Employer street address',
+    'Company website',
+    'Previous employer URL',
+  ];
+
+  for (const label of NOT_YOURS) {
+    it(`leaves "${label}" for the user`, () => {
+      const c = of(label);
+      expect(c.semantic, label).toBe('unknown');
+      expect(isActionable(c), label).toBe(false);
+    });
+  }
+
+  /**
+   * The declared-token shortcut resolves BEFORE the rule table, so a disqualifier that only
+   * lived on the rules was half a fix. A references section marking its boxes
+   * `autocomplete="email"` — which is exactly what a form does to make the browser's own
+   * autofill work — walked past it and filled the referee's row at 0.99.
+   */
+  it('is not talked round by an autocomplete token on a referee’s box', () => {
+    for (const [label, token] of [
+      ['Reference email', 'email'],
+      ['Reference name', 'name'],
+      ['Supervisor phone', 'tel'],
+      ['Employer city', 'address-level2'],
+    ] as const) {
+      const c = classifyField({ label, autocomplete: token });
+      expect(c.semantic, label).toBe('unknown');
+      expect(isActionable(c), label).toBe(false);
+    }
+  });
+
+  it('still fills the applicant’s own contact details', () => {
+    expect(of('Email address').semantic).toBe('email');
+    expect(of('Mobile phone').semantic).toBe('phone');
+    expect(of('Full legal name').semantic).toBe('full_name');
+    expect(of('Preferred name').semantic).toBe('full_name');
+    expect(of('LinkedIn profile').semantic).toBe('linkedin');
+    expect(of('City').semantic).toBe('city');
+    expect(classifyField({ label: 'Email', autocomplete: 'email' }).via).toBe('autocomplete');
+  });
+});
+
+/**
+ * The date columns of a work-history or education row are not the internship's dates.
+ *
+ * `start_date` and `end_date` are answered from the profile's availability window, and they
+ * matched any label containing "start date" — which is how every history table labels its
+ * columns. "Previous employer start date", a label that says in so many words that it is
+ * history, was filled with the date the user becomes available, verified by read-back and
+ * reported correct: a false statement about someone's employment history, in their name, in
+ * the document they are about to submit.
+ *
+ * The school and degree rules sit above the date rules and win first, so the same row put the
+ * name of the university into "School start date" and the degree level into "Degree start
+ * date". Both are the same bug wearing a different rule, and both belong in this list.
+ */
+describe('a row of history is not this internship', () => {
+  const HISTORY = [
+    'Employment start date',
+    'Employment end date',
+    'Position start date',
+    'Previous employer start date',
+    'Prior employment end date',
+    'Most recent position start date',
+    'Job start date',
+    'Company end date',
+    'Role start date',
+    'School start date',
+    'University end date',
+    'College end date',
+    'Institution start date',
+    'Degree start date',
+    'Program end date',
+    'Work experience start date',
+  ];
+
+  for (const label of HISTORY) {
+    it(`leaves "${label}" for the user`, () => {
+      const c = of(label);
+      expect(c.semantic, label).toBe('unknown');
+      expect(isActionable(c), label).toBe(false);
+    });
+  }
+
+  /**
+   * The other half of the rule, and the reason it is a lookahead rather than a word list. A
+   * history word does not settle it when the label also says it is asking about availability
+   * — refusing "Desired employment start date" would hand back the one date the profile can
+   * actually answer.
+   */
+  it('still answers the availability question, however it is worded', () => {
+    expect(of('Start date').semantic).toBe('start_date');
+    expect(of('Earliest start date').semantic).toBe('start_date');
+    expect(of('When can you start?').semantic).toBe('start_date');
+    expect(of('Available start date').semantic).toBe('start_date');
+    expect(of('Preferred start date').semantic).toBe('start_date');
+    expect(of('Desired employment start date').semantic).toBe('start_date');
+    expect(of('End date').semantic).toBe('end_date');
+    expect(of('Available until').semantic).toBe('end_date');
+  });
+
+  it('still reads the education row’s own columns', () => {
+    // Which school and which degree ARE answerable from the profile. Only the dates are not.
+    expect(of('School name').semantic).toBe('school');
+    expect(of('Degree').semantic).toBe('degree');
+    expect(of('Expected graduation date').semantic).toBe('graduation_date');
+  });
+});
+
+/**
+ * "Graduate" is an adjective at least as often as it is a date question.
+ *
+ * While graduation_date matched the bare word, "Are you an undergraduate or graduate
+ * student?", "Graduate degree" and "Graduate program of interest" were all classified
+ * graduation_date at 0.93 and answered with a year-month — a date typed into a degree-level
+ * question. The rule sits above `degree` and `enrollment_status`, and matching is first-wins,
+ * so the rules written for exactly those labels could never be reached.
+ */
+describe('a graduation word has to be asking when', () => {
+  it('does not read a degree level or an enrollment question as a date', () => {
+    for (const label of [
+      'Are you an undergraduate or graduate student?',
+      'Graduate/Undergraduate',
+      'Graduate program of interest',
+      'Are you a graduating senior?',
+      'Post-graduate plans',
+    ]) {
+      expect(of(label).semantic, label).not.toBe('graduation_date');
+    }
+    expect(of('Graduate degree').semantic).toBe('degree');
+    // "Graduate school" asks WHICH one, which is why the bare adjective must not disqualify
+    // the school rule either.
+    expect(of('Graduate school').semantic).toBe('school');
+    expect(of('Undergraduate GPA').semantic).toBe('gpa');
+  });
+
+  it('still reads every ordinary way of asking when someone graduates', () => {
+    for (const label of [
+      'Expected graduation date',
+      'Expected graduation',
+      'Anticipated graduation',
+      'Graduation year',
+      'Graduation month',
+      'Expected graduation term',
+      'University graduation date',
+      'When did you graduate?',
+      'Degree completion date',
+      'Completion date',
+    ]) {
+      expect(of(label).semantic, label).toBe('graduation_date');
+    }
+  });
+});
+
+/**
+ * A URL field says what kind of thing it holds and never whose.
+ *
+ * `autocomplete="url"` was mapped to `website` and resolved before the rule table, so it beat
+ * the linkedin, github and portfolio rules the table deliberately orders above the generic
+ * link rule: a GitHub box declaring that token was filled with the applicant's portfolio
+ * address at 0.99, which reads back identically and is reported filled correctly. The rule
+ * itself had the mirror-image problem — it matched the bare word "URL", so the company's, the
+ * school's and the job posting's own addresses were all answered with the applicant's.
+ */
+describe('a link field is not automatically the applicant’s link', () => {
+  it('lets the host rules win over a declared url token', () => {
+    expect(classifyField({ label: 'GitHub URL', autocomplete: 'url' }).semantic).toBe('github');
+    expect(classifyField({ label: 'LinkedIn', autocomplete: 'url' }).semantic).toBe('linkedin');
+    expect(classifyField({ label: 'Portfolio link', autocomplete: 'url' }).semantic).toBe(
+      'portfolio',
+    );
+  });
+
+  it('leaves somebody else’s web address alone', () => {
+    for (const label of [
+      'Company website',
+      'Employer website',
+      'Previous employer URL',
+      'Job posting URL',
+      'School website',
+      'University homepage',
+      'Company blog',
+    ]) {
+      expect(of(label).semantic, label).toBe('unknown');
+    }
+  });
+
+  it('still fills a plain website box', () => {
+    expect(of('Other website').semantic).toBe('website');
+    expect(classifyField({ label: 'Website', autocomplete: 'url' }).semantic).toBe('website');
+    expect(of('Personal website').semantic).toBe('portfolio');
+  });
+
+  it('reads "Where did you hear about this job? (URL)" as the referral question it is', () => {
+    expect(of('Where did you hear about this job? (URL)').semantic).toBe('referral_source');
+  });
+});
+
+/**
+ * The word "source" had to arrive carrying the referral sense.
+ *
+ * A bare `\bsource\b` claimed "Open source contributions", "Source code repository" and
+ * "Funding source". The planner has no value for referral_source at all, so what the user
+ * read beside a box asking about their open-source work was "Your profile has no referral
+ * source to fill in." — a sentence that is not true of the field it is printed next to. Those
+ * fields were also counted as fillable in the summary line, having been recognized as
+ * something that can never be filled.
+ */
+describe('"source" alone is not a referral question', () => {
+  it('does not claim every field that mentions the word', () => {
+    for (const label of [
+      'Open source contributions',
+      'Open Source Projects',
+      'Source code repository',
+      'Funding source',
+      'Data source',
+    ]) {
+      expect(of(label).semantic, label).toBe('unknown');
+    }
+  });
+
+  it('still recognizes the referral question', () => {
+    for (const label of [
+      'How did you hear about us?',
+      'Where did you hear about this role?',
+      'Referral source',
+      'Application source',
+      'Source of referral',
+      'How did you find this role?',
+    ]) {
+      expect(of(label).semantic, label).toBe('referral_source');
+    }
+  });
+});

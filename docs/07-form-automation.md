@@ -224,27 +224,41 @@ The strongest structural guarantee in the system.
 3. The user finds the submit button and clicks it themselves, in the browser.
 4. The user confirms in the app that they submitted.
 
-There is no `autoSubmit` setting, no `--yes` flag, and no code path in `filling/` that can
-click a submit control.
+There is no `autoSubmit` setting, no `--yes` flag, and no code path on the server that can
+submit a form.
 
 **How that is actually enforced**, because a promise is worth what its enforcement is worth:
 
-- an ESLint `no-restricted-syntax` rule over `core/filling/**` with one selector, aimed at a
-  submit-shaped `.click()` — `CallExpression[callee.property.name='click'][callee.object.name=/[Ss]ubmit/]`.
-  That is the whole of the lint layer; the other routes to submission are not expressible as
-  a useful selector and are covered below;
-- a test in `app.test.ts` that scans the filling module's own source for the wider set —
-  a submit-shaped `.click()`, `requestSubmit()`, `form.submit()`, `.submit()`,
-  `new SubmitEvent`, and `.press('Enter')` — so the lint rule cannot be silenced with a
-  disable comment without the test noticing, and so the patterns ESLint misses are still
-  caught. The same file asserts that `POST /api/applications/:id/submit` is a 404;
+- an ESLint `no-restricted-syntax` rule over `apps/server/src/**`. It carries a selector for
+  each way a submit control gets named — the receiver (`submitBtn.click()`), a selector
+  string or template anywhere inside the call (`page.click('button[type=submit]')`,
+  `page.locator('#submit-application').click()`), and the routes that name nothing at all:
+  `requestSubmit()`, a zero-argument `.submit()`, `new SubmitEvent`, a dispatched `submit`
+  event, and `.press('Enter')`, which submits a single-input form in every browser;
+- a CI step, `scripts/g4-scan.ts`, scanning the same tree as text for the same set, so a
+  `// eslint-disable-next-line` cannot buy anyone a submit call. It self-tests against a
+  dozen written-out submit paths before it will report a clean tree, because the version
+  before it could not tell "there is no submit path" from "my pattern matches nothing" and
+  printed the same reassuring line either way;
+- a test in `app.test.ts` scanning the filling module's source for the same shapes, and
+  asserting that `POST /api/applications/:id/submit` is a 404;
 - and a fixture test asserting the mock ATS recorded **zero** POSTs across the entire suite,
-  which is the only one of the three that checks the outcome rather than the source text.
+  which is the only one of the four that checks the outcome rather than the source text.
 
-> **Not built:** a CI grep for any endpoint that could write `submitted_at` without the
+For a long time two of those were decorative. The lint rule matched on
+`callee.object.name`, which only exists when the receiver is a bare identifier, so it saw
+`submitBtn.click()` and could not see `page.click('button[type=submit]')`; the CI step
+grepped for `click\(\).*submit`, where `click\(\)` means literally empty parentheses, so a
+click with a selector argument never matched. Both passed, green, on a file that did nothing
+but submit forms seven different ways. The rule that keeps them honest: a G4 pattern has to
+match the control wherever it is named — receiver, selector string, or a locator chained
+ahead of the click — and cover the ways to submit that are not clicks. One pattern per
+reported example is a gate with a hole in it.
+
+> **Not built:** a CI check for any endpoint that could write `submitted_at` without the
 > user. This section used to list one; `.github/` and `scripts/` contain no such check. The
-> single G4 step in `ci.yml` greps `apps/server/src` for a submit-shaped click, which
-> duplicates the lint rule rather than adding the missing layer.
+> G4 step scans for submit paths in source, which is a different question from which
+> endpoints can stamp the column.
 
 Two things this section used to claim were never built, said plainly rather than quietly
 dropped. **No screenshot is captured** — `application.screenshot_path` exists in the schema

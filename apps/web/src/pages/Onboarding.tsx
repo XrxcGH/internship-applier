@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@ia/shared';
 import * as api from '../lib/api';
-import { isAnswered } from '../lib/review';
+import { ANSWERED_IN_WIZARD, isAnswered } from '../lib/review';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Notice, SelectField, TextField } from '../components/Controls';
 
@@ -77,6 +77,30 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     setError(null);
     try {
       setProfile(await api.saveProfile(profile));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Marks one flag reviewed without throwing away what is typed on this step.
+   *
+   * The endpoint answers with the profile as it stands ON DISK, and this screen replaces
+   * its whole state with that answer. So clearing a flag straight from the wizard blanked
+   * every date, city and selection entered since the last Save, brought back the flags
+   * those answers had already cleared, pushed the "still flagged" count back up, and said
+   * nothing at all about why. Saving first makes the profile that comes back the one the
+   * user is looking at.
+   */
+  async function checkedOff(path: string) {
+    if (!profile) return;
+    setBusy('Saving…');
+    setError(null);
+    try {
+      await api.saveProfile(profile);
+      setProfile(await api.clearReviewFlag(path));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -181,9 +205,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       {step === 'facts' && profile && (
         <>
           <Section n="03" title="What a resume never says" step={3}>
+            {/* Only the date of birth on this step is encrypted. The other five facts go
+                into the database as plain JSON, exactly as docs/03 marks them. Saying all
+                six were encrypted put the strongest promise this app makes directly above
+                the immigration-status select, which is the one control a person is most
+                likely to hesitate over — and it was the promise persuading them to
+                answer. If the encrypted set ever widens, this sentence widens with it. */}
             <p className="text-dim mb-6 u-prose text-[1rem]">
-              Eligibility turns on these six facts, and none of them appear on a resume. Each one is
-              stored encrypted on this machine.
+              Eligibility turns on these six facts, and none of them appear on a resume. All six are
+              stored in the database file on this machine. Your date of birth is encrypted there,
+              the way your contact details are. The other five sit in that file as plain text.
             </p>
 
             <div className="divide-rule/60 divide-y">
@@ -305,28 +336,26 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <Notice tone="caution">
                 {remaining} field{remaining === 1 ? '' : 's'} still flagged. Confirmation is blocked
                 until each one has been looked at. That is the whole point of this gate.
-                {/* Every flag needs a way to be cleared here. The extractor can flag a
-                    field this wizard has no input for — anything nested in education or
+                {/* Every flag needs a way off this list. The extractor can flag a field
+                    this wizard has no input for — anything nested in education or
                     experience — and without a control those flags could never be cleared,
-                    which locked G1 shut with no way forward. */}
+                    which locked G1 shut with no way forward. Anything the wizard CAN
+                    answer gets pointed at its control instead; see ANSWERED_IN_WIZARD. */}
                 <ul className="mt-3 space-y-1.5">
                   {profile.needsReview.slice(0, 12).map((f) => (
                     <li key={f} className="flex flex-wrap items-center justify-between gap-3">
                       <span className="u-data">{f}</span>
-                      <Button
-                        size="sm"
-                        disabled={busy !== null}
-                        onClick={() =>
-                          void api
-                            .clearReviewFlag(f)
-                            .then(setProfile)
-                            .catch((e: unknown) =>
-                              setError(e instanceof Error ? e.message : String(e)),
-                            )
-                        }
-                      >
-                        I have checked this
-                      </Button>
+                      {ANSWERED_IN_WIZARD[f] ? (
+                        <span className="text-faint text-[0.9375rem]">{ANSWERED_IN_WIZARD[f]}</span>
+                      ) : (
+                        <Button
+                          size="sm"
+                          disabled={busy !== null}
+                          onClick={() => void checkedOff(f)}
+                        >
+                          I have checked this
+                        </Button>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -338,7 +367,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               </Notice>
             ) : (
               <Notice tone="verified">
-                Nothing left flagged. Confirming unlocks discovery and matching.
+                Nothing left flagged. Confirming unlocks matching and the queue.
               </Notice>
             )}
 
@@ -360,7 +389,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <p className="a-stamp u-data text-verified mb-3 text-lg tracking-widest uppercase">
               profile established
             </p>
-            <p className="text-dim">Discovery and matching are now unlocked.</p>
+            {/* Not "discovery is unlocked". Confirming does unlock the queue, and there is
+              no discovery screen for it to unlock, so someone who took that sentence at
+              its word went looking for one. */}
+            <p className="text-dim">Matching and the queue are now unlocked.</p>
           </div>
           {/* This screen leaves, rather than being left. Confirming used to navigate for
               the user, which meant the stamp above was rendered and unmounted in the same
@@ -438,9 +470,16 @@ function UploadStep({
           if (f) void handle(f);
         }}
       />
+      {/* "The file stays on this machine" sat one sentence after "read directly by the
+          model", and the two cannot both be true: a PDF is base64-encoded whole and sent
+          to the model to be read. This is the first thing a new user does, under the
+          strongest privacy promise on the screen, so it says what really happens instead.
+          The other formats are named too: they send their extracted text, which is the
+          same promise being broken more quietly. */}
       <p className="text-faint mt-5 u-prose text-[0.9375rem]">
-        PDFs are read directly by the model rather than through a text-extraction library. The model
-        handles scans and multi-column layouts better. <em>The file stays on this machine.</em>
+        PDFs are sent to the model and read there rather than through a text-extraction library,
+        because that copes with scans and multi-column layouts far better. A DOCX or a text file has
+        its extracted text sent instead. <em>The copy that is kept lives on this machine.</em>
       </p>
     </Section>
   );

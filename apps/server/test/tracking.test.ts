@@ -45,6 +45,7 @@ function app(over: Partial<TrackedApplication> = {}): TrackedApplication {
     updatedAt: daysAgo(1),
     submittedAt: null,
     respondedAt: null,
+    advancedAt: null,
     deadlineAt: null,
     answerCount: 0,
     approvedCount: 0,
@@ -302,6 +303,55 @@ describe('refusing to compute a rate from noise', () => {
     expect(s.responseRate.numerator).toBe(5);
     expect(s.responseRate.denominator).toBe(5);
     expect(s.responseRate.value).toBeNull();
+  });
+
+  /**
+   * The tile says "Reached interview", which is a claim about what has ever happened. An
+   * interview is a status an application passes through on its way to a rejection or an
+   * offer, so a count of who is sitting in `interview` right now answers a different
+   * question — and answers this one with a confident, wrong zero.
+   */
+  it('counts interviews that ended in a rejection', () => {
+    const apps = [
+      ...Array.from({ length: 8 }, (_, i) =>
+        app({ id: `r${String(i)}`, status: 'rejected', submittedAt: daysAgo(40) }),
+      ),
+      // Reached an interview, then were turned down. Honestly recorded, both transitions.
+      ...Array.from({ length: 4 }, (_, i) =>
+        app({
+          id: `x${String(i)}`,
+          status: 'rejected',
+          submittedAt: daysAgo(40),
+          respondedAt: daysAgo(30),
+          advancedAt: daysAgo(25),
+        }),
+      ),
+    ];
+
+    const s = computeStats(apps, NOW);
+    expect(s.funnel.submitted).toBe(12);
+    expect(s.funnel.interviewing, 'nobody is mid-interview today').toBe(0);
+    expect(s.funnel.reachedInterview, 'four of them got that far').toBe(4);
+    expect(s.interviewRate.numerator).toBe(4);
+    expect(s.interviewRate.denominator).toBe(12);
+    expect(s.interviewRate.value).toBeCloseTo(0.33, 2);
+
+    // The per-source column asks the same cumulative question and has to agree with it.
+    expect(s.bySource.find((g) => g.key === 'greenhouse')?.advanced).toBe(4);
+  });
+
+  it('still counts an application currently sitting in an interview', () => {
+    const s = computeStats(
+      [
+        ...Array.from({ length: 11 }, (_, i) =>
+          app({ id: `r${String(i)}`, status: 'rejected', submittedAt: daysAgo(40) }),
+        ),
+        app({ id: 'live', status: 'interview', submittedAt: daysAgo(10) }),
+      ],
+      NOW,
+    );
+    expect(s.funnel.reachedInterview).toBe(1);
+    expect(s.interviewRate.numerator).toBe(1);
   });
 
   it('does not blame the user for silence', () => {

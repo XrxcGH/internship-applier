@@ -13,9 +13,13 @@
  *
  * Everything FLAGS rather than silently rewrites. The user decides.
  *
- * The same detector runs over this app's own interface copy, in a test, because a tool
- * that lectures you about machine-sounding prose while writing "seamlessly leverage your
- * unique journey" on its own buttons has no standing.
+ * The same detector runs over this app's own interface copy, because a tool that lectures
+ * you about machine-sounding prose while writing "seamlessly leverage your unique journey"
+ * on its own buttons has no standing. That pass is `npm run audit:copy`
+ * (scripts/audit-copy.ts), wired into `npm run check` and into CI as its own step — it is
+ * NOT part of `npm test`, and vitest never loads it. Said precisely because someone who
+ * changed a button label, ran the tests and saw them pass would otherwise believe the copy
+ * had been checked.
  */
 
 export type TellKind =

@@ -27,7 +27,7 @@ interface CacheEntry {
 
 const buckets = new Map<string, Bucket>();
 const cache = new Map<string, CacheEntry>();
-const robots = new Map<string, Set<string>>();
+const robots = new Map<string, RobotsEntry>();
 
 /**
  * How many response bodies to keep at once.
@@ -165,6 +165,32 @@ function robotsMatches(pattern: string, target: string): boolean {
 }
 
 /**
+ * What a host's robots.txt says, or that it would not say.
+ *
+ * `unreadable` carries the reason rather than a flag, because the refusal it produces is
+ * shown to the user on the source-health line and "robots.txt disallows /careers/" would be
+ * a false claim about a file nobody managed to read.
+ */
+interface Robots {
+  disallow: Set<string>;
+  unreadable: string | null;
+}
+
+interface RobotsEntry {
+  value: Robots;
+  at: number;
+}
+
+/**
+ * How long a failed robots.txt lookup is believed before trying again.
+ *
+ * A successful parse is kept for the life of the process — a site's rules do not change
+ * during one run. A failure is a statement about one moment, and caching it forever is how
+ * a five-minute outage became a permanent verdict either way round.
+ */
+const ROBOTS_RETRY_MS = 5 * 60 * 1000;
+
+/**
  * Conservative parse: collects Disallow paths that apply to `*` or to us.
  *
  * "Conservative" was aspirational. Consecutive User-agent lines form ONE group under the
@@ -180,17 +206,39 @@ function robotsMatches(pattern: string, target: string): boolean {
  * Missing `Allow:` support stays missing on purpose: ignoring an Allow can only make this
  * refuse a fetch it could have made, and that is the direction to be wrong in.
  */
-async function disallowedPaths(origin: string): Promise<Set<string>> {
+async function disallowedPaths(origin: string): Promise<Robots> {
   const cached = robots.get(origin);
-  if (cached) return cached;
+  if (cached && (!cached.value.unreadable || Date.now() - cached.at < ROBOTS_RETRY_MS)) {
+    return cached.value;
+  }
 
   const paths = new Set<string>();
+  let unreadable: string | null = null;
   try {
     const res = await fetch(`${origin}/robots.txt`, {
       headers: { 'user-agent': USER_AGENT },
       signal: AbortSignal.timeout(8000),
     });
-    if (res.ok) {
+
+    /**
+     * What a robots.txt we did not get back actually means.
+     *
+     * RFC 9309 § 2.3.1 gives three answers, and this collapsed them into one: anything that
+     * was not a 200 fell into the same `catch`-and-carry-on as a DNS failure, cached an
+     * empty disallow set for the life of the process, and read as "nothing here is off
+     * limits". A site in a maintenance window served 503 for its robots.txt and got its
+     * whole careers section crawled — including, once the maintenance ended, the paths it
+     * had been disallowing all along, because the empty set was never revisited.
+     *
+     * 4xx really is allow-all: the file is absent and the site has said nothing. 5xx is a
+     * complete disallow, because the site's answer is "ask me later" and assuming
+     * permission is helping ourselves to it. 429 belongs with the 5xx group rather than
+     * with its own status class — it is the server saying it cannot answer right now, which
+     * is the one thing the status class does not tell you.
+     */
+    if (res.status === 429 || res.status >= 500) {
+      unreadable = `${String(res.status)} ${res.statusText}`;
+    } else if (res.ok) {
       // `group` collects the agents named since the last rule line; `applies` is whether
       // any of them is us. A rule line ends the run of agent lines.
       let group: string[] = [];
@@ -221,12 +269,14 @@ async function disallowedPaths(origin: string): Promise<Set<string>> {
         }
       }
     }
-  } catch {
-    // No robots.txt, or unreachable — treat as unrestricted, which is the convention.
+  } catch (err) {
+    // A timeout, a DNS failure, a TLS error: we do not know what this site permits.
+    unreadable = err instanceof Error ? err.message : String(err);
   }
 
-  robots.set(origin, paths);
-  return paths;
+  const value: Robots = { disallow: paths, unreadable };
+  robots.set(origin, { value, at: Date.now() });
+  return value;
 }
 
 export async function politeFetch(url: string, opts: FetchOptions = {}): Promise<string> {
@@ -234,8 +284,16 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
   const host = u.host;
 
   if (!opts.isDocumentedApi) {
-    const blocked = await disallowedPaths(u.origin);
-    for (const p of blocked) {
+    const rules = await disallowedPaths(u.origin);
+    if (rules.unreadable !== null) {
+      throw new HttpError(
+        `${u.origin}/robots.txt could not be read (${rules.unreadable}), so nothing is ` +
+          'fetched from this host until it can be. Try again in a few minutes.',
+        403,
+        url,
+      );
+    }
+    for (const p of rules.disallow) {
       if (robotsMatches(p, u.pathname + u.search)) {
         throw new HttpError(`robots.txt disallows ${u.pathname}`, 403, url);
       }

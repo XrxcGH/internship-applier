@@ -61,12 +61,27 @@ function scored(s: ScoreOutcome): Array<keyof ScoreBreakdown> {
   return (Object.keys(s.breakdown) as Array<keyof ScoreBreakdown>).filter((k) => s.evidence[k]);
 }
 
+/**
+ * How good a dimension has to be before a sentence is allowed to call it a reason.
+ *
+ * The downside sentence has always had this floor; the upside sentence did not, and every
+ * label it can print is an unconditional positive. `strongest()` returns the best dimension
+ * there is, however bad that is, so an explicitly unpaid posting — compensation 0.1, with
+ * real evidence behind it — beat a candidate's zero required-skill coverage and the queue
+ * recommended it with "Worth a look because the pay is good". When pay was the only
+ * evidenced dimension, that same 0.1 supplied both halves and the tool praised and
+ * condemned the pay in one sentence. Both sentences read the same numbers, so both answer
+ * to the same floor.
+ */
+const CLAIM_FLOOR = 0.6;
+
 function strongest(s: ScoreOutcome): keyof ScoreBreakdown | null {
   const keys = scored(s);
-  return keys.reduce<keyof ScoreBreakdown | null>(
+  const best = keys.reduce<keyof ScoreBreakdown | null>(
     (a, k) => (a === null || s.breakdown[k] > s.breakdown[a] ? k : a),
     null,
   );
+  return best !== null && s.breakdown[best] >= CLAIM_FLOOR ? best : null;
 }
 
 function weakest(s: ScoreOutcome): keyof ScoreBreakdown | null {
@@ -98,10 +113,17 @@ export function buildRationale(input: RationaleInput): string {
   const worst = weakest(score);
   const parts: string[] = [];
 
+  // Three different situations, and they must not borrow each other's sentence. There is
+  // something good to say; there is data and none of it is good; there is no data. Saying
+  // "the posting says too little" about a posting that stated its pay and its skills and
+  // simply scored badly on both would be a plain untruth about a posting the user can read.
   parts.push(
     best
       ? `Worth a look because ${DIMENSION_LABEL[best]} — ${score.notes[best]}.`
-      : 'Eligible, but the posting says too little to rank it on anything: no skills, ' +
+      : scored(score).length > 0
+        ? 'Eligible, but nothing here argues for it: every dimension the tool could check ' +
+          'came out weak. Open it and judge for yourself.'
+        : 'Eligible, but the posting says too little to rank it on anything: no skills, ' +
           'level, pay, or location to compare against. Open it and judge for yourself.',
   );
 
@@ -118,12 +140,18 @@ export function buildRationale(input: RationaleInput): string {
     );
   }
 
-  if (worst && score.breakdown[worst] < 0.6) {
+  if (worst && score.breakdown[worst] < CLAIM_FLOOR) {
     parts.push(
       `Most likely reason you'd be passed over: ${DIMENSION_WEAK[worst]} (${score.notes[worst]}).`,
     );
   } else if (unresolved.length === 0 && worst) {
-    parts.push('Nothing stands out as a likely rejection reason, which is rarer than it sounds.');
+    // "Nothing stands out" on its own claimed a clean bill of health across all eight
+    // dimensions when a posting that stated only its position type had put exactly one
+    // number in front of us. The clause says how far the check reached.
+    parts.push(
+      'Nothing the tool could check stands out as a likely rejection reason, which is ' +
+        'rarer than it sounds.',
+    );
   }
 
   return parts.join(' ');

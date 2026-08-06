@@ -130,6 +130,42 @@ const BOT_CHECK_SIGNS = [
 ];
 
 /**
+ * Controls a person fills in with their own details, which is what an application asks for.
+ *
+ * The excluded types are the ones no application form identifies an applicant with: a
+ * password is the thing being detected, a checkbox is "remember me" as often as it is a
+ * question, and search, reset and image belong to the page's furniture rather than its form.
+ */
+const PLAIN_CONTROLS = [
+  'input:not([type=password]):not([type=hidden]):not([type=submit]):not([type=button])' +
+    ':not([type=checkbox]):not([type=search]):not([type=reset]):not([type=image])',
+  'select',
+];
+
+/**
+ * The furniture every career site puts around its pages.
+ *
+ * Counting controls across the whole DOCUMENT is what broke the login detector: a search box
+ * in the header, a language picker in the footer and the sign-in form's own email field come
+ * to three, so an ordinary branded sign-in page counted as an application form and the run
+ * carried on to offer to type the user's email into it. What sits in the header is never
+ * what the employer is asking the applicant.
+ */
+const PAGE_CHROME = [
+  'header',
+  'nav',
+  'footer',
+  '[role=banner]',
+  '[role=navigation]',
+  '[role=contentinfo]',
+];
+
+/** One CSS union of "these controls, but only inside those containers". */
+function inside(roots: string[], controls: string[]): string {
+  return roots.flatMap((r) => controls.map((c) => `${r} ${c}`)).join(', ');
+}
+
+/**
  * Looks for a reason to stop before touching anything.
  *
  * Checked before filling rather than after a failure, because typing a name into what
@@ -161,17 +197,18 @@ export async function detectIntervention(page: Page): Promise<Intervention | nul
      * "any control at all" is too wide in the other direction, because a login box has an
      * email field. A sign-in form is two controls; an application form asks for more than
      * that even at its shortest.
+     *
+     * What went wrong was the counting rather than the threshold, so the controls the page's
+     * own furniture supplies are taken back out — by where they sit and by their type, which
+     * are the same rule said twice. See PAGE_CHROME.
      */
-    const [uploads, essays, plain] = await Promise.all([
+    const [uploads, essays, plainAnywhere, plainInChrome] = await Promise.all([
       page.locator('input[type=file]').count(),
       page.locator('textarea, [contenteditable=true]').count(),
-      page
-        .locator(
-          'input:not([type=password]):not([type=hidden]):not([type=submit])' +
-            ':not([type=button]):not([type=checkbox]), select',
-        )
-        .count(),
+      page.locator(PLAIN_CONTROLS.join(', ')).count(),
+      page.locator(inside(PAGE_CHROME, PLAIN_CONTROLS)).count(),
     ]);
+    const plain = plainAnywhere - plainInChrome;
     const applicationish = uploads > 0 || essays > 0 || plain >= 3;
     if (!applicationish) {
       return {

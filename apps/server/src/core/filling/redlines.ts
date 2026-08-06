@@ -25,14 +25,28 @@
  * AI disclosure is separate again: it is not skipped quietly. It is skipped and raised,
  * because it is the one question where the user needs to make a deliberate choice.
  *
- * A NOTE ON PLURALS, WHICH IS NOT A STYLE POINT. Several patterns here name a broad word
+ * A NOTE ON WORD FORMS, WHICH IS NOT A STYLE POINT. Several patterns here name a broad word
  * and then require a second word to pin down the dangerous sense — `medical condition`
  * rather than bare `medical`, `background check` rather than bare `background`. Every one of
- * those second words has to allow its plural. Forms ask in the plural at least as often as
- * the singular: "Do you have any medical conditions?" and "Background checks" are the
- * ordinary phrasings, and while the lists held only the singular those fields matched
- * nothing at all and were filled in like any other question. So each closing noun carries an
- * `s?` before its `\b`, and the irregular ones spell both forms out.
+ * those second words has to allow every form a form actually prints it in. Forms ask in the
+ * plural at least as often as the singular: "Do you have any medical conditions?" and
+ * "Background checks" are the ordinary phrasings, and while the lists held only the singular
+ * those fields matched nothing at all and were filled in like any other question.
+ *
+ * The same thing happened again one word class over. `drug (test|screen)s?` caught "Drug
+ * test" and "Drug tests" and missed "Drug screening", "Drug screenings" and "Drug testing" —
+ * which is how most US forms label that box — so a drug-testing authorization was handed to
+ * the answer engine like an ordinary question. And `(criminal|conviction|felony|arrest)`
+ * caught "Conviction" but not "Convictions", "Felonies", "Misdemeanors" or "Have you ever
+ * been arrested?", so a criminal-history disclosure on a form with opaque field names was
+ * filled in from an approved answer.
+ *
+ * So the rule is one rule, and it covers all three cases: WHENEVER A WORD IS ADDED HERE, ADD
+ * EVERY FORM OF IT THAT COULD APPEAR ON A FORM — the plural (`s?`, or both spellings when
+ * the plural is irregular), the gerund (`screening`, `testing`), and the inflections of a
+ * verb (`arrest`, `arrests`, `arrested`). A pattern that names only the form in front of you
+ * reads as if the field is protected while every sibling phrasing walks straight through it,
+ * which is the worst kind of gap because nothing about the pattern looks wrong.
  */
 import type { RedlineCategory } from '@ia/shared';
 
@@ -62,6 +76,25 @@ interface AllowlistEntry {
 }
 
 /**
+ * What a qualifier like "current" or "previous" attaches to when it is asking what you are
+ * paid — the shape shared by the salary-history redline below and by the allowlist entries
+ * that have to know when NOT to excuse one.
+ *
+ * The two words are allowed up to two ordinary words between them, and that gap is the whole
+ * reason this is spelled out once rather than twice. It used to be a bare `\s+`, so the
+ * qualifier had to sit immediately against the pay word: "Current salary" was caught and
+ * "Current annual salary", "Current base salary", "Current total compensation" and "Most
+ * recent annual salary" — the way a form actually prints that box — matched nothing here and
+ * were classified `unknown`, so the user was told the tool could not tell what the field was
+ * asking rather than being told this is salary history and restricted in several US states.
+ *
+ * The noun list carries the rate wordings too, because "Current rate of pay" and "Current
+ * hourly rate" are the Workday and Greenhouse phrasings and neither contains a pay noun the
+ * old list named at all.
+ */
+const QUALIFIED_PAY = String.raw`\b(current|previous|prior|last|most recent|former)\s+(\w+\s+){0,2}(salar(y|ies)|compensation|pay|wage|rate of pay|hourly rate|pay rate|earnings)s?\b`;
+
+/**
  * A history question does not stop being one because an expectation word appears later in
  * the sentence. "What is your current salary and your expected salary range?" asks for both,
  * and the part that matters is the first half.
@@ -70,8 +103,10 @@ interface AllowlistEntry {
  * salary expectations" is what you are asking for now, while "current salary" followed by
  * anything else — "range", "and", a full stop — is what you are being paid now.
  */
-const PAID_IN_THE_PAST =
-  /\b(current|previous|prior|last|most recent|former)\s+(salar(y|ies)|compensation|pay|wage)s?\b(?!\s+(expectation|requirement|desired|expected))/i;
+const PAID_IN_THE_PAST = new RegExp(
+  QUALIFIED_PAY + String.raw`(?!\s+(expectation|requirement|desired|expected))`,
+  'i',
+);
 
 /**
  * Phrases that LOOK like redlines but are legitimately fillable, each paired with the
@@ -150,10 +185,29 @@ export function isRescued(normalized: string, category: RedlineCategory): boolea
   );
 }
 
-// The words that name the tool and the words that name its involvement, kept apart so the
-// pattern below can require them in either order.
-const AI_TERM = String.raw`(ai|a i|artificial intelligence|chatgpt|copilot|gemini|claude|llms?|(large )?language models?|generative)`;
-const AI_ACTION = String.raw`(use|used|using|usage|assist|generat|writ|wrote|help|author(ed|ing)|disclos|involv)`;
+// The words that name the tool, the words that name its involvement in producing TEXT, and
+// the words that name the thing being submitted — kept apart so the pattern below can
+// require them in either order.
+//
+// `generative` is spelled as the two-word term rather than on its own, and the authorship
+// verbs spell "generate", "generated", "generating" and "generation" out instead of stopping
+// at the stem `generat`. Both changes exist for the same reason: the stem matched the word
+// "generative", so the phrase "generative AI" satisfied BOTH halves of the pattern by
+// itself. Every ordinary question about AI skills — "What excites you about generative AI?",
+// "Tell us about a project where you used generative AI" — was refused as an AI-disclosure
+// question and the note told the applicant it "asks whether AI helped with your
+// application", which was not true of any of them.
+const AI_TERM = String.raw`(ai|a i|artificial intelligence|chatgpt|copilot|gemini|claude|llms?|(large )?language models?|generative ai|gen ai)`;
+// Verbs about who WROTE something. `use` is deliberately not here: "Have you used AI?" is a
+// skills question on half the engineering forms in existence, and while `use` counted as
+// involvement every one of them was refused. `assist(s|ed|ing|ance)` stops short of
+// "assistant" for the same reason — "AI assistant" names a thing you build, not a
+// disclosure.
+const AI_AUTHORSHIP = String.raw`(writ\w*|wrote|generated?|generates|generating|generation|author(ed|ing|ship)?|compos\w*|draft\w*|disclos\w*|declar\w*|assist(s|ed|ing|ance)?\b)`;
+// The thing being handed in. An AI term sitting next to one of these is the disclosure
+// question however it is phrased, which is what catches "Did you use ChatGPT for this
+// application?" now that `use` no longer counts on its own.
+const AI_SUBMISSION = String.raw`(this|these|your|the) ((application|response|answer|essay|submission|statement|questionnaire|form)s?|cover letter|personal statement|writing sample)`;
 
 export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── Government and identity numbers ────────────────────────────────────────
@@ -209,7 +263,14 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── Financial ──────────────────────────────────────────────────────────────
   {
     category: 'financial',
-    test: /\b(bank|checking|chequing|savings|deposit) (account|details|form)s?\b|\bacct\b|\baccount (number|holder|no)s?\b|\brouting (number|no\.?)s?\b|\biban\b|\bswift\b|\bsort code\b|\bbsb\b|\bifsc\b|\btransit numbers?\b|\binstitution numbers?\b|\bbranch code\b|\bmicr\b|\bbic\b|\bwire transfer\b|\bvoided che(que|ck)s?\b|\bdirect deposit\b/i,
+    // `swift` has to name what kind of SWIFT it is. On its own it is also the name of a
+    // programming language, so "Which programming languages do you know? (Java, Swift,
+    // Python)" and "Describe your experience building iOS apps in Swift" were refused as
+    // bank details — on the single most common skills question at any company with a mobile
+    // team, with a note telling the applicant the tool never handles payment information.
+    // Nothing is lost by requiring the qualifier: a real form says "SWIFT code",
+    // "SWIFT/BIC" or "SWIFT number" and never the bare word.
+    test: /\b(bank|checking|chequing|savings|deposit) (account|details|form)s?\b|\bacct\b|\baccount (number|holder|no)s?\b|\brouting (number|no\.?)s?\b|\biban\b|\bswift[ /]?(codes?|bic|numbers?|no\.?)\b|\bsort code\b|\bbsb\b|\bifsc\b|\btransit numbers?\b|\binstitution numbers?\b|\bbranch code\b|\bmicr\b|\bbic\b|\bwire transfer\b|\bvoided che(que|ck)s?\b|\bdirect deposit\b/i,
     note: 'Bank details. This tool never handles payment information.',
   },
   {
@@ -222,8 +283,16 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     // box, matched nothing here, and unless the words "credit card" happened to appear in
     // the same label the month and year of someone's card were treated as an ordinary date
     // to fill in.
+    //
+    // The bare `\bcsc\b` that used to sit beside `cvv` is gone, because CSC is also a course
+    // prefix at a great many US universities. "Relevant coursework (e.g. CSC 226, MATH 241)"
+    // and "Which CSC electives have you completed?" were refused as payment details, and the
+    // placeholder route makes that worse than it sounds: an unlabelled input takes its
+    // placeholder as its label, so a box whose only hint is "e.g. CSC 226" is refused too.
+    // The card sense loses nothing — "Card security code" is already caught by the branch
+    // before this one, and the `cc-csc` autocomplete token by the branch after it.
     category: 'financial',
-    test: /\b(credit|debit) cards?\b|\bcard (number|holder|security|verification)s?\b|\bcard expir(y|ies|ation|ations|es|ed)\b|\bcvv\b|\bcvc\b|\bcsc\b|\bcc (number|name|type|csc|exp)s?\b|\bbilling (address(es)?|zips?|postal)\b|\bpaypal\b|\bvenmo\b|\bzelle\b/i,
+    test: /\b(credit|debit) cards?\b|\bcard (number|holder|security|verification)s?\b|\bcard expir(y|ies|ation|ations|es|ed)\b|\bcvv\b|\bcvc\b|\bcc (number|name|type|csc|exp)s?\b|\bbilling (address(es)?|zips?|postal)\b|\bpaypal\b|\bvenmo\b|\bzelle\b/i,
     note: 'Payment details. This tool never handles payment information.',
   },
   {
@@ -233,7 +302,14 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     // the expectation phrasings in the allowlist can pull a label back out of `financial`
     // — and only out of `financial`, so a label that pairs a salary question with an
     // attestation still stops here.
-    test: /\bsalary histor(y|ies)\b|\b(current|previous|prior|last|most recent|former)\s+(salar(y|ies)|compensation|pay|wage)s?\b|\b(salary|compensation|pay|wage|earn(ed|ings)?|paid)\b.{0,40}\b(last|previous|prior|current|most recent|former|history)\b/i,
+    //
+    // The qualified-pay half is shared with the allowlist's `unless`, so widening it widens
+    // both halves of the mechanism at once. When they were written out separately, one of
+    // them would inevitably go on describing the behaviour the other had stopped having.
+    test: new RegExp(
+      String.raw`\bsalary histor(y|ies)\b|${QUALIFIED_PAY}|\b(salary|compensation|pay|wage|earn(ed|ings)?|paid)\b.{0,40}\b(last|previous|prior|current|most recent|former|history)\b`,
+      'i',
+    ),
     note: 'Salary history. Asking this is restricted in several US states, and it is yours to answer or decline.',
   },
 
@@ -276,7 +352,22 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     // statement in someone's name. "verify", "warrant" and "represent" are the same shape.
     // Anything of the form "I <verb> that ..." where the verb commits the applicant to the
     // truth of something belongs here; when adding one, add its test alongside.
-    test: /\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear|confirm|verif|warrant|represent)|\byou\b\s+(hereby\s+)?(certif(y|ies)|attests?|affirms?|acknowledges?|swears?|confirms?|(declares?|represents?|warrants?|verif(y|ies))\s+that\b)|\b(certify|attest|affirm|acknowledge|declare|confirm|swear)\s+(that\s+)?you\b|\bhereby\b.{0,24}\b(certif|attest|affirm|declar|acknowledg|swear|warrant|represent)/i,
+    //
+    // "understand" is the commonest verb in the closing boilerplate of a US application — "I
+    // understand that any false statement or omission on this application may result in
+    // refusal of employment or dismissal" — and it was not on the list. That checkbox was not
+    // an attestation at all, and phrased as a question ("Do you understand and agree that any
+    // misrepresentation may result in dismissal?") it was long enough and interrogative
+    // enough to be classified as an essay at 0.85, so an approved answer of "Yes" ticked it —
+    // exactly the failure the second-person branch above was added to stop, reached through a
+    // different verb. It brings "that" or "and agree" with it, because "Do you understand the
+    // role?" is an ordinary question and has to stay fillable.
+    //
+    // The last branch is the imperative, which has no subject in it at all. "Please confirm
+    // that the information above is accurate" is the same sworn statement with the pronoun
+    // dropped, and it needs "that" for the same reason, so "Confirm your email address" is
+    // untouched.
+    test: /\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear|confirm|verif|warrant|represent)|\byou\b\s+(hereby\s+)?(certif(y|ies)|attests?|affirms?|acknowledges?|swears?|confirms?|(declares?|represents?|warrants?|verif(y|ies))\s+that\b)|\b(certify|attest|affirm|acknowledge|declare|confirm|swear)\s+(that\s+)?you\b|\bhereby\b.{0,24}\b(certif|attest|affirm|declar|acknowledg|swear|warrant|represent)|\b(i|you|we|applicant|candidate|undersigned)\s+(hereby\s+)?understands?\s+(that\b|and\s+agrees?\b)|\b(please\s+)?(certify|confirm|acknowledge|attest|affirm|declare|verify)\s+that\b/i,
     note: 'A statement you are making personally. Only you can make it.',
   },
   {
@@ -299,13 +390,62 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── Consent: the user's to give ────────────────────────────────────────────
   {
     category: 'consent',
-    test: /\bi (agree|consent|authorize)\b|\bterms (of (service|use)|and conditions)\b|\bprivacy polic(y|ies)\b|\baccept the terms\b|\barbitration\b/i,
+    // CONSENT IS ASKED IN EVERY PERSON, and the rule only recognised the first one. While it
+    // was `\bi (agree|consent|authorize)\b`, "I agree to the terms" was caught and "You
+    // consent to the processing of your personal data", "Do you agree to receive SMS text
+    // messages at the number provided?" and "By submitting, you authorize us to verify the
+    // information provided" were not consent at all — a standard TCPA or GDPR checkbox
+    // reached the essay path, where an approved answer of "Yes" ticks it. Same asymmetry the
+    // attestation rule had, same fix: the second and third person get their own branch.
+    //
+    // "you agree" has to bring "to" with it. "Do you agree with the following statement" is a
+    // work-style assessment item and refusing those would be the opposite mistake; "consent"
+    // and "authorize" need no such guard because neither has an innocent sense here.
+    //
+    // The bare noun is a branch of its own, because half of these boxes have no verb in them
+    // at all — "Consent", "Data processing consent", "Consent to receive text messages" are
+    // whole labels as printed. Unlike `marketing` or `medical`, which had to be narrowed
+    // because they name a major and a kind of school, "consent" has no ordinary sense on an
+    // application form, so the bare word is safe to refuse on.
+    test: /\b(i|we|the applicant|applicant|candidate)\s+(hereby\s+)?(agrees?|consents?|authorizes?|permits?)\b|\byou\s+(hereby\s+)?(consents?|authorizes?|permits?)\b|\byou\s+(hereby\s+)?agrees?\s+to\b|\bdo you (consent|authorize|permit|agree to)\b|\bconsent(s|ed|ing)?\b|\bterms (of (service|use)|and conditions)\b|\bprivacy polic(y|ies)\b|\baccept the terms\b|\barbitration\b/i,
     note: 'Consent is yours to give. Read it and decide.',
   },
   {
     category: 'consent',
-    test: /\bbackground (check|screening|investigation)s?\b|\bcredit checks?\b|\bdrug (test|screen)s?\b|\bconsumer reports?\b|\bfcra\b|\bcontact\b.{0,24}\b(employer|supervisor|manager|references?)\b/i,
+    // Every noun here carries its gerund as well as its plural, and that is the whole point
+    // rather than tidiness. While the list read `drug (test|screen)s?` it caught "Drug test"
+    // and "Drug tests" and missed "Drug screening", "Drug screenings", "Drug testing" and
+    // "Pre-employment drug screening" — which is how most US forms label that box — so a
+    // drug-testing authorization was not on the redline list at all. Its sibling clause in
+    // this very pattern already spelled "background screening" out, which is how the gap
+    // survived: the phrasing in front of whoever wrote it happened to be the one that worked.
+    //
+    // "drug and alcohol" and "substance abuse" are the same box under a different name, and
+    // "background verification" is the wording most large employers use now.
+    test: /\bbackground (check|screen|screening|investigation|verification)(s|ing|ings)?\b|\bcredit (check|report)(s|ing|ings)?\b|\b(drugs?|alcohol|drugs? and alcohol|substance abuse|controlled substances?) (test|screen|analysis)(s|es|ing|ings)?\b|\bconsumer reports?\b|\bfcra\b|\bcontact\b.{0,24}\b(employers?|supervisors?|managers?|references?)\b/i,
     note: 'An authorization to investigate you. Yours to give.',
+  },
+  {
+    category: 'consent',
+    // PERMISSION TO CONTACT SOMEONE IS ITS OWN QUESTION, and it was only recognised when the
+    // party named happened to be one of four workplace words. "May we contact your current
+    // employer?" was caught; "May we contact your school?", "Do you give permission for us to
+    // contact your university?" and "Permission to contact your registrar" were classified as
+    // school fields at 0.9 confidence and the tool typed the applicant's institution name
+    // into them — an answer to a question nobody asked, in a box where the applicant was
+    // being asked to grant or withhold permission.
+    //
+    // So the rule stops naming parties. WHO is being contacted does not matter — a registrar,
+    // a professor, a coach, a landlord — what makes the field a redline is that the label
+    // asks whether it MAY happen. That also means the pattern can never again be one noun
+    // short of the form in front of it.
+    //
+    // The lookahead excludes contacting the APPLICANT: "How can we contact you?" asks for a
+    // phone number, and refusing to fill that is the over-blocking this table is meant to
+    // avoid. "your school" is untouched by it, because "you" does not end at a word boundary
+    // inside "your".
+    test: /\b(may|might|can|could|ok|okay|alright|permission|permitted|permit|authoriz\w*|consent\w*|agree\w*|approv\w*|allow\w*)\b[^?]{0,32}\bcontact\w*\b(?!\s+(you|me|us)\b)|\bcontact\w*\b[^?]{0,32}\b(permission|permitted|authoriz\w*|consent\w*|approval)\b/i,
+    note: 'Permission to contact someone about you. Yours to give.',
   },
   {
     category: 'consent',
@@ -319,7 +459,14 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── EEO and voluntary self-identification ──────────────────────────────────
   {
     category: 'eeo_demographic',
-    test: /\brace\b|\bethnicit|\bhispanic\b|\blatino\b|\bgender\b|\bsex\b|\bpronouns?\b|\bsexual orientation\b|\blgbt/i,
+    // `\brace\b` steps aside for "race condition", the way `medical` steps aside for "Medical
+    // school" further down. "Describe a time you debugged a race condition in concurrent
+    // code" is an ordinary CS essay prompt, and it was refused with a note telling the
+    // applicant it was voluntary self-identification — so the answer they had drafted and
+    // approved was dropped and the explanation they were given was untrue of the question.
+    // Nothing demographic is lost: the exclusion is only the two-word phrase, and "racial"
+    // is spelled out so narrowing the noun does not cost the adjective.
+    test: /\brace\b(?!\s+conditions?\b)|\bracial\b|\bethnicit|\bhispanic\b|\blatino\b|\bgender\b|\bsex\b|\bpronouns?\b|\bsexual orientation\b|\blgbt/i,
     note: 'Voluntary self-identification. Not this tool’s to answer.',
   },
   {
@@ -348,7 +495,27 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   },
   {
     category: 'eeo_demographic',
-    test: /\b(criminal|conviction|convicted|felony|misdemeanor|arrest)\b/i,
+    // This pattern had both mistakes at once, which is unusual and worth spelling out.
+    //
+    // It was singular-only. `(conviction|felony|misdemeanor|arrest)` caught "Conviction" and
+    // let "Convictions", "Felonies", "Misdemeanors", "Arrests" and "Arrested" through — and
+    // bare plural headings are exactly how a US background-disclosure section labels itself.
+    // "Have you ever been arrested? If yes, please explain the circumstances." matched
+    // nothing, so on a form with generated field names (a Greenhouse `q_9812`, a Workday
+    // `input-42`) it was classified as an essay and an approved answer was typed into a
+    // criminal-history disclosure. The verbs now carry their inflections, not just their
+    // plurals: "arrest", "arrests", "arrested".
+    //
+    // And bare `criminal` was too broad in the other direction, because Criminal Justice is a
+    // real US undergraduate major. "Why are you interested in a career in criminal justice?"
+    // was refused as a criminal-history question — on precisely the law-enforcement and
+    // public-defender postings that major applies to — with a note about jurisdiction that
+    // was untrue of the question. So `criminal` now needs a second word establishing the
+    // record sense, the same way `medical` and `marketing` do above.
+    //
+    // "probation" is deliberately absent: academic probation is a real thing a student form
+    // asks about, and it is not a criminal record.
+    test: /\bcriminal (records?|histor(y|ies)|backgrounds?|charges?|convictions?|offen[cs]es?|proceedings?|activit(y|ies)|conduct|disclosures?|matters?|cases?)\b|\bconvict(ed|ion|ions)\b|\bfelon(y|ies)\b|\bmisdemeano(u)?rs?\b|\barrest(s|ed)?\b|\bincarcerat|\bexpunge|\bparole\b|\b(pled|plead|pleaded) (guilty|no contest|nolo)\b|\b(convicted|charged|guilty|committed|accused|indicted)\b.{0,32}\bcrimes?\b/i,
     note: 'Criminal history. Yours to answer, and the rules around it vary by jurisdiction.',
   },
   {
@@ -372,8 +539,14 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     // with no verb in it anywhere), and the term list spells "a i" rather than "a.i.":
     // `normalizeField` strips the full stops before any pattern sees the string, so the
     // punctuated spelling could never have matched.
+    //
+    // Two ways in, and the second is what keeps the first from having to be greedy. Either
+    // the AI term sits near a word about who WROTE something, or it sits near the name of
+    // the thing being handed in. Mere co-occurrence with "use" is not enough, because that
+    // is every AI skills question ever asked.
     test: new RegExp(
-      String.raw`\b${AI_TERM}\b.{0,40}\b${AI_ACTION}|\b${AI_ACTION}\w*\b.{0,40}\b${AI_TERM}\b`,
+      String.raw`\b${AI_TERM}\b.{0,40}\b${AI_AUTHORSHIP}|\b${AI_AUTHORSHIP}\w*\b.{0,40}\b${AI_TERM}\b` +
+        String.raw`|\b${AI_TERM}\b.{0,40}\b${AI_SUBMISSION}\b|\b${AI_SUBMISSION}\b.{0,40}\b${AI_TERM}\b`,
       'i',
     ),
     note: 'This asks whether AI helped with your application. Answer it yourself, honestly. This tool will not answer it for you.',

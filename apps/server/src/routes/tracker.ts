@@ -15,7 +15,11 @@ import { db, schema } from '../infra/db/client';
 import { discardRun } from '../core/filling/run';
 import { csvFilename, toCsv } from '../core/tracking/exportCsv';
 import { buildReminders, draftFollowUp, draftWithdrawal } from '../core/tracking/reminders';
-import { computeStats, RESPONDED as RESPONDED_STATUSES } from '../core/tracking/stats';
+import {
+  ADVANCED as ADVANCED_STATUSES,
+  computeStats,
+  RESPONDED as RESPONDED_STATUSES,
+} from '../core/tracking/stats';
 import { canTransition, derive, SET_BY, type TrackedApplication } from '../core/tracking/status';
 
 /**
@@ -42,6 +46,11 @@ function loadAll(): TrackedApplication[] {
    * "Typical reply time" grew every day for applications that had been answered long ago.
    */
   const respondedAt = new Map<string, string>();
+  // The same history answers a second question: did this application ever reach an
+  // interview or an offer, whatever became of it afterwards. Reading the CURRENT status
+  // instead drops every interview that ended in a rejection, which is most of them, so the
+  // figure shown as "reached interview" was really "is sitting at interview right now".
+  const advancedAt = new Map<string, string>();
   for (const e of db
     .select()
     .from(schema.applicationEvent)
@@ -49,8 +58,12 @@ function loadAll(): TrackedApplication[] {
     .orderBy(schema.applicationEvent.at)
     .all()) {
     const to = (e.payload as { to?: TrackedApplication['status'] } | null)?.to;
-    if (to && RESPONDED_STATUSES.includes(to) && !respondedAt.has(e.applicationId)) {
+    if (!to) continue;
+    if (RESPONDED_STATUSES.includes(to) && !respondedAt.has(e.applicationId)) {
       respondedAt.set(e.applicationId, e.at);
+    }
+    if (ADVANCED_STATUSES.includes(to) && !advancedAt.has(e.applicationId)) {
+      advancedAt.set(e.applicationId, e.at);
     }
   }
 
@@ -77,6 +90,7 @@ function loadAll(): TrackedApplication[] {
       updatedAt: r.application.updatedAt,
       submittedAt: r.application.submittedAt,
       respondedAt: respondedAt.get(r.application.id) ?? null,
+      advancedAt: advancedAt.get(r.application.id) ?? null,
       deadlineAt: r.application.deadlineAt,
       answerCount: counts.total,
       approvedCount: counts.approved,

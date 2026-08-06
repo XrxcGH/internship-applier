@@ -56,9 +56,14 @@ export function Nav({
                order, shows no tooltip on touch, and is generally skipped by screen
                readers. The guidance was invisible to exactly the people who cannot
                hover. */
+            /* The dimming and the cursor live in the stylesheet, on the same
+               `[aria-disabled='true']` selector the hover rule excludes. Setting them here
+               as well is how the two drifted apart in the first place: this line was
+               updated, the stylesheet went on keying `:disabled`, and a locked item stayed
+               dim but lit up on hover like a live one. */
             <button
               key={item.id}
-              className={`u-nav-link shrink-0 ${item.blocked ? 'cursor-not-allowed opacity-40' : ''}`}
+              className="u-nav-link shrink-0"
               aria-current={view === item.id ? 'page' : undefined}
               aria-disabled={item.blocked ? true : undefined}
               title={item.blocked}

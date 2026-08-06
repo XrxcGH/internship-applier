@@ -149,7 +149,16 @@ export const Application = z.object({
    * that should see the research CV — is what it would record.
    */
   resumeDocumentId: z.string().nullable(),
-  /** Written ONLY by POST /api/applications/:id/mark-submitted (gate G4). */
+  /**
+   * Gate G4. Written only where the user themselves says it was submitted: POST
+   * /api/applications/:id/mark-submitted, and a user status change to 'submitted' via
+   * POST /api/applications/:id/status. Never by the fill run.
+   *
+   * This used to say "written ONLY by mark-submitted", which was one endpoint short. The
+   * count is not what makes G4 hold — a user action is — but this is the file both apps
+   * import the type from, so it is the description someone auditing what can stamp this
+   * column reads first, and it sent them to look at one route out of two.
+   */
   submittedAt: z.string().datetime().nullable(),
   deadlineAt: z.string().datetime().nullable(),
   screenshotPath: z.string().nullable(),

@@ -20,7 +20,7 @@ import {
   submissions,
   type FixtureServer,
 } from '@ia/fixtures';
-import { openSession, type BrowserSession } from '../src/core/filling/browser';
+import { detectIntervention, openSession, type BrowserSession } from '../src/core/filling/browser';
 import { buildFormMap, frameKey } from '../src/core/filling/formMap';
 import { buildFillPlan, summarizePlan } from '../src/core/filling/plan';
 import {
@@ -408,7 +408,7 @@ function selectStub(options: SelectOption[], behaviour: { ignores?: boolean } = 
 }
 
 /** A text box with no browser, reachable by a plain selector or by index. */
-function textStub() {
+function textStub(afterType?: () => void) {
   let held = '';
   const locator = {
     nth: () => locator,
@@ -420,6 +420,136 @@ function textStub() {
     },
     pressSequentially: (v: string) => {
       held += v;
+      afterType?.();
+      return Promise.resolve();
+    },
+    inputValue: () => Promise.resolve(held),
+  };
+  return {
+    locator,
+    get held() {
+      return held;
+    },
+  };
+}
+
+/**
+ * A single-line `<input>` that reacts to a keystroke the way the browser does.
+ *
+ * `pressSequentially` presses one key per character, and Playwright's US layout aliases both
+ * "\n" and "\r" to Enter — so an Enter arriving here is the browser's implicit submission of
+ * a form whose only text control is this box. The stub records it as a POST, which is the
+ * outcome the fixture's `submissions` counter records against a real server.
+ */
+function keySubmittingInputStub() {
+  let held = '';
+  const submissions: string[] = [];
+  const locator = {
+    nth: () => locator,
+    waitFor: () => Promise.resolve(),
+    click: () => Promise.resolve(),
+    fill: (v: string) => {
+      held = v;
+      return Promise.resolve();
+    },
+    pressSequentially: (v: string) => {
+      for (const ch of v) {
+        if (ch === '\n' || ch === '\r') submissions.push('POST /api/submit');
+        else held += ch;
+      }
+      return Promise.resolve();
+    },
+    inputValue: () => Promise.resolve(held),
+  };
+  return {
+    locator,
+    submissions,
+    get held() {
+      return held;
+    },
+  };
+}
+
+/** A contenteditable box: no value, text content, and a page-level keyboard writing into it. */
+function richtextStub(initial = '') {
+  let held = initial;
+  const locator = {
+    nth: () => locator,
+    waitFor: () => Promise.resolve(),
+    click: () => Promise.resolve(),
+    fill: (v: string) => {
+      held = v;
+      return Promise.resolve();
+    },
+    getAttribute: () => Promise.resolve(null),
+    innerText: () => Promise.resolve(held),
+  };
+  return {
+    locator,
+    insertText: (t: string) => {
+      held += t;
+      return Promise.resolve();
+    },
+    get held() {
+      return held;
+    },
+  };
+}
+
+/** A div-based combobox, whose options are elements to be read and clicked. */
+function comboStub(options: SelectOption[]) {
+  let held = '';
+  const optionList = {
+    count: () => Promise.resolve(options.length),
+    evaluateAll: (fn: (els: unknown[]) => unknown) =>
+      Promise.resolve(
+        fn(
+          options.map((o) => ({
+            getAttribute: (n: string) => (n === 'data-value' ? o.value : null),
+            textContent: o.label,
+          })),
+        ),
+      ),
+    nth: (i: number) => ({
+      click: () => {
+        held = options[i]!.value;
+        return Promise.resolve();
+      },
+    }),
+  };
+  const locator = {
+    nth: () => locator,
+    waitFor: () => Promise.resolve(),
+    click: () => Promise.resolve(),
+    getAttribute: (n: string) => Promise.resolve(n === 'data-value' ? held : null),
+    innerText: () => Promise.resolve(held),
+  };
+  return {
+    locator,
+    optionList,
+    get held() {
+      return held;
+    },
+  };
+}
+
+/**
+ * A date input, which rejects a value of the wrong granularity exactly as the browser does.
+ *
+ * Playwright sets the value and then compares: when the input refuses it, `input.value` comes
+ * back empty and Playwright throws "Malformed value" — two words written for a Playwright
+ * maintainer that the user was shown next to their graduation date.
+ */
+function dateStub(kind: 'date' | 'month') {
+  let held = '';
+  const locator = {
+    nth: () => locator,
+    waitFor: () => Promise.resolve(),
+    evaluate: (fn: (el: unknown) => string) => Promise.resolve(fn({ type: kind })),
+    fill: (v: string) => {
+      const shaped = kind === 'date' ? /^\d{4}-\d{2}-\d{2}$/ : /^\d{4}-\d{2}$/;
+      if (!shaped.test(v)) return Promise.reject(new Error('Malformed value'));
+      held = v;
       return Promise.resolve();
     },
     inputValue: () => Promise.resolve(held),
@@ -445,13 +575,21 @@ function fieldOf(over: Partial<FormField>): FormField {
   } as FormField;
 }
 
-function pageOfFrames(frames: { url: string; locator: unknown }[]): Page {
+function pageOfFrames(
+  frames: { url: string | (() => string); locator: unknown | ((sel: string) => unknown) }[],
+  keyboard: { insertText?: (t: string) => Promise<void> } = {},
+): Page {
   const built = frames.map((f) => ({
-    url: () => f.url,
+    url: () => (typeof f.url === 'function' ? f.url() : f.url),
     isDetached: () => false,
-    locator: () => f.locator,
+    locator: (sel: string) =>
+      typeof f.locator === 'function' ? (f.locator as (s: string) => unknown)(sel) : f.locator,
   }));
-  return { mainFrame: () => built[0], frames: () => built } as unknown as Page;
+  return {
+    mainFrame: () => built[0],
+    frames: () => built,
+    keyboard: { insertText: keyboard.insertText ?? (() => Promise.resolve()) },
+  } as unknown as Page;
 }
 
 async function fillOnce(page: Page, field: FormField, value: string) {
@@ -575,7 +713,385 @@ describe('the frame a field was found in', () => {
   });
 });
 
+/**
+ * What the page holds afterwards, and how much of it is enough.
+ *
+ * Read-back exists to catch a form that quietly refuses a value. Accepting any non-empty
+ * prefix meant a controlled component that committed the first keystroke and dropped the
+ * other 599 was reported "filled", with a green tick, above the words "Read the page, then
+ * submit it yourself".
+ */
+describe('how much of a value counts as kept', () => {
+  const ESSAY = `I built a tide chart that works offline. ${'x'.repeat(560)}`;
+
+  function essayField() {
+    return fieldOf({
+      label: 'Tell us about a project',
+      control: 'textarea',
+      semantic: 'essay',
+      locator: '#essay',
+    });
+  }
+
+  it('calls a box holding one character of a 600-character answer a mismatch', async () => {
+    const box = {
+      nth: () => box,
+      waitFor: () => Promise.resolve(),
+      click: () => Promise.resolve(),
+      fill: () => Promise.resolve(),
+      pressSequentially: () => Promise.resolve(),
+      // A controlled component that commits the first keystroke and ignores the rest.
+      inputValue: () => Promise.resolve('I'),
+    };
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: box }]);
+    const r = await fillOnce(page, essayField(), ESSAY);
+
+    expect(r.status).toBe('mismatch');
+    expect(r.readBack).toBe('I');
+    expect(describeFill({ results: [r], filled: 0, mismatched: 1, failed: 0 })).toMatch(
+      /still needs you/,
+    );
+  });
+
+  it('still forgives a form that trims a few characters off the end', async () => {
+    const kept = ESSAY.slice(0, ESSAY.length - 5);
+    const box = {
+      nth: () => box,
+      waitFor: () => Promise.resolve(),
+      click: () => Promise.resolve(),
+      fill: () => Promise.resolve(),
+      pressSequentially: () => Promise.resolve(),
+      inputValue: () => Promise.resolve(kept),
+    };
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: box }]);
+    expect((await fillOnce(page, essayField(), ESSAY)).status).toBe('ok');
+  });
+
+  it('clears a contenteditable first, so a second run does not answer twice', async () => {
+    const answer = 'I build things that outlive the semester.';
+    const box = richtextStub(answer);
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: box.locator }], {
+      insertText: box.insertText,
+    });
+    const r = await fillOnce(
+      page,
+      fieldOf({ label: 'Why?', control: 'richtext', semantic: 'essay', locator: '#why' }),
+      answer,
+    );
+
+    expect(box.held).toBe(answer);
+    expect(r.status).toBe('ok');
+  });
+});
+
+/**
+ * Radios and comboboxes are option lists too.
+ *
+ * `chooseOption` was hardened after prose labels matched by letters sent "US" to Australia
+ * and "No" to "Yes, now or in the future". Both of these branches went on matching by
+ * letters afterwards — and they are the branches that answer work authorization and
+ * sponsorship, the two questions that decide an application on their own.
+ */
+describe('option lists that are not <select>', () => {
+  const ENROLLMENT = [
+    { value: 'a', label: 'Currently enrolled part-time', locator: '#a' },
+    { value: 'b', label: 'Currently enrolled full-time', locator: '#b' },
+    { value: 'c', label: 'Not currently enrolled', locator: '#c' },
+  ];
+
+  function radioStub() {
+    let checked = false;
+    const locator = {
+      nth: () => locator,
+      waitFor: () => Promise.resolve(),
+      check: () => {
+        checked = true;
+        return Promise.resolve();
+      },
+      isChecked: () => Promise.resolve(checked),
+    };
+    return {
+      locator,
+      get checked() {
+        return checked;
+      },
+    };
+  }
+
+  it('leaves a radio group alone when two options begin with the answer', async () => {
+    const buttons = new Map(ENROLLMENT.map((o) => [o.locator, radioStub()]));
+    const page = pageOfFrames([
+      { url: 'http://form.test/', locator: (sel: string) => buttons.get(sel)!.locator },
+    ]);
+    const r = await fillOnce(
+      page,
+      fieldOf({
+        label: 'Enrollment status',
+        control: 'radio',
+        semantic: 'enrollment_status',
+        locator: '#a',
+        options: ENROLLMENT,
+      }),
+      'Currently enrolled',
+    );
+
+    expect(r.status).toBe('skipped');
+    expect(r.note).toMatch(/Choose it yourself/);
+    expect([...buttons.values()].filter((b) => b.checked)).toEqual([]);
+  });
+
+  it('still ticks the radio when exactly one option is the answer', async () => {
+    const options = [
+      { value: 'yes', label: 'Yes', locator: '#yes' },
+      { value: 'no', label: 'No', locator: '#no' },
+    ];
+    const buttons = new Map(options.map((o) => [o.locator, radioStub()]));
+    const page = pageOfFrames([
+      { url: 'http://form.test/', locator: (sel: string) => buttons.get(sel)!.locator },
+    ]);
+    const r = await fillOnce(
+      page,
+      fieldOf({
+        label: 'Are you authorized to work?',
+        control: 'radio',
+        semantic: 'work_auth',
+        locator: '#yes',
+        options,
+      }),
+      'Yes',
+    );
+
+    expect(r.status).toBe('ok');
+    expect(r.readBack).toBe('Yes');
+    expect(buttons.get('#yes')!.checked).toBe(true);
+    expect(buttons.get('#no')!.checked).toBe(false);
+  });
+
+  it('picks the sponsorship option meant, not the one carrying the letters', async () => {
+    const combo = comboStub(SPONSORSHIP.filter((o) => o.value !== ''));
+    const page = pageOfFrames([
+      {
+        url: 'http://form.test/',
+        locator: (sel: string) => (sel === '[role=option]' ? combo.optionList : combo.locator),
+      },
+    ]);
+    const r = await fillOnce(
+      page,
+      fieldOf({
+        label: 'Do you now or will you in the future require sponsorship?',
+        control: 'combobox',
+        semantic: 'sponsorship_needed',
+        locator: '#sponsor',
+      }),
+      'No',
+    );
+
+    expect(combo.held).toBe('2');
+    expect(r.status).toBe('ok');
+    expect(r.readBack).toBe('No, not now or in the future');
+  });
+
+  it('leaves a combobox for the user when a decoy option is in the way', async () => {
+    const combo = comboStub([
+      { value: '0', label: 'Not sure' },
+      { value: '1', label: 'Prefer not to say' },
+    ]);
+    const page = pageOfFrames([
+      {
+        url: 'http://form.test/',
+        locator: (sel: string) => (sel === '[role=option]' ? combo.optionList : combo.locator),
+      },
+    ]);
+    const r = await fillOnce(
+      page,
+      fieldOf({ label: 'Sponsorship', control: 'combobox', locator: '#sponsor' }),
+      'No',
+    );
+
+    expect(r.status).toBe('skipped');
+    expect(combo.held).toBe('');
+  });
+});
+
+/**
+ * A month is not a day.
+ *
+ * The profile stores a graduation as "2027-05" and an availability as "2027-06-01", and the
+ * scanner reports `<input type=date>` and `<input type=month>` as the same kind of control.
+ * Whichever the employer used, one of them was handed a value it cannot hold, and the user
+ * was shown Playwright's own words — "Malformed value" — beside the commonest education
+ * field on an application form.
+ */
+describe('a date input gets a date its own shape', () => {
+  it('pads a graduation month out to a day for an input that wants one', async () => {
+    const box = dateStub('date');
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: box.locator }]);
+    const r = await fillOnce(
+      page,
+      fieldOf({ label: 'Expected graduation', control: 'date', semantic: 'graduation_date' }),
+      '2027-05',
+    );
+
+    expect(box.held).toBe('2027-05-01');
+    expect(r.status).toBe('ok');
+    expect(r.note).toMatch(/only the month/i);
+  });
+
+  it('trims an availability date down to a month for an input that wants one', async () => {
+    const box = dateStub('month');
+    const page = pageOfFrames([{ url: 'http://form.test/', locator: box.locator }]);
+    const r = await fillOnce(
+      page,
+      fieldOf({ label: 'Available from', control: 'date', semantic: 'start_date' }),
+      '2027-06-01',
+    );
+
+    expect(box.held).toBe('2027-06');
+    expect(r.status).toBe('ok');
+  });
+});
+
+/**
+ * A run that found nothing has not filled anything.
+ *
+ * "All 0 fields filled. Read the page, then submit it yourself." was rendered under a green
+ * "0 filled" badge on any page whose form had not appeared yet — a career-site SPA, a form
+ * behind an "Apply now" step — and the application was walked on to awaiting_submit behind it.
+ */
+describe('what the user is told when there was nothing to fill', () => {
+  it('says nothing was typed rather than that everything was', () => {
+    const said = describeFill({ results: [], filled: 0, mismatched: 0, failed: 0 });
+    expect(said).toMatch(/nothing was typed/i);
+    expect(said).not.toMatch(/all 0 fields filled/i);
+  });
+});
+
+/**
+ * Which document the plan is being typed into.
+ *
+ * The iframe half of this has a guard; the main document did not, and `frameFor` handed back
+ * `page.mainFrame()` whatever address it was showing. A country `<select>` whose onchange
+ * sets `location.href` is enough — an everyday form pattern — and every remaining locator
+ * then resolved in a page the scanner had never read and the redline pass had never seen.
+ */
+describe('the page moving under a fill', () => {
+  it('stops the plan instead of typing into whatever loaded next', async () => {
+    let url = 'http://form.test/step1';
+    const country = textStub(() => {
+      url = 'http://form.test/step2';
+    });
+    const next = textStub();
+    const page = pageOfFrames([
+      {
+        url: () => url,
+        locator: (sel: string) => (sel === '#country' ? country.locator : next.locator),
+      },
+    ]);
+
+    const result = await executePlan(
+      page,
+      {
+        actions: [
+          {
+            field: fieldOf({ label: 'Country', locator: '#country', control: 'text' }),
+            value: 'US',
+            source: 'profile',
+          },
+          {
+            field: fieldOf({
+              label: 'Tell us about a project',
+              control: 'textarea',
+              semantic: 'essay',
+              locator: '__index__1',
+            }),
+            value: 'I built a tide chart that works offline.',
+            source: 'answer',
+          },
+        ],
+        skips: [],
+      },
+      { documentUrl: 'http://form.test/step1' },
+    );
+
+    expect(result.results[1]!.status).toBe('failed');
+    expect(result.results[1]!.note).toMatch(/moved to a different address/i);
+    // Nothing was typed into the document that replaced the form.
+    expect(next.held).toBe('');
+  });
+
+  it('does not object to a form that only adds a query string to its own address', async () => {
+    let url = 'http://form.test/apply';
+    const first = textStub(() => {
+      url = 'http://form.test/apply?step=2#top';
+    });
+    const second = textStub();
+    const page = pageOfFrames([
+      {
+        url: () => url,
+        locator: (sel: string) => (sel === '#a' ? first.locator : second.locator),
+      },
+    ]);
+
+    const result = await executePlan(
+      page,
+      {
+        actions: [
+          {
+            field: fieldOf({ label: 'First name', locator: '#a', control: 'text' }),
+            value: 'Rosa',
+            source: 'profile',
+          },
+          {
+            field: fieldOf({ label: 'Last name', locator: '#b', control: 'text' }),
+            value: 'Alvarez',
+            source: 'profile',
+          },
+        ],
+        skips: [],
+      },
+      { documentUrl: 'http://form.test/apply' },
+    );
+
+    expect(result.results.map((r) => r.status)).toEqual(['ok', 'ok']);
+    expect(second.held).toBe('Alvarez');
+  });
+});
+
+/**
+ * A sign-in page is still a sign-in page with a career site's furniture around it.
+ *
+ * The escape hatch that rescues a real application form from the login verdict counted every
+ * control in the document, so a header search box, a footer language picker and the sign-in
+ * form's own email field made three — and the run went on to offer to type the user's email
+ * into a password-protected sign-in box.
+ */
+describe('telling a login wall from an application form', () => {
+  it('still calls it a login wall when the page chrome supplies the controls', async () => {
+    await session.page.goto(`${fixture.url}/login`);
+    await session.page.setContent(
+      '<header><input type="search" name="q" placeholder="Search jobs">' +
+        '<select name="lang"><option>English</option></select></header>' +
+        '<main><form><input id="e" type="email"><input id="p" type="password">' +
+        '<button type="submit">Sign in</button></form></main>' +
+        '<footer><select name="region"><option>United States</option></select></footer>',
+    );
+    expect((await detectIntervention(session.page))?.reason).toBe('login');
+  }, 30_000);
+
+  it('still lets an application form carrying an account section through', async () => {
+    await session.page.setContent(
+      '<header><input type="search" name="q"></header>' +
+        '<form><input id="n" name="name"><input id="e" type="email">' +
+        '<input id="ph" name="phone"><input id="pw" type="password">' +
+        '<textarea id="w" name="why"></textarea></form>',
+    );
+    expect(await detectIntervention(session.page)).toBeNull();
+  }, 30_000);
+});
+
 describe('gate G4 — the whole point', () => {
+  const TWO_PARAGRAPHS = 'Para one about infrastructure.\n\nPara two about reliability.';
+
   it('has not submitted a single form across this entire suite', () => {
     // The fixture counts POSTs. This asserts the outcome, not the implementation.
     expect(submissions).toEqual([]);
@@ -588,4 +1104,97 @@ describe('gate G4 — the whole point', () => {
       expect(a.field.control).not.toBe('button');
     }
   }, 90_000);
+
+  /**
+   * The one that is not about clicking.
+   *
+   * `pressSequentially` presses a key per character and Playwright's layout aliases "\n" and
+   * "\r" to Enter, so a two-paragraph answer the user had approved but not yet seen on the
+   * page pressed Enter twice in a single-line box — and in a form whose only text control is
+   * that box, Enter is submit. The application went to the employer, the field was reported
+   * as a mismatch and the rest as timeouts, and nothing in the run said a word about it.
+   *
+   * Every essay control in the fixture is a <textarea>, where Enter inserts a line and
+   * submits nothing, which is why the POST counter above never caught this.
+   */
+  it('types a multi-line answer into a single-line input without pressing Enter', async () => {
+    const box = keySubmittingInputStub();
+    const page = pageOfFrames([{ url: 'http://form.test/apply', locator: box.locator }]);
+    const r = await fillOnce(
+      page,
+      fieldOf({
+        label: 'In a sentence or two, why do you want to intern with our team this summer?',
+        control: 'text',
+        semantic: 'essay',
+        locator: '#q',
+      }),
+      TWO_PARAGRAPHS,
+    );
+
+    expect(box.submissions).toEqual([]);
+    expect(box.held).toBe('Para one about infrastructure.  Para two about reliability.');
+    expect(r.status).toBe('ok');
+    expect(r.note).toMatch(/one line/i);
+  });
+
+  it('keeps a multi-line answer whole in a textarea, still without pressing Enter', async () => {
+    const box = keySubmittingInputStub();
+    const typed: string[] = [];
+    const page = pageOfFrames([{ url: 'http://form.test/apply', locator: box.locator }], {
+      insertText: (t) => {
+        typed.push(t);
+        return Promise.resolve();
+      },
+    });
+    await fillOnce(
+      page,
+      fieldOf({
+        label: 'Tell us about a project',
+        control: 'textarea',
+        semantic: 'essay',
+        locator: '#essay',
+      }),
+      TWO_PARAGRAPHS,
+    );
+
+    expect(box.submissions).toEqual([]);
+    // The breaks went in as text, which fires no key events at all.
+    expect(typed).toEqual(['\n', '\n']);
+  });
+
+  /**
+   * The same thing against a real browser and a real server, because the stub above can only
+   * prove that this code does not hand Playwright a line break — not that Playwright and
+   * Chromium behave as described. The fixture records every POST it receives.
+   */
+  it('does not submit a real single-input form given a multi-line answer', async () => {
+    await session.page.goto(`${fixture.url}/simple`);
+    await session.page.setContent(
+      '<form method="POST" action="/g4-implicit-submit">' +
+        '<label for="q">In a sentence or two, why do you want to intern with our team?</label>' +
+        '<input id="q" name="q"></form>',
+    );
+    // If this were about:blank the form could not reach the fixture and the test would
+    // prove nothing.
+    expect(session.page.url()).toContain(fixture.url);
+    const before = session.page.url();
+
+    const r = await fillOnce(
+      session.page,
+      fieldOf({
+        label: 'In a sentence or two, why do you want to intern with our team?',
+        control: 'text',
+        semantic: 'essay',
+        locator: '#q',
+      }),
+      TWO_PARAGRAPHS,
+    );
+
+    expect(submissions).toEqual([]);
+    expect(session.page.url()).toBe(before);
+    expect(r.status).toBe('ok');
+    expect(await session.page.locator('#q').inputValue()).toBe(
+      'Para one about infrastructure.  Para two about reliability.',
+    );
+  }, 60_000);
 });

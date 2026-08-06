@@ -5,6 +5,7 @@ import {
   extractRequirements,
 } from '../src/core/matching/extractRequirements';
 import { validateValue } from '../src/core/matching/requirementValues';
+import { stripHtml } from '../src/core/discovery/sources/types';
 
 const JD = `
 About the role
@@ -151,7 +152,50 @@ describe('deterministic extraction', () => {
     expect(necessityOf('experience_years', posting)).toBe('preferred');
   });
 
+  /**
+   * The shape a posting really arrives in. `stripHtml` replaces `</li>` with a newline and
+   * every other tag with a space, so nothing marks a bullet and every item in a list is a
+   * short line with no terminal punctuation — indistinguishable, to the old heading test,
+   * from a heading. That made only the FIRST item under a heading softenable; from the
+   * second item on, a preferred three-year line became a hard three-year requirement and
+   * hid the internship from a student with none. Hand-written "- " bullets hid this,
+   * because the bullet character alone was enough to tell the two apart.
+   */
+  it('softens every item under a heading, not just the first, on ATS markup', () => {
+    const body = stripHtml(
+      '<p>About the role</p><p>We are hiring a Software Engineering Intern.</p>' +
+        '<p><strong>Minimum qualifications</strong></p>' +
+        '<ul><li>Currently pursuing a Bachelor&rsquo;s degree</li></ul>' +
+        '<p><strong>Preferred qualifications</strong></p>' +
+        '<ul><li>Experience with Python</li><li>Strong communication skills</li>' +
+        '<li>3+ years of experience with backend systems</li></ul>',
+    );
+    expect(body).not.toMatch(/[-*•]\s/); // no bullet markers survive the strip
+    const years = deterministicRequirements(body).find((r) => r.kind === 'experience_years');
+    expect(years?.necessity).toBe('preferred');
+    // And the sentence stored beside it is the line that states it, not the whole section.
+    expect(years?.sourceQuote).toBe('3+ years of experience with backend systems');
+  });
+
+  it('softens a preferred item wherever it sits in its section', () => {
+    const at = (position: number) => {
+      const lines = ['Preferred qualifications'];
+      for (let i = 0; i < position; i++) lines.push(`Familiarity with tool number ${i}`);
+      lines.push('3 years of professional experience');
+      return necessityOf('experience_years', lines.join('\n'));
+    };
+    expect(at(0)).toBe('preferred');
+    expect(at(1)).toBe('preferred');
+    expect(at(4)).toBe('preferred');
+  });
+
   it('still reads a genuinely stated experience requirement as required', () => {
+    expect(
+      necessityOf(
+        'experience_years',
+        'Minimum qualifications\nA degree in progress\n3 years of professional experience',
+      ),
+    ).toBe('required');
     expect(
       necessityOf('experience_years', 'Requirements:\n- 3 years of professional experience.'),
     ).toBe('required');
@@ -175,6 +219,41 @@ describe('deterministic extraction', () => {
     expect(necessityOf('education_level', "A Bachelor's degree in CS is required.")).toBe(
       'required',
     );
+  });
+
+  /**
+   * A "Graduate Program" is the name of an employer's entry-level scheme, not a statement
+   * about degrees — discovery/normalize.ts reads the same two words as `new_grad`. Reading
+   * them as a master's requirement meant the friendliest new-grad postings on the board
+   * hard-failed every undergraduate who saw them. The assertion is that no education_level
+   * requirement is produced at all, not merely that it does not fail anyone: a requirement
+   * that exists can be failed on later.
+   */
+  it('does not read a "Graduate Program" as a demand for a graduate degree', () => {
+    for (const text of [
+      'Join our 2027 Graduate Program in Software Engineering. We hire final-year students.',
+      'Our Graduate Programme welcomes final-year undergraduates.',
+      'Applications are open for the 2027 Graduate Program.',
+    ]) {
+      expect(
+        deterministicRequirements(text).filter((r) => r.kind === 'education_level'),
+        text,
+      ).toEqual([]);
+    }
+  });
+
+  it('still reads the words that can only mean graduate school', () => {
+    for (const text of [
+      'Must be enrolled in a graduate degree program.',
+      'Applicants should be pursuing a graduate degree.',
+      'Open to graduate students only.',
+      'Applicants must be in graduate school.',
+    ]) {
+      expect(
+        deterministicRequirements(text).find((r) => r.kind === 'education_level')?.value,
+        text,
+      ).toEqual({ levels: ['master'] });
+    }
   });
 
   /**
@@ -210,6 +289,31 @@ describe('deterministic extraction', () => {
       'No visa sponsorship is available.',
     ];
     for (const text of refusals) expect(refusesSponsorship(text), text).toBe(true);
+  });
+
+  /**
+   * Half of employers write this with "sponsorship" as the noun and half with "sponsor" as
+   * the verb. The verb branch was spliced into the noun one, where it could only ever have
+   * fired on the string "sponsor sponsorship" — so every phrasing below produced no
+   * work-authorization requirement at all, and a student who needs a visa was shown a
+   * posting whose own first line rules her out, with nothing to warn her.
+   */
+  it('reads "sponsor" as a verb, not only "sponsorship" as a noun', () => {
+    const refusals = [
+      'We are unable to sponsor visas for this position.',
+      'The company does not sponsor employment visas.',
+      'We will not sponsor applicants for work visas.',
+      'This employer does not sponsor H-1B visas.',
+      'Acme cannot sponsor visas.',
+      'We are not able to sponsor candidates for employment visas.',
+      'Candidates must not require sponsorship now or in the future.',
+    ];
+    for (const text of refusals) expect(refusesSponsorship(text), text).toBe(true);
+  });
+
+  it('does not read sponsoring an event as a refusal to sponsor a visa', () => {
+    expect(refusesSponsorship('We sponsor local hackathons and student conferences.')).toBe(false);
+    expect(refusesSponsorship('We do not sponsor conferences or hackathons.')).toBe(false);
   });
 
   /**
@@ -251,6 +355,75 @@ describe('deterministic extraction', () => {
   });
 
   /**
+   * A posting that names a second, non-citizen way to be hireable is not a US-only posting.
+   * Permanent residence was the only alternative this knew, so "or otherwise authorized to
+   * work in the United States" — the commonest form of the sentence by a distance — became
+   * a hard citizenship requirement and told a student on OPT she was ineligible, quoting
+   * the sentence that includes her.
+   */
+  it('reads a work-authorization alternative the same way as a green card', () => {
+    for (const text of [
+      'Applicants must be a U.S. citizen or otherwise authorized to work in the United States.',
+      'Must be a U.S. citizen or have permanent work authorization.',
+      'Must be a U.S. citizen or eligible to work in the United States.',
+      'Must be a U.S. citizen or legally able to work in the U.S.',
+      'Open to U.S. citizens or anyone with the right to work in the US.',
+    ]) {
+      expect(citizenshipCountriesFor(text), text).toBeUndefined();
+      expect(
+        deterministicRequirements(text).some(
+          (r) =>
+            r.kind === 'work_auth' &&
+            (r.value as { requiresExistingAuthorization?: boolean }).requiresExistingAuthorization,
+        ),
+        text,
+      ).toBe(true);
+    }
+  });
+
+  /**
+   * "citizen(?:ship)?" cannot match "citizens" — the word boundary lands on the "s" — so a
+   * posting restricted to US citizens produced no restriction at all and was shown as
+   * eligible to someone who cannot be hired for it.
+   */
+  it('reads the plural "citizens", not only the singular', () => {
+    for (const text of [
+      'This position is open only to U.S. citizens.',
+      'Applicants must be United States citizens.',
+      'Candidates must be US citizens due to federal contract requirements.',
+    ]) {
+      expect(citizenshipCountriesFor(text)?.value, text).toEqual({ countries: ['US'] });
+    }
+    // The plural must not walk past the guards that protect the singular.
+    expect(citizenshipCountriesFor('U.S. citizens are not required to apply.')).toBeUndefined();
+    expect(
+      citizenshipCountriesFor('Open to U.S. citizens and permanent residents.'),
+    ).toBeUndefined();
+  });
+
+  /**
+   * "or" and "nor" keep one statement going, and the negation stated once at the front
+   * governs everything after them. Reading each alternative as its own clause put the
+   * cancelling word out of view, and these sentences — written to tell a student that
+   * nothing stands in her way — produced the two requirements hardest to fail: a US-only
+   * citizenship requirement and a security clearance.
+   */
+  it('does not manufacture a requirement out of a sentence that waives two things at once', () => {
+    for (const text of [
+      'Neither U.S. citizenship nor a security clearance is required for this role.',
+      'U.S. citizenship or work authorization is not required.',
+      'No US citizenship or security clearance is required for this role.',
+      'Neither sponsorship nor an active clearance is required.',
+      'We do not require U.S. citizenship or a security clearance.',
+    ]) {
+      expect(
+        deterministicRequirements(text).filter((r) => r.kind === 'citizenship'),
+        text,
+      ).toEqual([]);
+    }
+  });
+
+  /**
    * The enrolment phrase survives its own negation — "you do not need to be currently
    * enrolled" contains it — so a recent graduate was filtered out by the exact sentence
    * written to invite them. The guard reads only as far back as the start of the clause,
@@ -276,6 +449,24 @@ describe('deterministic extraction', () => {
       'Interns must be enrolled in an accredited university and will not be considered otherwise.',
     ];
     for (const text of stated) expect(requiresEnrollment(text), text).toBe(true);
+  });
+
+  /**
+   * The waiver is usually written as a list — "you do not need to be enrolled OR returning
+   * to school" — and reading the second half on its own left the "not" one word out of
+   * reach. Both halves of each of these has to stay waived: the single-phrase control
+   * already worked, and the fix has to hold for the second phrase without breaking it.
+   */
+  it('carries a negation across an "or" to the phrase on the far side of it', () => {
+    for (const text of [
+      'You do not need to be currently enrolled in a degree program.',
+      'You do not need to be currently enrolled in a degree program or returning to school after the internship.',
+      'Applicants need not be currently enrolled in or pursuing at a university.',
+      'Graduating seniors are welcome; you do not have to be returning to school or currently enrolled in classes.',
+      'You do not need to be enrolled in a degree program, or returning to school.',
+    ]) {
+      expect(requiresEnrollment(text), text).toBe(false);
+    }
   });
 
   /** Each window a posting names is an alternative, so all of them have to reach the rules. */

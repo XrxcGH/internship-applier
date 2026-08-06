@@ -12,12 +12,26 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { config } from '../../config';
 import { logger } from '../logger';
 
 const SERVICE = 'internship-applier';
-const ACCOUNT = 'field-encryption-key';
+
+/**
+ * Under NODE_ENV=test the key lives in its own account, never the user's.
+ *
+ * The credential store is keyed by service and account, so it does not follow DATA_DIR the
+ * way every file this app writes does — and a test run that mints a key, or a "delete
+ * everything" test that removes one, is operating on the developer's own installation.
+ * vitest.setup.ts closes that off for anything loaded inside a Vitest worker by handing out
+ * an in-memory stand-in. It cannot close it off for code that runs the module in a separate
+ * process, which is the only way to check that the store is reachable under the runtime the
+ * server actually starts with. A separate account name makes that safe wherever it runs from,
+ * and costs a real user nothing.
+ */
+const ACCOUNT = config.isTest ? 'field-encryption-key.test' : 'field-encryption-key';
 const KEY_BYTES = 32;
 
 let cached: Buffer | null = null;
@@ -28,16 +42,88 @@ interface Entry {
   deletePassword?(): boolean;
 }
 
-function openEntry(): Entry | null {
+/**
+ * The credential store, or the reason there isn't one.
+ *
+ * `absent` is the supported, boring case — a platform with no credential store to talk to.
+ * Everything else is a fault on our side and is logged loudly, because the two used to be
+ * the same silent `null` and that is how the bug below went unnoticed for so long.
+ */
+interface KeyStore {
+  entry: Entry | null;
+  absent: boolean;
+}
+
+const requireFromHere = createRequire(import.meta.url);
+
+/**
+ * Is the credential store genuinely not there, or did we fail to reach one that is?
+ *
+ * A ReferenceError, a TypeError or a SyntaxError is never the platform's fault — it is this
+ * file's — so those always count as a failure worth shouting about. Only a missing module,
+ * a native binding that will not load, or a message naming the platform's own secret service
+ * counts as "this machine has no credential store", and anything unrecognised is treated as
+ * our fault rather than the machine's, because being noisy about a working store is
+ * recoverable and being quiet about a broken one is what put every user on a keyfile.
+ */
+function isStoreAbsent(err: unknown): boolean {
+  if (err instanceof ReferenceError || err instanceof SyntaxError || err instanceof TypeError) {
+    return false;
+  }
+  const code = (err as { code?: unknown }).code;
+  if (
+    code === 'MODULE_NOT_FOUND' ||
+    code === 'ERR_MODULE_NOT_FOUND' ||
+    code === 'ERR_DLOPEN_FAILED'
+  ) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /native binding|libsecret|secret service|dbus|no such (file|interface)/i.test(message);
+}
+
+/**
+ * Opens the OS credential store, or explains why it could not.
+ *
+ * The load used to be a bare `require`, which does not exist in an ES module — and both
+ * workspaces are `"type": "module"`, and the server runs under tsx. So this threw
+ * `ReferenceError: require is not defined` on every single real start, the bare `catch`
+ * turned that into "no credential store on this platform", and the master key went to the
+ * plaintext keyfile that the docs describe as the fallback for headless Linux and CI. Every
+ * user was on the fallback, on machines whose credential store worked perfectly, while the
+ * header of this file told them their key was in the OS store. The suite never caught it
+ * because Vitest gives modules a working `require` and the shipped runtime does not: any
+ * check that a module loads has to run the way the app runs.
+ */
+function openKeyStore(): KeyStore {
+  let Ctor: new (service: string, account: string) => Entry;
   try {
-    // Optional dependency: absent or unusable on some platforms.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { Entry: KeyringEntry } = require('@napi-rs/keyring') as {
+    ({ Entry: Ctor } = requireFromHere('@napi-rs/keyring') as {
       Entry: new (service: string, account: string) => Entry;
-    };
-    return new KeyringEntry(SERVICE, ACCOUNT);
-  } catch {
-    return null;
+    });
+  } catch (err) {
+    if (isStoreAbsent(err)) {
+      logger.debug({ err }, 'no OS credential store on this platform; using the keyfile fallback');
+      return { entry: null, absent: true };
+    }
+    logger.error(
+      { err },
+      'the OS credential-store binding is installed but could not be loaded. This is a bug in ' +
+        'this app, not a limitation of your machine: the master key is about to go to a ' +
+        'plaintext keyfile that it did not need to go to.',
+    );
+    return { entry: null, absent: false };
+  }
+
+  try {
+    return { entry: new Ctor(SERVICE, ACCOUNT), absent: false };
+  } catch (err) {
+    if (isStoreAbsent(err)) {
+      logger.debug({ err }, 'no OS credential store on this platform; using the keyfile fallback');
+      return { entry: null, absent: true };
+    }
+    logger.error({ err }, 'could not open the OS credential store entry for the master key');
+    return { entry: null, absent: false };
   }
 }
 
@@ -45,13 +131,6 @@ function keyfilePath(): string {
   return config.paths.masterKey;
 }
 
-/**
- * The key an earlier fallback run left on disk, if there is a usable one.
- *
- * Deliberately narrower than readFallbackKey: a keyfile of the wrong length is reported as
- * absent rather than adopted, so a damaged file never gets copied into the credential store
- * and made authoritative.
- */
 /**
  * The keyfile, when the credential store is empty and we are about to adopt it.
  *
@@ -62,18 +141,22 @@ function keyfilePath(): string {
  * two read paths have to agree, or the guard only covers whichever one the machine happens
  * to take.
  *
- * A file that cannot be read at all — permissions, a race with an editor — is still null,
- * because that is genuinely "no key found" rather than "a key we must not replace".
+ * The same rule decides what a read failure means, and it used to stop one step short.
+ * "Missing" is the only condition that is genuinely no key at all; a file that is there and
+ * will not open — locked by an editor, owned by another user, on a volume that just went
+ * away — is a key we must not replace, and swallowing that error handed the caller a null
+ * that read as a first run. Every field already sealed under that file would have been
+ * abandoned for a fresh random key, because the file was busy for a second.
  */
 function existingFallbackKey(): Buffer | null {
   const file = keyfilePath();
-  if (!fs.existsSync(file)) return null;
 
   let raw: string;
   try {
     raw = fs.readFileSync(file, 'utf8').trim();
-  } catch {
-    return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new UnreadableKeyfileError(file, err);
   }
 
   const key = Buffer.from(raw, 'base64');
@@ -81,18 +164,22 @@ function existingFallbackKey(): Buffer | null {
   return key;
 }
 
+/**
+ * The keyfile, minting one only if there is genuinely no key there.
+ *
+ * Reads through `existingFallbackKey` rather than repeating the checks. A truncated or
+ * overwritten keyfile used to be handed back as-is from here. Nothing checked it, so the
+ * first encryptField call died on `RangeError: Invalid key length` from deep inside
+ * node:crypto — an error that names no file, offers no way forward, and appears on every
+ * profile read and every resume upload. The file is almost always recoverable from a backup;
+ * the user just has to be told which file it is. Two copies of that check drift apart, and
+ * only the path a given machine happens to take is protected, so there is one copy.
+ */
 function readFallbackKey(): Buffer {
   const file = keyfilePath();
-  if (fs.existsSync(file)) {
-    const key = Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'base64');
-    // A truncated or overwritten keyfile used to be handed back as-is. Nothing checked it
-    // here, so the first encryptField call died on `RangeError: Invalid key length` from
-    // deep inside node:crypto — an error that names no file, offers no way forward, and
-    // appears on every profile read and every resume upload. The file is almost always
-    // recoverable from a backup; the user just has to be told which file it is.
-    if (key.length !== KEY_BYTES) throw new CorruptKeyfileError(file);
-    return key;
-  }
+  const existing = existingFallbackKey();
+  if (existing) return existing;
+
   const key = randomBytes(KEY_BYTES);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, key.toString('base64'), { encoding: 'utf8', mode: 0o600 });
@@ -140,21 +227,109 @@ export class CorruptKeyfileError extends Error {
   }
 }
 
+/**
+ * The keyfile is there and will not open.
+ *
+ * Same family, same refusal. A file that exists and cannot be read is not an absent key, and
+ * treating it as one — which is what swallowing the read error amounted to — mints a
+ * replacement over the top of a key that was only ever locked for a moment.
+ */
+export class UnreadableKeyfileError extends Error {
+  constructor(file: string, cause: unknown) {
+    super(
+      `The master key file at ${file} exists but could not be read: ` +
+        `${cause instanceof Error ? cause.message : String(cause)}. This tool will not ` +
+        'generate a replacement, because doing so would make everything already stored ' +
+        'unreadable. Close anything holding that file open and try again.',
+      { cause },
+    );
+    this.name = 'UnreadableKeyfileError';
+  }
+}
+
+/**
+ * Every error in this file that means "there is a key here and we must not overwrite it".
+ *
+ * Listed once, because the catch in `getMasterKey` re-throws these rather than treating them
+ * as an unavailable credential store, and a list that names only the error someone happened
+ * to be looking at leaves its siblings falling through to the fallback path — which is
+ * exactly the path that mints a new key.
+ */
+const KEY_MUST_NOT_BE_REPLACED = [
+  CorruptMasterKeyError,
+  CorruptKeyfileError,
+  UnreadableKeyfileError,
+];
+
+function mustNotBeReplaced(err: unknown): boolean {
+  return KEY_MUST_NOT_BE_REPLACED.some((E) => err instanceof E);
+}
+
+/**
+ * The key is on disk in plaintext, and the user is told so every single start.
+ *
+ * Not downgraded to a one-time notice: the whole point of the credential store is that this
+ * does not happen, and a warning that scrolls past once is how a fallback becomes permanent.
+ *
+ * `why` is a parameter rather than a fixed sentence because there is more than one way to
+ * end up here, and the warning stated the commonest one as fact. Told "the OS credential
+ * store was unavailable" by a machine whose credential store answers fine, a user goes
+ * looking for a fault that is not there.
+ */
+function warnKeyfileInUse(why: string): void {
+  logger.warn(
+    { file: keyfilePath() },
+    `USING A KEYFILE FOR FIELD ENCRYPTION. ${why}, so the master key sits on disk under ` +
+      'data/ with owner-only permissions. Anyone who can read that directory can decrypt ' +
+      'your profile.',
+  );
+}
+
 export function getMasterKey(): Buffer {
   if (cached) return cached;
 
-  const entry = openEntry();
-  if (entry) {
+  const store = openKeyStore();
+  if (store.entry) {
+    const entry = store.entry;
     try {
       const existing = entry.getPassword();
       if (existing) {
         const key = Buffer.from(existing, 'base64');
-        if (key.length === KEY_BYTES) {
-          cached = key;
+        if (key.length !== KEY_BYTES) {
+          logger.error('master key in the OS keychain has the wrong length; refusing to use it');
+          throw new CorruptMasterKeyError();
+        }
+
+        /**
+         * Two different keys, and only one of them can be the one the data is sealed under.
+         *
+         * A keyfile is only ever written by a run that had to fall back, and a run that fell
+         * back encrypted everything it wrote under that file. So when both exist and differ,
+         * the file is the key something on this machine is definitely sealed under, and the
+         * credential-store entry may be sealing nothing at all — it is what a run under a
+         * different data directory leaves behind. Preferring the store entry here would have
+         * turned every name, email, phone number, date of birth, address and resume already
+         * on disk into an authentication failure with no explanation attached.
+         *
+         * Neither copy is touched. Whichever one turns out to be wanted is still there, and
+         * the message says where both live so the choice stays the user's.
+         */
+        const onDisk = existingFallbackKey();
+        if (onDisk && !onDisk.equals(key)) {
+          logger.error(
+            { file: keyfilePath() },
+            'the OS credential store and the master key file hold DIFFERENT keys. Using the ' +
+              'file, because anything written while the credential store was unavailable is ' +
+              'sealed under it. Neither key has been changed. If your data was written under ' +
+              'the credential-store key instead, move the key file aside and restart.',
+          );
+          warnKeyfileInUse('The OS credential store holds a different key from the key file');
+          cached = onDisk;
           return cached;
         }
-        logger.error('master key in the OS keychain has the wrong length; refusing to use it');
-        throw new CorruptMasterKeyError();
+
+        cached = key;
+        return cached;
       }
       /**
        * An empty credential store is not necessarily a first run.
@@ -190,20 +365,24 @@ export function getMasterKey(): Buffer {
        * only honest option: the old key may still be recoverable, and a mixed-key
        * database is not.
        */
-      if (err instanceof CorruptMasterKeyError) throw err;
+      if (mustNotBeReplaced(err)) throw err;
       logger.warn({ err }, 'OS credential store unavailable; falling back to a keyfile');
     }
   }
 
-  logger.warn(
-    { file: keyfilePath() },
-    'USING A KEYFILE FOR FIELD ENCRYPTION. The OS credential store was unavailable, so the ' +
-      'master key sits on disk under data/ with owner-only permissions. Anyone who can read ' +
-      'that directory can decrypt your profile.',
-  );
+  warnKeyfileInUse('The OS credential store was unavailable');
   cached = readFallbackKey();
   return cached;
 }
+
+/**
+ * What became of the credential-store copy of the key.
+ *
+ * `absent` covers both "this platform has no credential store" and "there was no entry to
+ * remove", which are the same thing from the user's side: nothing of theirs is left in it.
+ * Only `unreachable` and `failed` are worth telling anyone about.
+ */
+export type KeychainDeletion = 'deleted' | 'absent' | 'unreachable' | 'failed';
 
 /**
  * Destroys the master key everywhere it lives.
@@ -214,15 +393,26 @@ export function getMasterKey(): Buffer {
  * next install.
  *
  * Best effort by design: a keychain that refuses is reported, not thrown, because the rest
- * of the deletion still needs to finish.
+ * of the deletion still needs to finish. Reported precisely, though — a plain false meant
+ * that "nothing was there" and "we could not look" read identically, and every single
+ * deletion ended by telling the user to go and remove a keychain entry by hand that in most
+ * cases had never existed.
  */
-export function deleteMasterKey(): { keychain: boolean; keyfile: boolean } {
-  let keychain = false;
-  try {
-    const entry = openEntry();
-    if (entry?.deletePassword) keychain = entry.deletePassword();
-  } catch {
-    keychain = false;
+export function deleteMasterKey(): { keychain: KeychainDeletion; keyfile: boolean } {
+  let keychain: KeychainDeletion;
+  const store = openKeyStore();
+  if (!store.entry) {
+    keychain = store.absent ? 'absent' : 'unreachable';
+  } else if (!store.entry.deletePassword) {
+    keychain = 'failed';
+  } else {
+    try {
+      // `false` from the binding means there was no entry under this account to begin with.
+      keychain = store.entry.deletePassword() ? 'deleted' : 'absent';
+    } catch (err) {
+      logger.warn({ err }, 'could not remove the master key from the OS credential store');
+      keychain = 'failed';
+    }
   }
 
   let keyfile = false;
