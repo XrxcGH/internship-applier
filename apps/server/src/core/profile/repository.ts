@@ -17,7 +17,14 @@ import { logger } from '../../infra/logger';
  * Exported so a test can assert the stored row really is encrypted, rather than
  * trusting that `encryptRow` below stayed in sync with this list.
  */
-export const ENCRYPTED_COLUMNS = ['fullName', 'email', 'phone', 'dateOfBirth', 'address'] as const;
+export const ENCRYPTED_COLUMNS = [
+  'fullName',
+  'pronouns',
+  'email',
+  'phone',
+  'dateOfBirth',
+  'address',
+] as const;
 
 type Row = typeof schema.profile.$inferSelect;
 
@@ -28,6 +35,7 @@ function encryptRow(p: CandidateProfile): typeof schema.profile.$inferInsert {
   return {
     id: p.id,
     fullName: enc(p.fullName) ?? '',
+    pronouns: enc(p.pronouns),
     email: enc(p.email) ?? '',
     phone: enc(p.phone),
     dateOfBirth: enc(p.dateOfBirth),
@@ -61,6 +69,7 @@ function decryptRow(row: Row): CandidateProfile {
   return CandidateProfile.parse({
     id: row.id,
     fullName: dec(row.fullName) ?? '',
+    pronouns: dec(row.pronouns),
     email: dec(row.email) ?? '',
     phone: dec(row.phone) ?? undefined,
     dateOfBirth: dec(row.dateOfBirth),

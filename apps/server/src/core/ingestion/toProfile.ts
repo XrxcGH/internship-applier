@@ -210,6 +210,7 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
   const draft: CandidateProfile = {
     id: ulid(),
     fullName: x.fullName ?? '',
+    pronouns: x.pronouns ?? null,
     email,
     phone: x.phone ?? undefined,
     dateOfBirth: null,
@@ -233,7 +234,7 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
       endDate: asYearMonth(e.endDate),
       gpa:
         e.gpaValue !== null && e.gpaScale !== null
-          ? { value: e.gpaValue, scale: e.gpaScale }
+          ? { value: e.gpaValue, scale: e.gpaScale, weighted: e.gpaWeighted ?? undefined }
           : undefined,
       coursework: e.coursework,
       honors: e.honors,
@@ -262,6 +263,7 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
     certifications: x.certifications.map((c) => ({
       name: c.name,
       issuer: c.issuer ?? undefined,
+      date: asYearMonth(c.date),
     })),
     languages: x.languages,
     availability: { flexible: true },

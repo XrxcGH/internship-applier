@@ -20,6 +20,7 @@ let app: FastifyInstance;
 const PROFILE: CandidateProfile = {
   id: 'prof_review',
   fullName: 'Rosa Alvarez',
+  pronouns: null,
   email: 'rosa@example.edu',
   dateOfBirth: '2006-03-15',
   address: { country: 'US' },

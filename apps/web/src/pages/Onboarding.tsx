@@ -160,6 +160,12 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 onChange={(e) => patch((p) => ({ ...p, fullName: e.target.value }), 'fullName')}
               />
               <TextField
+                label="Pronouns"
+                hint="Kept for your own reference. Never typed into a form — a pronoun question on an application is yours to answer."
+                value={profile.pronouns ?? ''}
+                onChange={(e) => patch((p) => ({ ...p, pronouns: e.target.value || null }))}
+              />
+              <TextField
                 label="Email"
                 type="email"
                 value={profile.email}

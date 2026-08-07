@@ -185,6 +185,7 @@ describe('turning an extraction into a profile the schema accepts', () => {
   function extraction(over: Partial<ResumeExtraction> = {}): ResumeExtraction {
     return {
       fullName: 'Rosa Dean',
+      pronouns: null,
       email: 'rosa@example.edu',
       phone: '555-0100',
       location: 'Boston, MA',

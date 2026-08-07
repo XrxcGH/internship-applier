@@ -39,6 +39,7 @@ let resumePath: string;
 const PROFILE = {
   id: 'p1',
   fullName: 'Rosa Alvarez',
+  pronouns: null,
   email: 'rosa@example.edu',
   phone: '+1 555 0100',
   dateOfBirth: '2006-03-15',

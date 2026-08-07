@@ -15,6 +15,13 @@
       "when": 1785960633133,
       "tag": "0001_military_chameleon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786139566356,
+      "tag": "0002_fat_zemo",
+      "breakpoints": true
     }
   ]
 }

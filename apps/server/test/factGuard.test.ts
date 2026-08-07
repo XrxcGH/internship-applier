@@ -37,6 +37,7 @@ function fixture(): ConfirmedProfile {
   return {
     id: 'p1',
     fullName: 'Rosa Alvarez',
+    pronouns: null,
     email: 'rosa@example.edu',
     dateOfBirth: '2006-03-15',
     address: { country: 'US' },

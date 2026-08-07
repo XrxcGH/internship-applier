@@ -1,0 +1,1 @@
+ALTER TABLE `profile` ADD `pronouns` text;

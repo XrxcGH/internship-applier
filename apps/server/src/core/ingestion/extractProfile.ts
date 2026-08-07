@@ -22,6 +22,13 @@ import { logger } from '../../infra/logger';
  */
 export const ResumeExtraction = z.object({
   fullName: z.string().nullable(),
+  /**
+   * Stated pronouns, when the document carries them — resumes increasingly do, in the
+   * header beside the phone number. A dedicated field so they land somewhere deliberate:
+   * without one, a schema that requires every field forced them into whatever string was
+   * nearest, and "he/they" ended up appended to the name.
+   */
+  pronouns: z.string().nullable(),
   email: z.string().nullable(),
   phone: z.string().nullable(),
   location: z.string().nullable(),
@@ -39,6 +46,8 @@ export const ResumeExtraction = z.object({
       endDate: z.string().nullable(),
       gpaValue: z.number().nullable(),
       gpaScale: z.number().nullable(),
+      /** The weighted figure when the document states both. Unweighted goes in gpaValue. */
+      gpaWeighted: z.number().nullable(),
       coursework: z.array(z.string()),
       honors: z.array(z.string()),
     }),
@@ -69,7 +78,14 @@ export const ResumeExtraction = z.object({
       category: z.enum(['language', 'framework', 'tool', 'domain', 'soft']),
     }),
   ),
-  certifications: z.array(z.object({ name: z.string(), issuer: z.string().nullable() })),
+  certifications: z.array(
+    z.object({
+      name: z.string(),
+      issuer: z.string().nullable(),
+      /** When earned, YYYY-MM, or null. The shared schema kept a date field this never fed. */
+      date: z.string().nullable(),
+    }),
+  ),
   languages: z.array(z.object({ name: z.string(), proficiency: z.string() })),
   /**
    * Dotted paths the extractor was unsure about. These drive the amber highlights in
@@ -85,6 +101,9 @@ const SYSTEM = `You extract structured data from a resume or CV. You are one ste
 Rules:
 - Report only what the document actually says. Do not infer, embellish, or normalize job titles, skills, or dates.
 - Copy experience and project bullet points VERBATIM. They are used later as the evidence corpus for verifying generated application text, so paraphrasing them corrupts that check.
+- Pronouns stated in the document (a header line like "he/they") go in the pronouns field, never in the name.
+- A weighted and an unweighted GPA are two facts: the unweighted figure goes in gpaValue, the weighted one in gpaWeighted, and the scale in gpaScale. Do not average, pick, or drop either.
+- Awards and honors go VERBATIM into the honors array of the education entry they belong to (their dates usually say which). Leadership positions, club memberships and activities are experience entries — type "club" or "volunteer" — with the position as the title and the organization as stated. None of this may be silently dropped: for a student early in their path, these sections are most of the resume.
 - Dates are YYYY-MM. If only a year is given, use YYYY-01 and add the field's path to needsReview. If a date is absent, use null.
 - An ongoing role has endDate null.
 - If a value is not present in the document, use null or an empty array. Never invent a plausible value.

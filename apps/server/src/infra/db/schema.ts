@@ -15,6 +15,7 @@ const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 export const profile = sqliteTable('profile', {
   id: text('id').primaryKey(),
   fullName: text('full_name').notNull(), // ENCRYPTED
+  pronouns: text('pronouns'), // ENCRYPTED — shown at G1, never typed into a form
   email: text('email').notNull(), // ENCRYPTED
   phone: text('phone'), // ENCRYPTED
   dateOfBirth: text('date_of_birth'), // ENCRYPTED — user-entered only, never extracted

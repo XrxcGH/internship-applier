@@ -57,6 +57,11 @@ const ROLE_TAXONOMY: Record<string, string[]> = {
   'product management': ['product', 'roadmap', 'pm', 'stakeholder'],
   design: ['design', 'ux', 'ui', 'figma', 'prototyp'],
   'hardware engineering': ['hardware', 'circuit', 'pcb', 'embedded', 'fpga', 'verilog'],
+  // FIRST alone is four seasons of a student's life, and the word "robotics" appeared
+  // nowhere in this table — so the resumes most likely to say it (team captains, mentors,
+  // competition volunteers) inferred no family from it and none of their searches asked
+  // for robotics internships, which is the one query they would have typed themselves.
+  robotics: ['robotics', 'robot', 'mechatronics', 'ros', 'first robotics'],
   'mechanical engineering': ['mechanical', 'cad', 'solidworks', 'thermodynamic'],
   'electrical engineering': ['electrical', 'signal', 'power systems'],
   'civil engineering': ['civil', 'structural', 'geotechnical'],
@@ -90,11 +95,20 @@ function termAppears(corpus: string, term: string): boolean {
 }
 
 export function inferRoleFamilies(profile: ConfirmedProfile): string[] {
+  // Organisations and honors are evidence of a role family, not just titles and bullets.
+  // A student whose whole robotics history is "Team Captain, Sample Robotics" and a FIRST
+  // award has the family stated twice on their resume — in the org name and in the honor —
+  // and this corpus read neither, so the one search they would have typed themselves never
+  // entered the plan.
   const corpus = [
     ...profile.skills.map((s) => s.name),
-    ...profile.experience.map((e) => `${e.title} ${e.bullets.join(' ')}`),
+    ...profile.experience.map((e) => `${e.title} ${e.organization} ${e.bullets.join(' ')}`),
     ...profile.projects.map((p) => `${p.name} ${p.description}`),
-    ...profile.education.flatMap((e) => [e.fieldOfStudy ?? '', ...(e.coursework ?? [])]),
+    ...profile.education.flatMap((e) => [
+      e.fieldOfStudy ?? '',
+      ...(e.coursework ?? []),
+      ...(e.honors ?? []),
+    ]),
   ]
     .join(' ')
     .toLowerCase();

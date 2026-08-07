@@ -28,7 +28,17 @@ export const EducationEntry = z.object({
   startDate: YearMonth.optional(),
   /** May be in the future — an expected graduation date. */
   endDate: YearMonth.optional(),
-  gpa: z.object({ value: z.number(), scale: z.number() }).optional(),
+  /**
+   * `value` is the unweighted figure and `weighted` the weighted one, when the document
+   * states both. They are two different facts: a high-school transcript saying
+   * "4.321 weighted, 3.968 unweighted (4.000 scale)" is one line describing two numbers,
+   * and holding only one of them meant the other blocked its own owner at G3 — a true
+   * "4.32 weighted GPA" sentence had nothing on the profile to match and came back red.
+   * A weighted value may legitimately exceed the scale; nothing here may reject that.
+   */
+  gpa: z
+    .object({ value: z.number(), scale: z.number(), weighted: z.number().optional() })
+    .optional(),
   coursework: z.array(z.string()).optional(),
   honors: z.array(z.string()).optional(),
 });
@@ -149,6 +159,16 @@ export const DerivedProfile = z.object({
 export const CandidateProfile = z.object({
   id: z.string(),
   fullName: z.string(),
+  /**
+   * Stated pronouns, kept for the user's own reference and NOTHING else.
+   *
+   * Resumes carry these in the header now, and a schema with no place for them either
+   * loses them or lets them contaminate the name. They are stored encrypted like the other
+   * identity fields, shown at G1, and never typed into a form: a pronoun question on an
+   * application is self-identification, the redline list already leaves it to the user,
+   * and no fill path reads this field.
+   */
+  pronouns: z.string().nullable().default(null),
   /**
    * Empty is a legal state, and a deliberate one.
    *

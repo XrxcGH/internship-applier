@@ -35,6 +35,7 @@ One row. The confirmed identity and eligibility facts everything else keys off.
 | --- | --- | --- |
 | `id` | text pk | |
 | `full_name` 🔒 | text | |
+| `pronouns` 🔒 | text | Stated on the resume or entered at G1. Shown for the user's reference; **never typed into a form** — a pronoun question is self-identification and the redline list leaves it to the user. Nullable. |
 | `email` 🔒 | text | |
 | `phone` 🔒 | text | |
 | `date_of_birth` 🔒 | text | **User-entered only.** Never extracted from a resume. Nullable. |
@@ -81,7 +82,7 @@ type EducationEntry = {
   fieldOfStudy?: string;
   startDate?: string;         // YYYY-MM
   endDate?: string;           // YYYY-MM, may be future (expected)
-  gpa?: { value: number; scale: number };
+  gpa?: { value: number; scale: number; weighted?: number };  // weighted may exceed scale
   coursework?: string[];
   honors?: string[];
 };

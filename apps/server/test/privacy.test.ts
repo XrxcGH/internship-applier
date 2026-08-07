@@ -25,6 +25,7 @@ let app: FastifyInstance;
 const PROFILE = {
   id: 'prof_priv',
   fullName: 'Rosa Alvarez',
+  pronouns: null,
   email: 'rosa@example.edu',
   phone: '+1 555 0100',
   dateOfBirth: '2006-03-15',

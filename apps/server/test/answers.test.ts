@@ -28,6 +28,7 @@ let applicationId: string;
 const PROFILE: CandidateProfile = {
   id: 'prof_g3',
   fullName: 'Rosa Alvarez',
+  pronouns: null,
   email: 'rosa@example.edu',
   dateOfBirth: '2006-03-15',
   address: { country: 'US' },

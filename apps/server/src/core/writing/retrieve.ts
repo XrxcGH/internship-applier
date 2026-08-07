@@ -26,7 +26,7 @@ export interface Evidence {
     institution?: string;
     startDate?: string;
     endDate?: string;
-    gpa?: { value: number; scale: number };
+    gpa?: { value: number; scale: number; weighted?: number };
     skills?: string[];
   };
   score: number;
@@ -166,6 +166,12 @@ export function retrieveEvidence(
 
   profile.education.forEach((e, i) => {
     const course = (e.coursework ?? []).join(', ');
+    // Honors are evidence, and for a student early in their path they are most of it. A
+    // resume whose experience section is titles without bullets carries its substance in
+    // the awards — and while these were left out of the text, every true sentence about
+    // one ("I was a Dean's List semifinalist") was blocked at G3 as an invented name,
+    // because the only place the award existed was a field nothing quoted.
+    const honors = (e.honors ?? []).join(', ');
     items.push({
       ref: `education.${i}`,
       kind: 'education',
@@ -173,14 +179,18 @@ export function retrieveEvidence(
         `${e.level} in ${e.fieldOfStudy ?? 'an unspecified field'} at ${e.institution}` +
         `${e.endDate ? `, ending ${e.endDate}` : ''}` +
         `${e.gpa ? `, GPA ${e.gpa.value}/${e.gpa.scale}` : ''}` +
-        `${course ? `. Coursework: ${course}` : ''}`,
+        `${e.gpa?.weighted ? ` (${e.gpa.weighted} weighted)` : ''}` +
+        `${course ? `. Coursework: ${course}` : ''}` +
+        `${honors ? `. Honors: ${honors}` : ''}`,
       facts: {
         institution: e.institution,
         startDate: e.startDate,
         endDate: e.endDate,
         gpa: e.gpa,
       },
-      score: overlap(query, tokens(`${e.fieldOfStudy ?? ''} ${e.institution} ${course}`)) + 0.25,
+      score:
+        overlap(query, tokens(`${e.fieldOfStudy ?? ''} ${e.institution} ${course} ${honors}`)) +
+        0.25,
     });
   });
 

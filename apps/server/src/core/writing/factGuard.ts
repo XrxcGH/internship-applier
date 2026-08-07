@@ -92,13 +92,23 @@ export function splitClaims(text: string): Claim[] {
 
 /** Lowercase, strip corporate and academic suffixes, collapse to comparable words. */
 export function normalize(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[‘’]/g, "'")
-    .replace(/\b(inc|llc|ltd|corp|corporation|co|university|college|school)\b\.?/g, ' ')
-    .replace(/[^a-z0-9+#.]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    s
+      .toLowerCase()
+      .replace(/[‘’]/g, "'")
+      .replace(/\b(inc|llc|ltd|corp|corporation|co|university|college|school)\b\.?/g, ' ')
+      // A possessive before the punctuation strip, or after it. The claim side strips
+      // "Dean's" down to "dean" when it extracts proper nouns, while this side turned the
+      // same word into "dean s" — and that orphaned letter meant "Dean's List" from a
+      // draft could never be found inside "Dean's List Semi-Finalist" from the profile,
+      // so a true sentence about the user's own award was blocked as an invented name.
+      // Both sides now shed the possessive the same way.
+      .replace(/'s\b/g, '')
+      .replace(/[^a-z0-9+#.]+/g, ' ')
+      .replace(/\b[s]\b/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 /**
@@ -305,8 +315,11 @@ export function extractGpas(text: string): number[] {
       break;
     }
   }
-  // "3.9 GPA", "3.9 cumulative GPA" — the number can lead.
-  for (const m of masked.matchAll(/\b(\d\.\d{1,2})\s+(?:\w+\s+){0,2}gpa\b/gi))
+  // "3.9 GPA", "3.9 cumulative GPA", "3.968 weighted GPA" — the number can lead. Three
+  // decimals, because transcripts print three: while this read two, "I have a 3.968 GPA"
+  // extracted nothing at all, so the guard neither confirmed the true figure nor caught an
+  // invented one — the number most worth checking was the one shape it could not see.
+  for (const m of masked.matchAll(/\b(\d\.\d{1,3})\s+(?:\w+\s+){0,2}gpa\b/gi))
     out.push(Number(m[1]));
   // "3.45/4.0", "3.45 out of 4" — the numerator only, read from the unmasked text.
   for (const m of text.matchAll(GPA_SCALE_TAIL)) out.push(Number(m[1]));
@@ -601,7 +614,20 @@ export function checkClaimDeterministically(
     // Every extracted number has to match a GPA the profile holds. The scale gets no
     // exemption here — "a perfect 4.0" against a 3.62 profile is a fabrication like any
     // other. It is `extractGpas` that keeps a denominator from ever arriving as a claim.
-    const wrong = gpas.find((g) => !known.some((k) => Math.abs(k.value - g) < 0.005));
+    //
+    // The weighted figure counts as one the profile holds. A transcript line reading
+    // "4.321 weighted, 3.968 unweighted" is two true numbers about one student, and while
+    // only the unweighted one was consulted, writing the weighted one blocked approval at
+    // G3 with a message insisting the profile said otherwise — about the higher number,
+    // the one an applicant most wants to state.
+    const wrong = gpas.find(
+      (g) =>
+        !known.some(
+          (k) =>
+            Math.abs(k.value - g) < 0.005 ||
+            (k.weighted !== undefined && Math.abs(k.weighted - g) < 0.005),
+        ),
+    );
     if (wrong !== undefined) {
       const k = known[0]!;
       return {
