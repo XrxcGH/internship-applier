@@ -422,6 +422,69 @@ describe('answer library', () => {
     );
   });
 
+  /**
+   * The two shapes of company name the whole-string check could not see.
+   *
+   * Companies are stored exactly as the posting writes them — "IBM Corp.", "Box, Inc." —
+   * while the sentence a person types says "IBM" or "Box". Looking for the stored string as
+   * one run therefore hunted for "ibm corp", which appears in nobody's prose, and the answer
+   * was handed to the next employer. Whether reuse was refused turned on whether the posting
+   * happened to carry a full stop, which is not a distinction anyone could have predicted
+   * from the outside.
+   *
+   * The short name is the second half of it. A three-letter word is normally too common to
+   * treat as a company mention, but IBM, SAP, AWS and GE are the whole distinctive name
+   * rather than a fragment of one, so an all-caps run is exempt from that floor. "Box" is
+   * the case in the other direction: short, ordinary, and still the company's entire name.
+   *
+   * The cases are picked so each half of the check is the one deciding somewhere. "Box,
+   * Inc." is caught only by dropping the legal suffix and looking for the whole remaining
+   * run; "IBM Watson Health" is caught only by the per-word pass, where the three-letter
+   * exemption is what keeps "IBM" in the running.
+   */
+  it.each([['IBM'], ['IBM Corp.'], ['IBM Corporation'], ['IBM Watson Health']])(
+    'refuses to reuse an answer naming IBM when it was written for %s',
+    (stored) => {
+      saveApproved(
+        'Tell us about a project you are proud of.',
+        'IBM is where mainframes still matter, and that is exactly the kind of unfashionable ' +
+          'problem I want.',
+        stored,
+      );
+      expect(findReusable('Tell us about a project you are proud of.', 'Northwind')).toBeNull();
+      // And it is still offered back to the company it was written for.
+      expect(findReusable('Tell us about a project you are proud of.', stored)?.text).toContain(
+        'IBM',
+      );
+    },
+  );
+
+  it.each([['Box'], ['Box, Inc.']])(
+    'refuses to reuse an answer naming Box when it was written for %s',
+    (stored) => {
+      saveApproved(
+        'Tell us about a project you are proud of.',
+        'The Box integration is the piece of that project I am proudest of.',
+        stored,
+      );
+      expect(findReusable('Tell us about a project you are proud of.', 'Northwind')).toBeNull();
+    },
+  );
+
+  it('does not treat a longer name that merely starts the same as a mention', () => {
+    // The check matches whole word runs, not substrings. "Boxer Holdings" shares its opening
+    // with "Box" and appears nowhere in this text, so refusing here would cost the user a
+    // reuse for nothing — and a check that refused everything would stop being consulted.
+    saveApproved(
+      'Tell us about a project you are proud of.',
+      'The Box integration is the piece of that project I am proudest of.',
+      'Boxer Holdings',
+    );
+    expect(findReusable('Tell us about a project you are proud of.', 'Northwind')?.text).toContain(
+      'Box integration',
+    );
+  });
+
   it('pre-fills from the library but does not approve', async () => {
     // The stored text deliberately does not name Kestrel, the company it was written for.
     // Reuse across companies is refused for text that names its own company (see the test

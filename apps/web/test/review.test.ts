@@ -59,6 +59,16 @@ describe('isDismissible', () => {
     expect(isDismissible('phone')).toBe(false);
   });
 
+  it('decides on presence in the map, not on whether the hint reads as truthy', () => {
+    // The wizard used to make this same call inline, as `ANSWERED_IN_WIZARD[path] ? …`.
+    // Every path with an entry has a control on the wizard and must come back
+    // non-dismissible whatever its hint says — including a hint written as an empty
+    // string, which is falsy but still means there is somewhere to answer the flag.
+    for (const path of Object.keys(ANSWERED_IN_WIZARD)) {
+      expect(isDismissible(path)).toBe(false);
+    }
+  });
+
   it('still lets a flag with no control anywhere be cleared, so G1 cannot lock shut', () => {
     // The extractor flags these and the wizard has no input for either, so without the
     // button there is no way past the gate at all.

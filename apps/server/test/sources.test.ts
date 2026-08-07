@@ -9,7 +9,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { adzuna, usajobs } from '../src/core/discovery/sources/aggregators';
-import { parseLocation } from '../src/core/discovery/sources/ats';
+import { greenhouse, parseLocation } from '../src/core/discovery/sources/ats';
 import { decodeEntities, stripHtml } from '../src/core/discovery/sources/types';
 
 describe('parseLocation', () => {
@@ -108,16 +108,59 @@ describe('what an unconfigured keyed source tells the user', () => {
 
 describe('reading a description out of a feed', () => {
   /**
-   * Greenhouse returns its content HTML-escaped. Stripping tags first finds none to strip,
-   * and the decode step then reintroduces the markup as visible text — which is what every
-   * requirement parser and the model would go on to read.
+   * What the two helpers do when they are composed in this order. It is a test of
+   * `decodeEntities` and `stripHtml`, not of any adapter: the order is written here in the
+   * test body, so nothing in `ats.ts` can break it and nothing here would notice if it did.
+   * The adapter's own ordering is pinned below.
    */
-  it('decodes before stripping, so no markup survives into the text', () => {
+  it('an escaped document decoded first has no markup left after stripping', () => {
     const escaped =
       '&lt;p&gt;About the role&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;/ul&gt;';
     const text = stripHtml(decodeEntities(escaped));
     expect(text).not.toMatch(/<[a-z/]/i);
     expect(text).toMatch(/About the role/);
     expect(text).toMatch(/Python/);
+  });
+
+  /**
+   * The Greenhouse adapter, driven end to end, because it is the adapter that gets this
+   * wrong and the two helper tests could not see it.
+   *
+   * Greenhouse returns `content` HTML-escaped. Stripping the tags first finds none to strip
+   * and `stripHtml`'s own decode step then puts the markup back as literal text — so every
+   * requirement parser and the model read "<p>" and "<li>" as part of the job description,
+   * and the queue rendered them on screen. Swapping the two calls in `ats.ts` restores that
+   * bug with both composition tests above still green.
+   */
+  it('leaves no markup in the text a Greenhouse posting is stored with', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            jobs: [
+              {
+                id: 1,
+                title: 'Software Engineer Intern',
+                absolute_url: 'https://boards.greenhouse.io/ordering/jobs/1',
+                content:
+                  '&lt;p&gt;About the role&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;/ul&gt;',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )) as typeof globalThis.fetch;
+
+    try {
+      // A board token nothing else uses, because the fetcher caches response bodies by URL.
+      const { postings } = await greenhouse.fetch({ board: 'ordering-fixture' });
+      const text = postings[0]?.descriptionText ?? '';
+      expect(text).not.toMatch(/<[a-z/]/i);
+      expect(text).toMatch(/About the role/);
+      expect(text).toMatch(/Python/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

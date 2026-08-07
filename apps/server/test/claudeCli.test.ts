@@ -190,6 +190,44 @@ describe('what the adapter actually runs', () => {
     const argv = invocation().argv;
     expect(JSON.parse(argv[argv.indexOf('--json-schema') + 1]!)).toEqual({ type: 'object' });
   }, 60_000);
+
+  /**
+   * Zod stamps `$schema` on everything it emits, and the CLI's validator has no such
+   * meta-schema registered — it refuses the argument outright with "no schema with key or
+   * ref", before any request is made. Since every schema in this app comes from
+   * `z.toJSONSchema`, that made structured output unusable on the CLI backend entirely:
+   * reading a resume failed on a signed-in subscription for a reason that had nothing to do
+   * with the account.
+   */
+  it('strips the $schema key the CLI refuses to parse', async () => {
+    writeFakeCli('ok');
+    await claudeCliBackend.generate({
+      purpose: 'resume_extraction',
+      system: 's',
+      user: 'u',
+      schema: {
+        name: 'profile',
+        jsonSchema: {
+          $schema: 'https://json-schema.org/draft/2020-12/schema',
+          type: 'object',
+          properties: { name: { type: 'string' } },
+          $defs: {
+            nested: { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'string' },
+          },
+        },
+      },
+    });
+
+    const argv = invocation().argv;
+    const sent = argv[argv.indexOf('--json-schema') + 1]!;
+    expect(sent).not.toContain('$schema');
+    // Everything else survives, nested definitions included.
+    expect(JSON.parse(sent)).toEqual({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      $defs: { nested: { type: 'string' } },
+    });
+  }, 60_000);
 });
 
 describe('failures a person can act on', () => {

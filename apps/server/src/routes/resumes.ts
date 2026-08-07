@@ -7,12 +7,11 @@ import { ulid } from 'ulid';
 import { config } from '../config';
 import { db, schema } from '../infra/db/client';
 import { encryptField } from '../infra/crypto/fieldCrypto';
-import { hasApiKey } from '../infra/llm/client';
 import { describeAccess } from '../infra/llm';
 import { extractText, mimeFromFilename, SUPPORTED_MIME } from '../core/ingestion/extractText';
 import { extractResume } from '../core/ingestion/extractProfile';
 import { toDraftProfile } from '../core/ingestion/toProfile';
-import { getProfile, saveProfile } from '../core/profile/repository';
+import { getProfileHeader, saveProfile } from '../core/profile/repository';
 import { logger } from '../infra/logger';
 
 const MAX_BYTES = 12 * 1024 * 1024;
@@ -95,34 +94,30 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { id: string } }>('/api/resumes/:id/extract', async (req, reply) => {
     /**
-     * Reading a resume is the one call that does not go through the backend abstraction:
-     * core/ingestion/extractProfile talks to the Anthropic SDK directly, so an API key is
-     * genuinely required here even on a machine where the Claude Code CLI is installed and
-     * drafting works perfectly.
+     * Reading a resume needs SOME model, and no longer a particular one.
      *
-     * The refusal has to say that, because the rest of the app does not. A CLI user sees a
-     * model-access screen reporting "connected" with no limitations, uploads a resume, and
-     * is told to "Add one in Settings" — where there is no key field. With no extraction
-     * there is no profile, with no profile there is no G1 confirmation, and everything
-     * downstream is gated on that, so the whole tool stops with a sentence that cannot be
-     * acted on. Naming the file to edit is the least this can do until extraction moves
-     * onto the same seam as drafting.
+     * This used to demand an Anthropic API key outright, because extraction called the SDK
+     * directly rather than going through the backend seam. Someone with a Claude Code
+     * subscription saw a model-access screen reporting "connected", uploaded a resume, and
+     * was told to add a key in Settings — where no key field exists. No extraction means no
+     * profile, no profile means no G1, and everything downstream is gated on G1, so the tool
+     * stopped dead on its first screen with a sentence that could not be acted on.
+     *
+     * Extraction now runs on the same seam as drafting, so the only question left is whether
+     * any backend is reachable at all — and the answer to that names whichever one the user
+     * has, rather than assuming the answer is an API key.
      */
-    if (!hasApiKey()) {
-      const access = await describeAccess();
-      const cliNote =
-        access.provider === 'claude_cli'
-          ? 'The Claude Code CLI is set up and covers answer drafting, but it cannot read a ' +
-            'resume yet — that call still goes to the Anthropic API. '
-          : '';
+    const access = await describeAccess();
+    if (!access.available) {
       return reply.code(400).send({
         error: {
           code: 'NO_MODEL_ACCESS',
           message:
-            `${cliNote}Reading a resume needs an Anthropic API key. Set ANTHROPIC_API_KEY in ` +
-            'the .env file at the root of this repository and restart the server; Settings ' +
-            'has no field for it yet. Everything else — matching, eligibility, the writing ' +
-            'checks — works without one.',
+            `Reading a resume needs a model, and none is reachable. ${access.description} ` +
+            'Either sign in to the Claude Code CLI by running `claude` once in a terminal, ' +
+            'or set ANTHROPIC_API_KEY in the .env file at the root of this project and ' +
+            'restart the server. Everything else — matching, eligibility, the writing checks ' +
+            '— works without either.',
         },
       });
     }
@@ -143,7 +138,14 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const extraction = await extractResume({ path: filePath, mime: doc.mime, text });
-      const existing = getProfile();
+      // The id and nothing else, read straight off the columns without decrypting.
+      //
+      // Loading the whole profile to get it meant a stored row that no longer parses took
+      // down the one request that would have replaced it: a single unusable field — a
+      // year-only graduation date, a link with no scheme — threw here, came back as a 502,
+      // and made the promise the error itself makes ("Re-uploading your resume will rebuild
+      // the profile") untrue. Nothing on this path needs to read what is already stored.
+      const existing = getProfileHeader();
       const draft = toDraftProfile(extraction);
       // Re-extraction keeps the existing id so history and foreign keys survive.
       const saved = saveProfile(existing ? { ...draft, id: existing.id } : draft);

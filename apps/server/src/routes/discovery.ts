@@ -37,6 +37,76 @@ const RunBody = z.object({
 const ResolveBody = z.object({ name: z.string().min(1) });
 const ManualBody = z.object({ url: z.string().url() });
 
+/**
+ * What `planQueries` actually reads out of a SearchFilters body.
+ *
+ * `positionTypes` whole, and six leaves out of the four blocks it opens at all. Everything
+ * else in the shape — see the header of packages/shared/src/filters.ts — parses, validates
+ * and is then dropped without a word.
+ */
+const READ_WHOLE = ['positionTypes'];
+const PARTLY_READ = ['term', 'location', 'role', 'company'];
+const READ_LEAVES = [
+  'term.seasons',
+  'term.years',
+  'location.cities',
+  'role.roleFamilies',
+  'role.titleIncludes',
+  'company.onlyCompanies',
+];
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((x, i) => sameValue(x, b[i]));
+  }
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  const keys = new Set([...Object.keys(x), ...Object.keys(y)]);
+  return [...keys].every((k) => sameValue(x[k], y[k]));
+}
+
+/**
+ * The filters this caller set that the plan then ignored.
+ *
+ * A body with `compensation.paidOnly` or `eligibility.excludeCitizenshipRequired` set came
+ * back with exactly the plan an empty body would have produced, and nothing said so — the
+ * web app sends no filters, so only an API caller met this, and they met it silently and had
+ * to infer it by reading the planner. Naming them is the least this can do until the filters
+ * are wired up.
+ *
+ * Worked out from the body rather than from a hand-written list, so a block or a leaf added
+ * to SearchFilters later is reported as ignored by default. That is the safe direction: a
+ * filter that is read but listed here reads as an over-warning, a filter that is dropped and
+ * not listed reads as a search that quietly did not do what was asked.
+ */
+function ignoredFilters(filters: SearchFilters): string[] {
+  const given = filters as unknown as Record<string, unknown>;
+  const fallback = DEFAULT_FILTERS as unknown as Record<string, unknown>;
+  const out: string[] = [];
+
+  for (const key of Object.keys(given)) {
+    if (READ_WHOLE.includes(key)) continue;
+
+    if (PARTLY_READ.includes(key)) {
+      const g = (given[key] ?? {}) as Record<string, unknown>;
+      const f = (fallback[key] ?? {}) as Record<string, unknown>;
+      for (const leaf of new Set([...Object.keys(g), ...Object.keys(f)])) {
+        const path = `${key}.${leaf}`;
+        if (READ_LEAVES.includes(path)) continue;
+        if (!sameValue(g[leaf], f[leaf])) out.push(path);
+      }
+      continue;
+    }
+
+    if (!sameValue(given[key], fallback[key])) out.push(key);
+  }
+
+  return out;
+}
+
 export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   /**
    * Gate G1: discovery is meaningless against an unconfirmed profile, since eligibility
@@ -123,7 +193,18 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         reason: 'already resolved from a previous run',
       }));
 
-    return planQueries(profile as ConfirmedProfile, filters, knownBoards);
+    const plan = planQueries(profile as ConfirmedProfile, filters, knownBoards);
+
+    const ignored = ignoredFilters(filters);
+    if (ignored.length > 0) {
+      plan.notes.push(
+        `The query planner does not read these filters, so they made no difference to this ` +
+          `plan: ${ignored.join(', ')}. It is the plan an empty filter body would have ` +
+          'produced for them.',
+      );
+    }
+
+    return plan;
   });
 
   app.get<{ Params: { id: string } }>('/api/discovery/runs/:id', async (req, reply) => {

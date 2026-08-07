@@ -9,9 +9,9 @@
  * says and to flag anything it is unsure of, NOT to infer, normalize, or improve. The
  * user corrects it at gate G1 before anything downstream can read it.
  */
-import { readFile } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { z } from 'zod';
-import { getClient, MODELS, recordCall } from '../../infra/llm/client';
+import { generate } from '../../infra/llm';
 import { logger } from '../../infra/logger';
 
 /**
@@ -102,44 +102,52 @@ export interface ExtractionInput {
   text?: string;
 }
 
+/**
+ * Reads one resume, through whichever model backend is available.
+ *
+ * THIS GOES THROUGH THE PROVIDER SEAM, and that is the whole point. It used to call the
+ * Anthropic SDK directly, so reading a resume demanded an `ANTHROPIC_API_KEY` even when a
+ * signed-in Claude Code CLI was sitting right there — and the Settings screen cheerfully
+ * reported the CLI as connected with no limitations, because nothing had told it that this
+ * one path could not use it. A user with a subscription they already pay for got "No
+ * Anthropic API key configured" on the very first thing the app asks them to do, with
+ * nothing on screen explaining why the connection it had just confirmed did not count.
+ */
 export async function extractResume(input: ExtractionInput): Promise<ResumeExtraction> {
-  const client = getClient();
-  const started = Date.now();
-
   const jsonSchema = z.toJSONSchema(ResumeExtraction, { target: 'draft-2020-12' });
+  const isPdf = input.mime === 'application/pdf';
 
-  const content = input.mime === 'application/pdf' ? await pdfBlock(input.path) : textBlock(input);
+  if (!isPdf && !input.text?.trim()) {
+    throw new Error('No text could be read from this document.');
+  }
+  if (isPdf) await checkPdfSize(input.path);
 
-  const response = await client.messages.create({
-    model: MODELS.extraction,
-    max_tokens: 16000,
-    system: SYSTEM,
-    thinking: { type: 'adaptive' },
-    output_config: {
-      effort: 'high',
-      format: { type: 'json_schema', schema: jsonSchema as Record<string, unknown> },
-    },
-    messages: [{ role: 'user', content }],
-  });
-
-  recordCall({
+  const result = await generate({
     purpose: 'resume_extraction',
-    model: MODELS.extraction,
-    usage: response.usage as never,
-    latencyMs: Date.now() - started,
-    stopReason: response.stop_reason,
+    system: SYSTEM,
+    user: isPdf
+      ? 'Extract the resume in the attached file into the required structure.'
+      : `Extract the resume below into the required structure.\n\n<resume>\n${input.text ?? ''}\n</resume>`,
+    maxTokens: 16000,
+    schema: { name: 'ResumeExtraction', jsonSchema: jsonSchema as Record<string, unknown> },
+    // A PDF is named rather than inlined. The API backend reads the bytes back and sends a
+    // document block; the CLI backend grants Read on just this file's directory and lets
+    // the model open it. Either way the file never leaves the machine except to the model
+    // the user chose.
+    documents: isPdf ? [input.path] : undefined,
   });
 
-  if (response.stop_reason === 'refusal') {
+  if (result.stopReason === 'refusal') {
     throw new Error('The model declined to process this document. Nothing was extracted.');
   }
 
-  const textOut = response.content.find((b) => b.type === 'text');
-  if (!textOut || textOut.type !== 'text') {
-    throw new Error('Extraction returned no text content.');
+  const raw = result.structured ?? safeJson(result.text);
+  if (raw === undefined) {
+    logger.error({ provider: result.provider }, 'resume extraction returned no readable object');
+    throw new Error('The model returned something this app could not read as a resume.');
   }
 
-  const parsed = ResumeExtraction.safeParse(JSON.parse(textOut.text));
+  const parsed = ResumeExtraction.safeParse(raw);
   if (!parsed.success) {
     logger.error({ issues: parsed.error.issues }, 'resume extraction failed schema validation');
     throw new Error('Extraction did not match the expected shape.');
@@ -147,30 +155,30 @@ export async function extractResume(input: ExtractionInput): Promise<ResumeExtra
   return parsed.data;
 }
 
-async function pdfBlock(path: string) {
-  const bytes = await readFile(path);
-  if (bytes.byteLength > MAX_BYTES) {
-    throw new Error(`PDF is ${Math.round(bytes.byteLength / 1e6)}MB; the limit is 12MB.`);
+/**
+ * The object, when a backend hands back prose around it.
+ *
+ * The API path enforces the schema and returns a parsed object, so this never runs there.
+ * The CLI path asks for the same schema but is a conversation underneath, and a model that
+ * has just read a file sometimes says so before answering. Rejecting a correct extraction
+ * over a wrapping fence would be a poor reason to send someone back to an API key.
+ */
+function safeJson(text: string): unknown {
+  const trimmed = text.trim();
+  const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/.exec(trimmed);
+  const body = fenced?.[1] ?? trimmed;
+  const start = body.search(/[{[]/);
+  if (start < 0) return undefined;
+  try {
+    return JSON.parse(body.slice(start));
+  } catch {
+    return undefined;
   }
-  return [
-    {
-      type: 'document' as const,
-      source: {
-        type: 'base64' as const,
-        media_type: 'application/pdf' as const,
-        data: bytes.toString('base64'),
-      },
-    },
-    { type: 'text' as const, text: 'Extract this resume into the required structure.' },
-  ];
 }
 
-function textBlock(input: ExtractionInput) {
-  if (!input.text?.trim()) throw new Error('No text could be read from this document.');
-  return [
-    {
-      type: 'text' as const,
-      text: `Extract the resume below into the required structure.\n\n<resume>\n${input.text}\n</resume>`,
-    },
-  ];
+async function checkPdfSize(path: string): Promise<void> {
+  const { size } = await stat(path);
+  if (size > MAX_BYTES) {
+    throw new Error(`PDF is ${String(Math.round(size / 1e6))}MB; the limit is 12MB.`);
+  }
 }

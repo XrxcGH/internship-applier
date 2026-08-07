@@ -32,7 +32,23 @@ export const AppEvent = z.discriminatedUnion('type', [
     runId: z.string(),
     source: z.string(),
     found: z.number().int(),
-    new: z.number().int(),
+    /**
+     * How many of `found` had not been seen before, or null when that is not knowable yet.
+     *
+     * A run fetches every source first and writes to the database once, at the end, so at the
+     * moment this event fires for a source there is no answer to "how many of these are new?"
+     * — nothing has been compared against the stored postings yet. While the only permitted
+     * value was an integer, the one thing a publisher could put here was 0, and a screen
+     * counting new postings as the run went along would have read zero for the whole run and
+     * then jumped to the real total when `discovery.done` arrived, with nothing to tell that
+     * apart from a search that genuinely turned up nothing it had not seen before.
+     *
+     * The rule, for any count added here later: a number that is not known at the moment the
+     * event fires is nullable. Zero has to keep meaning zero, or every consumer has to guess
+     * which of the two it is looking at. The true per-source totals live on `discovery.done`,
+     * which is where a consumer should read them until a publisher sends a real number here.
+     */
+    new: z.number().int().nullable(),
   }),
   z.object({
     type: z.literal('discovery.source_failed'),

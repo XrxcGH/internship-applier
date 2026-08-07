@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@ia/shared';
 import * as api from '../lib/api';
-import { ANSWERED_IN_WIZARD, isAnswered } from '../lib/review';
+import { ANSWERED_IN_WIZARD, isAnswered, isDismissible } from '../lib/review';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Notice, SelectField, TextField } from '../components/Controls';
 
@@ -340,14 +340,21 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                     this wizard has no input for — anything nested in education or
                     experience — and without a control those flags could never be cleared,
                     which locked G1 shut with no way forward. Anything the wizard CAN
-                    answer gets pointed at its control instead; see ANSWERED_IN_WIZARD. */}
+                    answer gets pointed at its control instead.
+
+                    Which of the two a flag gets is `isDismissible` and nothing else. This
+                    row used to decide it here with `ANSWERED_IN_WIZARD[f] ? …`, so the
+                    rule the tests hold to and the rule that shipped were two separate
+                    expressions that only happened to agree — and they would stop agreeing
+                    the day a hint was written as an empty string, which is falsy here and
+                    still a real entry to `isDismissible`. That day the button appears
+                    beside a field with a control, and one click marks a fact reviewed
+                    while it is still blank. */}
                 <ul className="mt-3 space-y-1.5">
                   {profile.needsReview.slice(0, 12).map((f) => (
                     <li key={f} className="flex flex-wrap items-center justify-between gap-3">
                       <span className="u-data">{f}</span>
-                      {ANSWERED_IN_WIZARD[f] ? (
-                        <span className="text-faint text-[0.9375rem]">{ANSWERED_IN_WIZARD[f]}</span>
-                      ) : (
+                      {isDismissible(f) ? (
                         <Button
                           size="sm"
                           disabled={busy !== null}
@@ -355,6 +362,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                         >
                           I have checked this
                         </Button>
+                      ) : (
+                        <span className="text-faint text-[0.9375rem]">{ANSWERED_IN_WIZARD[f]}</span>
                       )}
                     </li>
                   ))}

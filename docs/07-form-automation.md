@@ -177,26 +177,56 @@ Per field, by control type:
   dropped past 120 characters, because nothing is watching an essay box.
 - **select** — `chooseOption` tries the option's `value` attribute, then the whole label,
   then the options whose opening *words* are the intended answer — and that last pass only
-  counts when exactly one option fits. Anything below that bar is left blank and flagged.
-  There is no similarity score and no threshold; the ordering is the whole mechanism, and
-  it is what stops "US" landing on "Australia" and "No" landing on "Yes, now or in the
-  future".
-- **combobox/autocomplete** — click the control open, then take the first `[role=option]`
-  in document order whose text *contains* the first 24 characters of the intended value,
-  case-insensitively. That is weaker than it sounds: on a country list "US" matches
-  "Australia" long before it reaches "United States". Read-back is the only thing standing
-  behind it — what the control ends up holding is compared against what was intended, so a
-  wrong pick surfaces as a mismatch in the pre-submit review rather than passing as filled.
-  Nothing types a prefix and nothing waits for the listbox to narrow.
-- **radio/checkbox** — a grouped radio is matched against each button's *own* label (exact
-  label, then the option's value, then a label starting with the answer) and that button is
-  checked. A stray checkbox or ungrouped radio is only ever ticked, never unticked, and
-  only for an affirmative value; anything else is left exactly as the page had it. (Never
-  for redlined categories.)
+  counts when exactly one option fits, and only for an answer longer than a single
+  character. An option carrying an empty `value` is the "Select an option" placeholder and
+  is never chosen; picking it would blank a field rather than fill one. Anything below that
+  bar is left blank and flagged. There is no similarity score and no threshold; the ordering
+  is the whole mechanism, and it is what stops "US" landing on "Australia" and "No" landing
+  on "Yes, now or in the future". What the report prints is the label the page now displays,
+  resolved back through the option list, because a `<select>` reads back its option's value
+  attribute — usually a code — and printing the planned answer instead made the one field a
+  reader most needs to check look like the one they can trust.
+
+  **The same function chooses for every option list on the form** — `<select>`, radio groups
+  and div comboboxes alike. Each of the other two kept a matcher of its own after this one
+  was hardened, and each went on making this exact mistake on the sponsorship question. One
+  list, one rule.
+- **combobox/autocomplete** — click the control open, then read *every* `[role=option]` out
+  of the listbox and choose between them in memory, by `chooseOption`. Reading them all
+  first is the point. Asking the page for the first option whose text merely *contains* the
+  intended value — which is what this used to do, on the first 24 characters,
+  case-insensitively — picks "Australia" for "US", "Nevada" for "VA" and "Yes, now or in
+  the future" for "No", and it has already clicked the wrong one by the time anything can
+  object. The options are read from the listbox the control names in `aria-controls` or
+  `aria-owns`, and only from the frame at large when it names none, or names one that is not
+  in the document: an ATS that renders every question's options into one document will
+  otherwise offer up an option belonging to a different question entirely. A control that offers no options, or none that clear
+  `chooseOption`'s bar, is left blank and flagged rather than guessed at. Nothing types a
+  prefix and nothing waits for the listbox to narrow. Like a `<select>` this cannot be
+  verified by re-reading — the widget holds whatever it was told — so the report prints the
+  words the page now shows, and a control left holding something other than the option that
+  was clicked comes back as a mismatch in the pre-submit review.
+- **radio/checkbox** — a grouped radio is matched against each button's *own* label, by
+  `chooseOption`, and that button is checked — never whichever button happened to carry the
+  group's question as its label. Radios kept a three-step matcher of their own (exact label,
+  then the option's value, then any label starting with the answer) after `chooseOption` was
+  hardened, and it did the same damage one control down: with "Currently enrolled part-time"
+  and "Currently enrolled full-time" both on the page, the answer "Currently enrolled" ticked
+  whichever came first in the document and reported it filled. `chooseOption` refuses a
+  leading-word match when two options fit, so that question is left for the user instead. A
+  stray checkbox or ungrouped radio is only ever ticked, never unticked, and only for an
+  affirmative value; anything else is left exactly as the page had it. (Never for redlined
+  categories.)
 - **date** — `fill()` on the native input. A date input holds a structured value, so typing
-  an ISO string into its segmented editor produces nothing. There is no picker-widget
-  fallback: a date control that is not a real `input[type=date]` is a field the user
-  finishes.
+  an ISO string into its segmented editor produces nothing. `input[type=date]` and
+  `input[type=month]` reach the filler as the same kind of control, so the value is reshaped
+  to whatever the input on the page can actually hold: a graduation stored as "2027-05"
+  becomes "2027-05-01" for a day input, with a note telling the user the day was assumed,
+  and an availability stored as "2027-06-01" is trimmed to "2027-06" for a month input.
+  Without that, whichever granularity the employer used, one of the two was handed a value
+  the input cannot take, and Playwright's "Malformed value" was what the user saw next to
+  their graduation date. There is no picker-widget fallback: a date control that is neither
+  of those native inputs is a field the user finishes.
 - **file** — `setInputFiles` with the primary resume, on the resume field only. Every other
   file field is skipped with "Attach this file yourself."
 - **richtext** — click to focus, then `keyboard.insertText`; verify via `data-value` or
@@ -211,7 +241,12 @@ Per field, by control type:
 > `cover_letter_upload` field, but nothing in the server produces such a document, so those
 > fields are skipped like any other non-resume upload.
 
-Every write is verified by read-back. A field that didn't take is reported, not assumed.
+Every write is followed by a read of what the page then holds, and a field that did not take
+is reported rather than assumed. On a `<select>` or a combobox that read is worth less than
+it looks: the control holds whatever it was told, so re-reading cannot tell a right choice
+from a wrong one. There it is the matching rule above, not the read-back, that keeps the
+answer honest — and the report prints the words the page displays so a wrong choice is at
+least visible to the person reviewing the form.
 
 ## The submit gate (G4)
 
@@ -233,17 +268,33 @@ submit a form.
   each way a submit control gets named — the receiver (`submitBtn.click()`), a selector
   string or template anywhere inside the call (`page.click('button[type=submit]')`,
   `page.locator('#submit-application').click()`), and the routes that name nothing at all:
-  `requestSubmit()`, a zero-argument `.submit()`, `new SubmitEvent`, a dispatched `submit`
-  event, and `.press('Enter')`, which submits a single-input form in every browser;
-- a CI step, `scripts/g4-scan.ts`, scanning the same tree as text for the same set, so a
+  `requestSubmit()`, a zero-argument `.submit()`, `new SubmitEvent` or a plain
+  `new Event('submit')`, a `dispatchEvent` of one, and `.press('Enter')` or `.down('Enter')`,
+  because Enter submits a single-input form in every browser;
+- a CI step, `scripts/g4-scan.ts`, scanning the same tree as text, so a
   `// eslint-disable-next-line` cannot buy anyone a submit call. It self-tests against a
   dozen written-out submit paths before it will report a clean tree, because the version
   before it could not tell "there is no submit path" from "my pattern matches nothing" and
   printed the same reassuring line either way;
-- a test in `app.test.ts` scanning the filling module's source for the same shapes, and
-  asserting that `POST /api/applications/:id/submit` is a 404;
+- a test in `app.test.ts` that runs `scanSource` — the same exported function the CI step
+  runs, rather than a second table of patterns kept beside it — over the whole of
+  `apps/server/src`. Not `core/filling` alone: that is eight files of seventy-two, so a
+  `page.click('button[type=submit]')` in a route handler or a browser helper would have
+  passed unremarked, and nothing stops a submit path being written outside the filling
+  module. The test re-runs the scanner's own self-test from inside the suite, so a scanner
+  that had quietly stopped matching anything turns a test red instead of reporting every
+  file clean. The same test asserts that `POST /api/applications/:id/submit` is a 404;
 - and a fixture test asserting the mock ATS recorded **zero** POSTs across the entire suite,
   which is the only one of the four that checks the outcome rather than the source text.
+
+**Where the layers currently differ**, since anyone adding a new submit shape needs to know
+where it has to go. The CI step and the test share one function, so those two cannot
+drift apart. The lint rule is necessarily a separate list — syntax selectors, not regexes —
+and it is the narrower one: it does not yet look for a `\n` or `\r` standing in for Enter,
+whether handed straight to `.press()` or sitting inside the string given to `.type()` or
+`.pressSequentially()`, which press one real key per character. That shape is caught in CI
+and by the test but not in the editor, which is the wrong way round for the layer meant to
+stop the mistake being written in the first place.
 
 For a long time two of those were decorative. The lint rule matched on
 `callee.object.name`, which only exists when the receiver is a bare identifier, so it saw
@@ -254,6 +305,13 @@ but submit forms seven different ways. The rule that keeps them honest: a G4 pat
 match the control wherever it is named — receiver, selector string, or a locator chained
 ahead of the click — and cover the ways to submit that are not clicks. One pattern per
 reported example is a gate with a hole in it.
+
+And the second rule, which is why the layers are shaped the way they are above: a new submit
+shape has to reach every gate that claims to look for it. There were three copies of the same
+pattern list for a while, and the copy in the test could not see `page.keyboard.press('Enter')`
+or a typed newline — separately maintained lists drift the moment one of them is updated on
+its own. That is what `g4-scan.ts` exports `scanSource` for, and the test now drives it, so
+there are two lists to keep in step rather than three.
 
 > **Not built:** a CI check for any endpoint that could write `submitted_at` without the
 > user. This section used to list one; `.github/` and `scripts/` contain no such check. The

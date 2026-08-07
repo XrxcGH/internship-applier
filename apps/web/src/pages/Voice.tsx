@@ -25,6 +25,11 @@ const ADEQUACY_TONE = {
  * the measurements are shown back in plain numbers so the user can see exactly what was
  * derived from their writing. Nothing here is inferred about the person, only about the
  * prose.
+ *
+ * Which is why the copy has to name the second thing on disk. Measuring stores a record of
+ * its own, separate from the samples, and someone who deletes the essay they regret pasting
+ * is entitled to know what happens to what was measured from it. A page that shows one of
+ * the two and never mentions the other leaves them guessing.
  */
 export function Voice() {
   const [samples, setSamples] = useState<SamplesResponse | null>(null);
@@ -109,6 +114,14 @@ export function Voice() {
             ))}
           </ul>
         )}
+
+        {samples && samples.samples.length > 0 && (
+          <p className="text-faint u-prose mt-4 text-[0.9375rem]">
+            Removing a sample deletes the text you pasted and measures your voice again from
+            whatever is left, so nothing below goes on describing writing you have taken away.
+            Remove the last one and the measurement goes with it.
+          </p>
+        )}
       </Section>
 
       <Section n="02" title="Add a sample" step={4}>
@@ -173,6 +186,14 @@ export function Voice() {
             )}
           </div>
         )}
+
+        <p className="text-faint u-prose mt-5 text-[1rem]">
+          Measuring keeps these numbers as a record of their own, stored separately from the samples
+          they were taken from. Adding a sample does not change it on its own; measuring again does,
+          and so does removing a sample. No passage of your writing is copied into it — it holds
+          counts and rates, plus single words: the ones you most often open a sentence with, and
+          which of a fixed list of joining words you reach for.
+        </p>
 
         <p className="text-faint mt-5 u-prose text-[1rem] italic">
           These numbers are <strong>not scored against an AI detector</strong>, and are not trying

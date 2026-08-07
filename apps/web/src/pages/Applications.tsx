@@ -364,6 +364,10 @@ function Detail({
               : `${app.answers.length - approved} of ${app.answers.length} answers still need your approval (gate G3).`
           }
           submittedAt={submittedAt}
+          // Read back from the application rather than from the fill run, which is why it
+          // is still here after the browser has been closed. An application saved before
+          // this column existed has nothing in it, which is the same as nothing skipped.
+          skippedFields={app.skippedFields ?? []}
           onChanged={refresh}
         />
       </Section>

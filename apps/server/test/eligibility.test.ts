@@ -1408,25 +1408,49 @@ describe('properties that must always hold', () => {
    * pass into fail on new information — stating a citizenship the posting excludes, or a
    * work-authorization status that needs sponsorship the employer does not offer — and
    * those are correct behaviour rather than exceptions to hide.
+   *
+   * THE POSTING HAS TO ASK SOMETHING. With `requirements: []` every rule that reads a
+   * profile fact short-circuits to `not_applicable` before it looks at the profile at all,
+   * so all six evaluations produced a byte-identical rule vector and the test could not
+   * fail however the rules behaved. The four requirements below are the ones these
+   * additions actually feed, each rule's status is asserted at every step, and each
+   * addition is a value that DIFFERS from what the fixture already had — otherwise the
+   * "addition" is a no-op assignment and the step proves nothing either.
    */
   it('stays eligible as neutral profile facts are filled in one by one', () => {
+    // Only age is missing from the starting profile: it is carried by dateOfBirth, so all
+    // four rules can reach a verdict and the base really is eligible rather than unknown.
     const base = input({
-      profile: profile({
-        derived: { ...profile().derived, age: null, expectedGraduation: null },
-      }),
-      requirements: [],
+      profile: profile({ derived: { ...profile().derived, age: null } }),
+      requirements: [
+        req('age', { min: 18 }),
+        req('graduation_window', { from: '2027-01', to: '2029-12' }),
+        req('citizenship', { countries: ['US'] }),
+        req('education_level', { levels: ['bachelor'] }),
+      ],
     });
-    expect(evaluateEligibility(base).eligibility).toBe('eligible');
+
+    const GATED = ['age_minimum', 'graduation_window', 'citizenship', 'education_level'] as const;
+    const gatedStatuses = (o: ReturnType<typeof evaluateEligibility>) =>
+      GATED.map((rule) => `${rule}=${statusOf(o, rule) ?? 'missing'}`);
+
+    const start = evaluateEligibility(base);
+    expect(start.eligibility).toBe('eligible');
+    // A rule that quietly went not_applicable would leave this test asserting nothing.
+    expect(gatedStatuses(start)).toEqual(GATED.map((rule) => `${rule}=pass`));
 
     const additions: Array<[string, Partial<ConfirmedProfile>]> = [
-      ['dateOfBirth', { dateOfBirth: '2006-03-15' }],
+      ['dateOfBirth', { dateOfBirth: '2005-11-02' }],
       ['derived.age', { derived: { ...profile().derived, age: 20 } }],
       [
         'derived.expectedGraduation',
-        { derived: { ...profile().derived, age: 20, expectedGraduation: '2028-05' } },
+        { derived: { ...profile().derived, age: 20, expectedGraduation: '2029-05' } },
       ],
-      ['availability', { availability: profile().availability }],
-      ['citizenships', { citizenships: ['US'] }],
+      [
+        'availability',
+        { availability: { start: '2027-05-15', end: '2027-09-10', flexible: true } },
+      ],
+      ['citizenships', { citizenships: ['US', 'IE'] }],
     ];
 
     let acc = base.profile;
@@ -1434,6 +1458,9 @@ describe('properties that must always hold', () => {
       acc = { ...acc, ...patch } as ConfirmedProfile;
       const o = evaluateEligibility({ ...base, profile: acc });
       expect(o.eligibility, `became ${o.eligibility} after adding ${what}`).toBe('eligible');
+      expect(gatedStatuses(o), `after adding ${what}`).toEqual(GATED.map((rule) => `${rule}=pass`));
+      // Widening the availability window cannot shorten the overlap either.
+      expect(statusOf(o, 'term_overlap'), `after adding ${what}`).toBe('pass');
     }
   });
 

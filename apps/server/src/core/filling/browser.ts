@@ -86,8 +86,19 @@ export async function openSession(opts: SessionOptions = {}): Promise<BrowserSes
  *
  * Login walls and bot checks are not obstacles to be worked around. The tool pauses, says
  * what it found, and waits. There is no solver, no bypass, and no third-party service.
+ *
+ * There are exactly two, and there used to be a third. `unknown_field` was declared here and
+ * built nowhere: `detectIntervention` below is the only thing that ever constructs an
+ * Intervention, and it returns `login`, `captcha` or nothing at all. A field the classifier
+ * cannot place is skipped and reported in the review, which is not a reason to stop and take
+ * the browser back from the user.
+ *
+ * A reason with no producer is not harmless here, because the screen that renders these
+ * treats "not login" as "bot check" — so the first code to halt a run on `unknown_field`
+ * would have told the user to go and solve a challenge that is not on the page. The type is
+ * the honest place to say the third case does not exist.
  */
-export type InterventionReason = 'login' | 'captcha' | 'unknown_field';
+export type InterventionReason = 'login' | 'captcha';
 
 export interface Intervention {
   reason: InterventionReason;

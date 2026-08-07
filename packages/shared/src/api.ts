@@ -31,7 +31,13 @@ export const ApiErrorCode = z.enum([
   'FILL_FAILED',
   'NO_RUN',
   'PAST_FILLING',
+  // A fill run is already typing into this application's page. Distinct from
+  // APPLICATION_IN_PROGRESS, which is about the application having moved past the point the
+  // tool can undo; this one clears on its own once the run finishes, and the caller waits.
+  'FILL_IN_PROGRESS',
   'APPLICATION_IN_PROGRESS',
+  // The review flag being dismissed has a field the user can answer, so it is not dismissible.
+  'ANSWER_REQUIRED',
   'INTERNAL',
 ]);
 

@@ -500,12 +500,13 @@ describe('identity normalisation', () => {
 
 describe('reading HTML out of a feed', () => {
   /**
-   * Greenhouse returns its job content ESCAPED. Stripping tags first finds none to strip,
-   * and stripHtml's own decode step then puts the markup back as literal text — so every
-   * requirement parser and the model read "<p>" and "<li>" as part of the job
-   * description, and the UI rendered them on screen.
+   * What the two helpers do when they are composed in this order, which is all this can
+   * check: the order is written here in the test body, so it is `decodeEntities` and
+   * `stripHtml` under test and not the caller that has to get the order right. The
+   * Greenhouse adapter's own ordering is pinned in sources.test.ts, where the adapter is
+   * actually driven.
    */
-  it('decodes an escaped document before the tags are stripped', () => {
+  it('an escaped document decoded first has no markup left after stripping', () => {
     const escaped =
       '&lt;p&gt;About the role&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;/ul&gt;';
     const text = stripHtml(decodeEntities(escaped));

@@ -266,8 +266,18 @@ export function parseWorkArrangement(text: string): WorkArrangement | null {
   return null;
 }
 
-/** "3 days a week", "2 days per week", "3x/week" — the count, wherever the sentence puts it. */
-const DAYS_A_WEEK = /\b(\d)\s*(?:days?|x)\s*(?:[a-z-]+\s+){0,2}?(?:per|a|each|\/)\s*week/gi;
+/**
+ * "3 days a week", "2 days per week", "3x/week" — the count, wherever the sentence puts it.
+ *
+ * The gap between the count and "per week" is where postings write the location, so it has to
+ * be wide enough for the longest spelling ONSITE_WORD below accepts plus a word linking it to
+ * the count: "in the office" is three words on its own and "working in the office" is four.
+ * Two was one short of the article, so "3 days in the office per week" — the one ordering that
+ * puts "the" and a trailing "per week" in the same sentence — came back with no number at all,
+ * while parseWorkArrangement read that same sentence as hybrid. The posting was then labelled
+ * hybrid with the one figure saying how much commuting that means left blank.
+ */
+const DAYS_A_WEEK = /\b(\d)\s*(?:days?|x)\s*(?:[a-z-]+\s+){0,4}?(?:per|a|each|\/)\s*week/gi;
 
 /** Where the work happens, written the four ways postings write it. */
 const ONSITE_WORD = /\b(?:on-?site|in[- ]person|in(?:\s+the)?\s+office|in-office)\b/i;
@@ -350,9 +360,25 @@ const NOT_TERM_CONTEXT =
  * So every figure is weighed the way parseCompensation weighs a dollar amount: the clause
  * around it decides whether it is the term, and the first match only wins when nothing in the
  * text says otherwise.
+ *
+ * The weighing has to run across both units at once, not inside each one in turn. Weeks used
+ * to be tried first and months consulted only when the text held no week figure at all, so
+ * "Interns receive 2 weeks of paid time off. The internship runs 3 months." was still a
+ * two-week internship: the PTO figure was the only one in weeks, so it won outright without
+ * ever being set against the months figure the sentence about the internship carries. A
+ * posting that states its own length in a different unit from its leave policy is the ordinary
+ * case, not the exception, so both units go into one pool and the best-supported figure wins.
  */
-function bestSpan(text: string, re: RegExp, toWeeks: (avg: number) => number): number | null {
-  let best: { value: number; score: number } | null = null;
+interface Span {
+  /** The length in weeks, whichever unit the posting wrote it in. */
+  value: number;
+  score: number;
+  /** Where it sits in the text, so equally-supported figures resolve to the first one. */
+  at: number;
+}
+
+function spans(text: string, re: RegExp, toWeeks: (avg: number) => number): Span[] {
+  const found: Span[] = [];
 
   for (const m of text.matchAll(re)) {
     const a = Number(m[1]);
@@ -366,17 +392,19 @@ function bestSpan(text: string, re: RegExp, toWeeks: (avg: number) => number): n
       (TERM_CONTEXT.test(before) || TERM_CONTEXT.test(after) ? 1 : 0) -
       (NOT_TERM_CONTEXT.test(before) || NOT_TERM_CONTEXT.test(after) ? 1 : 0);
 
-    if (!best || score > best.score) best = { value, score };
+    found.push({ value, score, at: m.index });
   }
 
-  return best?.value ?? null;
+  return found;
 }
 
 export function parseDurationWeeks(text: string): number | null {
-  return (
-    bestSpan(text, WEEKS_RE, (avg) => Math.round(avg)) ??
-    bestSpan(text, MONTHS_RE, (avg) => Math.round(avg * 4.345))
-  );
+  const best = [
+    ...spans(text, WEEKS_RE, (avg) => Math.round(avg)),
+    ...spans(text, MONTHS_RE, (avg) => Math.round(avg * 4.345)),
+  ].sort((x, y) => y.score - x.score || x.at - y.at)[0];
+
+  return best?.value ?? null;
 }
 
 // ---------------------------------------------------------------- compensation
@@ -606,9 +634,63 @@ export function parseCompensation(text: string): ParsedComp | null {
  * releases you from something are written once here rather than three times.
  */
 const NOT_DEMANDED =
-  /\b(?:not|no longer)\s+(?:(?:currently|strictly|technically|always|be)\s+){0,2}(?:required|necessary|needed|requested|expected|mandatory|obligatory)\b|\boptional\b|\bnot? need(?:ed)?\b|\bwaived\b|\bnice to have\b/;
+  /\b(?:not|no longer)\s+(?:(?:currently|strictly|technically|always|be)\s+){0,2}(?:required|necessary|needed|requested|expected|mandatory|obligatory)\b|\boptional\b|\bnot? need(?:ed)?\b|\bwaived\b|\bnice to have\b|\bavailable\s+(?:up)?on request\b/;
 
-function demanded(text: string, subject: RegExp): boolean {
+/**
+ * The same word used for something other than the thing an applicant would hand over.
+ *
+ * Mention-plus-no-release is the right rule only once the mention is about the applicant's
+ * copy of the thing, and three of these five words are ordinary English with a second life in
+ * posting boilerplate: a "reference" is the standard word for a requisition number, a
+ * "portfolio" is what an investment firm holds, and a "transcript" is what a speech-to-text
+ * pipeline produces. Each was recorded as a demand the posting never made.
+ *
+ * A wrong sense disqualifies the one mention, never the key: `demanded` keeps looking, so a
+ * posting that prints "Job Reference: 12345" in its header and asks for three referees in its
+ * last paragraph is still read as asking. Both patterns are matched against the clause on that
+ * side of the word, so anchor `before` with `$` and `after` with `^`.
+ */
+interface OtherSense {
+  before?: RegExp;
+  after?: RegExp;
+}
+
+/**
+ * "Job Reference: 12345", "please reference job code SWE-2027", "reference checks are run
+ * after an offer" — an identifier, a verb, and a step of the hiring process. None of them asks
+ * anyone for referees, and "Job Reference" alone is on a large share of ATS postings, so the
+ * bare word decided the flag for postings that never raised the subject.
+ *
+ * The identifier form is recognised by what follows it rather than by the word in front,
+ * because "three job references" is the referee sense in the same words — a requisition number
+ * is followed by a number, a label like "ID" or "code", or both.
+ */
+const REFERENCE_NOT_REFEREE: OtherSense = {
+  before:
+    /\b(?:please|kindly|pls|must|should|shall)\s+$|\b(?:contact|contacts|contacted|contacting|check|checks|checked|checking|call|called|calling|verify|verifies|verified|verifying)\s+(?:(?:your|the|these|those|their|his|her|any)\s+)?$/,
+  after:
+    /^\s*(?:numbers?|nos?\.?|ids?|codes?|checks?|checking)\b|^\s*(?:the\s+)?(?:job|req|requisition|posting|position|vacancy)\s+(?:numbers?|nos?\b|ids?\b|codes?)\b|^\s*[:#-]?\s*(?:[a-z]{1,5}[-/]?)?\d{3,}\b/,
+};
+
+/**
+ * On finance, agency and consulting postings the portfolio belongs to the firm: "our portfolio
+ * companies", "the client portfolio you will support", "portfolio manager". A design intern is
+ * asked for a portfolio; an analyst reading about one is not.
+ */
+const PORTFOLIO_NOT_APPLICANTS: OtherSense = {
+  before:
+    /\b(?:investment|investments|client|clients|customer|product|products|loan|credit|equity|asset|assets|brand|brands|stock|fund|funds|company|our|their|its)\s+$/,
+  after: /^\s*(?:compan(?:y|ies)|managers?|management|analysts?|of\s+(?:our|their|its|the)\b)/,
+};
+
+/** A transcript is an academic record here. It is also what a meeting, a call or a video
+ *  produces, and postings at companies that build those tools say so in their prose. */
+const TRANSCRIPT_NOT_ACADEMIC: OtherSense = {
+  before:
+    /\b(?:call|calls|interview|interviews|video|videos|audio|meeting|meetings|podcast|podcasts|recording|recordings|chat|chats|earnings|court)\s+$/,
+};
+
+function demanded(text: string, subject: RegExp, otherSense?: OtherSense): boolean {
   // Every mention gets a look. A posting that says a cover letter is optional in its boilerplate
   // and asks for one in the next paragraph is asking for one, and one clean ask is enough.
   for (const m of text.matchAll(new RegExp(subject.source, 'gi'))) {
@@ -620,6 +702,7 @@ function demanded(text: string, subject: RegExp): boolean {
     // reviewed" is a demand, so "without" is left alone — it more often names what a posting
     // refuses to accept than what it does not want.
     if (/\bno\s+$/.test(before)) continue;
+    if (otherSense?.before?.test(before) || otherSense?.after?.test(after)) continue;
     if (NOT_DEMANDED.test(before) || NOT_DEMANDED.test(after)) continue;
     return true;
   }
@@ -630,9 +713,13 @@ export function parseRequirements(text: string): Record<string, boolean> {
   const t = text.toLowerCase();
   return {
     coverLetter: demanded(t, /cover letter/),
-    transcript: demanded(t, /\btranscripts?\b/),
-    portfolio: demanded(t, /\bportfolio\b|\bwork samples?\b/),
-    references: demanded(t, /\breferences?\b|\bletters? of recommendation\b/),
+    transcript: demanded(t, /\btranscripts?\b/, TRANSCRIPT_NOT_ACADEMIC),
+    portfolio: demanded(t, /\bportfolio\b|\bwork samples?\b/, PORTFOLIO_NOT_APPLICANTS),
+    references: demanded(
+      t,
+      /\breferences?\b|\bletters? of recommendation\b/,
+      REFERENCE_NOT_REFEREE,
+    ),
     videoInterview: demanded(
       t,
       /\b(video interview|hirevue|one-way interview|recorded interview)\b/,

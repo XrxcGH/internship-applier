@@ -513,8 +513,8 @@ export interface DeterministicResult {
  * answer that mentioned the employer it was addressed to came back with a blocking
  * `"Stripe" does not appear anywhere on your profile` — and naming the company is the most
  * ordinary thing a "why this company" answer can do. There is no override at G3, and the
- * only way to satisfy the message it offered ("add the fact to your profile") would have
- * been to invent a job there, which is the exact harm this file exists to prevent.
+ * only remedy that message leaves open is to put the company on the profile — which means
+ * inventing a job there, the exact harm this file exists to prevent.
  *
  * Mentioning is all they buy. "I interned at Stripe" is still red, because that is a claim
  * about the writer's history and the profile does not contain it — see `affiliationFrame`.
@@ -759,8 +759,12 @@ function summarize(claims: CheckedClaim[]): GuardResult {
  * The deterministic pass. Always runs, needs no API key, and its rejections are final.
  *
  * `contextNames` is the company and role the answer is being written for — see
- * `checkClaimDeterministically`. Callers that know them must pass them, or an answer that
- * names the employer it is addressed to cannot be approved.
+ * `checkClaimDeterministically`. Every caller that knows them has to pass them, and leaving
+ * them out costs something different on each side. On the G3 path the answer comes back
+ * with a blocking claim over the company's own name and there is no override, so the user
+ * is stuck. On the drafting path the flags are recomputed later and never reach the screen,
+ * but the draft still spends its one revision rewriting a sentence that was never wrong,
+ * and whatever that revision traded away to lose the company name is what the user reads.
  */
 export function guardDraft(
   draft: string,

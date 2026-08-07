@@ -47,6 +47,21 @@
  * verb (`arrest`, `arrests`, `arrested`). A pattern that names only the form in front of you
  * reads as if the field is protected while every sibling phrasing walks straight through it,
  * which is the worst kind of gap because nothing about the pattern looks wrong.
+ *
+ * A SECOND RULE, ABOUT NARROWING RATHER THAN WIDENING, and it has the same shape. When a word
+ * here also has an innocent sense — `swift` is a programming language, `medical` names a
+ * school, `confirm` is what you do to an email address — the fix is to require something more,
+ * and the mistake is to require exactly one more thing: the second word that happened to be in
+ * the example. `\bswift\b` was narrowed to `swift (code|bic|number)`, so "Bank SWIFT" and
+ * "Beneficiary bank SWIFT" — the same field with the qualifier dropped and a banking word put
+ * beside it instead — were handed to the filler. The attestation imperative was narrowed to
+ * "<verb> that", which is not a narrowing at all, so "Please verify that your email address is
+ * correct" was refused as a sworn statement.
+ *
+ * The dangerous sense can be established by the qualifier glued to the word, by another word
+ * anywhere in the label, or by the grammar of the sentence, and a narrowing has to allow all
+ * three. When narrowing something here, write the corpus first: the phrasings that must still
+ * be caught and the ones that must stay fillable, and run both past the pattern.
  */
 import type { RedlineCategory } from '@ia/shared';
 
@@ -185,6 +200,30 @@ export function isRescued(normalized: string, category: RedlineCategory): boolea
   );
 }
 
+/**
+ * What a sworn imperative is sworn ABOUT — the applicant's own answers, taken as a whole.
+ *
+ * This exists because the imperative branch of the attestation rule has no subject in it to
+ * go on. "Confirm that ..." is a sworn statement when what follows is the truth of everything
+ * the applicant has put on the form, and an ordinary instruction when what follows is one
+ * field: while the branch fired on any "<verb> that", "Please verify that your email address
+ * is correct" and "Confirm that your phone number is correct" were refused with the note "A
+ * statement you are making personally. Only you can make it." — untrue of both, and on fields
+ * the tool could have filled from the profile in a second.
+ *
+ * So the object has to be the submission taken as a whole, the material above, or something
+ * the applicant is said to have read or handed over. A single named field is not one of those.
+ *
+ * The last arm is written as a bare "you have <verb>" rather than as "everything you have
+ * provided", because the noun in front of it varies and naming the nouns is how this file
+ * keeps ending up one word short: "Confirm that the details you have submitted are true" is
+ * the same sworn statement as "Confirm that everything you have provided is accurate", and
+ * pinning it to the word "everything" would have let it through. `details` is deliberately
+ * absent from the noun list above for the opposite reason — "Confirm that your contact details
+ * are correct" is an ordinary review step and refusing it helps nobody.
+ */
+const SWORN_OBJECT = String.raw`((the|this|these|all|any|my|your|our|his|her|their)\s+(\w+\s+){0,2}(information|statements?|answers?|responses?|declarations?|disclosures?|representations?|facts?|particulars|applications?|submissions?|data)\b|the (above|foregoing|following)\b|(you|i)\s+(have\s+)?(read|reviewed|understood|understand|received|agree|provided|submitted|entered|stated|supplied|given)\b)`;
+
 // The words that name the tool, the words that name its involvement in producing TEXT, and
 // the words that name the thing being submitted — kept apart so the pattern below can
 // require them in either order.
@@ -207,7 +246,37 @@ const AI_AUTHORSHIP = String.raw`(writ\w*|wrote|generated?|generates|generating|
 // The thing being handed in. An AI term sitting next to one of these is the disclosure
 // question however it is phrased, which is what catches "Did you use ChatGPT for this
 // application?" now that `use` no longer counts on its own.
-const AI_SUBMISSION = String.raw`(this|these|your|the) ((application|response|answer|essay|submission|statement|questionnaire|form)s?|cover letter|personal statement|writing sample)`;
+//
+// The noun list has to carry every word a form uses for the thing in front of the applicant,
+// and it was one word short in the way this file keeps being one word short. It named
+// "questionnaire" and not "question", so "Did you use Copilot while answering these
+// questions?" — the AI-disclosure box on a form that calls its fields questions — matched
+// nothing and was handed to the answer engine. The multi-word entries were singular-only for
+// the same reason, so "Did AI write your cover letters?" missed too. `my` and `our` join the
+// determiners because a declaration reads in the first person ("I did not use AI in my
+// responses") as often as the second.
+//
+// `prompt` is deliberately NOT in this list even though a form might say "this prompt": a
+// prompt is also the central noun of AI work, so "Describe your prompt engineering
+// experience with LLMs" would be refused as a disclosure question.
+const AI_SUBMISSION = String.raw`(this|these|those|that|your|the|my|our) ((application|response|answer|essay|submission|statement|questionnaire|question|form|assignment|exercise)s?|cover letters?|personal statements?|writing samples?|take[- ]?home)`;
+// The disclosure question with the applicant deleted from the sentence. Here the AI term is
+// the SUBJECT of "used", not the object: "Was AI used at any point?" asks whether it happened
+// to this submission, and it names no author, no submission noun and no second person, so
+// every other way into this pattern missed it and the question of whether AI wrote the
+// applicant's answers was answered from the stored answer library.
+//
+// The present tense is left out on purpose, and that is what keeps the arm honest. "Was AI
+// used", "has AI been used" and a bare "AI used" ask whether something already happened;
+// "How is AI used in medicine?" is an essay prompt about the world, and including `is|are`
+// would refuse it with a note about the applicant's own application that is untrue of it.
+const AI_WAS_USED = String.raw`\b${AI_TERM}\s+(was|were|has been|have been|had been|been)?\s*(used|utili[sz]ed|employed)\b`;
+// The same question in the interrogative past, where the AI term is the OBJECT of the verb:
+// "Did you use ChatGPT?" is a completed act being asked about, while "Do you use Copilot at
+// work?" is a habit and an ordinary skills question. Only the past interrogative counts, and
+// the term has to be what was used — "What AI tools did you use in your internship?" puts the
+// term before the verb and stays fillable.
+const AI_DID_YOU_USE = String.raw`\bdid (you|the applicant|the candidate|applicant|candidate) (ever )?(use|utili[sz]e|employ)\s+(\w+\s+){0,2}${AI_TERM}\b`;
 
 export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── Government and identity numbers ────────────────────────────────────────
@@ -263,14 +332,23 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
   // ── Financial ──────────────────────────────────────────────────────────────
   {
     category: 'financial',
-    // `swift` has to name what kind of SWIFT it is. On its own it is also the name of a
-    // programming language, so "Which programming languages do you know? (Java, Swift,
-    // Python)" and "Describe your experience building iOS apps in Swift" were refused as
-    // bank details — on the single most common skills question at any company with a mobile
-    // team, with a note telling the applicant the tool never handles payment information.
-    // Nothing is lost by requiring the qualifier: a real form says "SWIFT code",
-    // "SWIFT/BIC" or "SWIFT number" and never the bare word.
-    test: /\b(bank|checking|chequing|savings|deposit) (account|details|form)s?\b|\bacct\b|\baccount (number|holder|no)s?\b|\brouting (number|no\.?)s?\b|\biban\b|\bswift[ /]?(codes?|bic|numbers?|no\.?)\b|\bsort code\b|\bbsb\b|\bifsc\b|\btransit numbers?\b|\binstitution numbers?\b|\bbranch code\b|\bmicr\b|\bbic\b|\bwire transfer\b|\bvoided che(que|ck)s?\b|\bdirect deposit\b/i,
+    // `swift` has to name what kind of SWIFT it is, OR have a banking word standing beside
+    // it. On its own it is also the name of a programming language, so "Which programming
+    // languages do you know? (Java, Swift, Python)" and "Describe your experience building
+    // iOS apps in Swift" were refused as bank details — on the single most common skills
+    // question at any company with a mobile team, with a note telling the applicant the tool
+    // never handles payment information.
+    //
+    // Requiring the qualifier alone was too narrow, and in a way this file has produced
+    // before: the dangerous sense of a word can be established by the rest of the label, not
+    // only by the word glued to its right. "Bank SWIFT" and "Beneficiary bank SWIFT" are how
+    // an international payment form labels that box, they carry no qualifier at all, and no
+    // other branch here caught them — `(bank|...) (account|details|form)s?` needs the second
+    // word too — so a bank identifier was treated as an ordinary field to fill.
+    //
+    // The bare word with nothing banking near it stays fillable, because with nothing else in
+    // the label it is the language and not the network.
+    test: /\b(bank|checking|chequing|savings|deposit) (account|details|form)s?\b|\bacct\b|\baccount (number|holder|no)s?\b|\brouting (number|no\.?)s?\b|\biban\b|\bswift[ /]?(codes?|bic|numbers?|no\.?)\b|\b(bank|banking|beneficiary|payee|payment|payroll|remittance|wire|intermediary|correspondent|iban|deposit)\b.{0,24}\bswift\b|\bswift\b.{0,24}\b(bank|banking|beneficiary|payee|payment|payroll|remittance|wire|intermediary|correspondent|iban|deposit)\b|\bsort code\b|\bbsb\b|\bifsc\b|\btransit numbers?\b|\binstitution numbers?\b|\bbranch code\b|\bmicr\b|\bbic\b|\bwire transfer\b|\bvoided che(que|ck)s?\b|\bdirect deposit\b/i,
     note: 'Bank details. This tool never handles payment information.',
   },
   {
@@ -363,11 +441,30 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     // different verb. It brings "that" or "and agree" with it, because "Do you understand the
     // role?" is an ordinary question and has to stay fillable.
     //
-    // The last branch is the imperative, which has no subject in it at all. "Please confirm
-    // that the information above is accurate" is the same sworn statement with the pronoun
-    // dropped, and it needs "that" for the same reason, so "Confirm your email address" is
-    // untouched.
-    test: /\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear|confirm|verif|warrant|represent)|\byou\b\s+(hereby\s+)?(certif(y|ies)|attests?|affirms?|acknowledges?|swears?|confirms?|(declares?|represents?|warrants?|verif(y|ies))\s+that\b)|\b(certify|attest|affirm|acknowledge|declare|confirm|swear)\s+(that\s+)?you\b|\bhereby\b.{0,24}\b(certif|attest|affirm|declar|acknowledg|swear|warrant|represent)|\b(i|you|we|applicant|candidate|undersigned)\s+(hereby\s+)?understands?\s+(that\b|and\s+agrees?\b)|\b(please\s+)?(certify|confirm|acknowledge|attest|affirm|declare|verify)\s+that\b/i,
+    // The last two branches are the imperative, which has no subject in it at all. "Please
+    // confirm that the information above is accurate" is the same sworn statement with the
+    // pronoun dropped.
+    //
+    // The imperative is split by verb, and the split is the whole of it. "Certify", "attest",
+    // "affirm", "swear" and "warrant" have no innocent imperative sense — an instruction
+    // starting with one of those words is always asking for a sworn statement, so "that" is
+    // all they need. "Confirm", "acknowledge", "declare", "verify" and "represent" are also
+    // the ordinary words for checking one field, and while they needed nothing but "that",
+    // "Please verify that your email address is correct" and "Confirm that your phone number
+    // is correct" were refused as sworn statements. Those are boxes the tool can fill from the
+    // profile, and the note the user was shown — "A statement you are making personally" — was
+    // untrue of both. So the ambiguous verbs have to name what is being sworn to; see
+    // `SWORN_OBJECT`.
+    test: new RegExp(
+      String.raw`\b(i|applicant|candidate|undersigned)\b.{0,24}\b(certif|attest|affirm|declare|acknowledge|swear|confirm|verif|warrant|represent)` +
+        String.raw`|\byou\b\s+(hereby\s+)?(certif(y|ies)|attests?|affirms?|acknowledges?|swears?|confirms?|(declares?|represents?|warrants?|verif(y|ies))\s+that\b)` +
+        String.raw`|\b(certify|attest|affirm|acknowledge|declare|confirm|swear)\s+(that\s+)?you\b` +
+        String.raw`|\bhereby\b.{0,24}\b(certif|attest|affirm|declar|acknowledg|swear|warrant|represent)` +
+        String.raw`|\b(i|you|we|applicant|candidate|undersigned)\s+(hereby\s+)?understands?\s+(that\b|and\s+agrees?\b)` +
+        String.raw`|\b(please\s+)?(certify|attest|affirm|swear|warrant)\s+that\b` +
+        String.raw`|\b(please\s+)?(confirm|acknowledge|declare|verify|represent)\s+that\s+(\w+\s+){0,2}${SWORN_OBJECT}`,
+      'i',
+    ),
     note: 'A statement you are making personally. Only you can make it.',
   },
   {
@@ -540,13 +637,16 @@ export const REDLINE_PATTERNS: RedlinePattern[] = [
     // `normalizeField` strips the full stops before any pattern sees the string, so the
     // punctuated spelling could never have matched.
     //
-    // Two ways in, and the second is what keeps the first from having to be greedy. Either
-    // the AI term sits near a word about who WROTE something, or it sits near the name of
-    // the thing being handed in. Mere co-occurrence with "use" is not enough, because that
-    // is every AI skills question ever asked.
+    // Four ways in, and the later ones are what keep the first from having to be greedy.
+    // Either the AI term sits near a word about who WROTE something, or it sits near the name
+    // of the thing being handed in, or the sentence is grammatically about a completed act of
+    // using it. Mere co-occurrence with "use" is not enough, because that is every AI skills
+    // question ever asked — but the two grammatical shapes that only the disclosure question
+    // takes are enough, which is the point of the last two arms.
     test: new RegExp(
       String.raw`\b${AI_TERM}\b.{0,40}\b${AI_AUTHORSHIP}|\b${AI_AUTHORSHIP}\w*\b.{0,40}\b${AI_TERM}\b` +
-        String.raw`|\b${AI_TERM}\b.{0,40}\b${AI_SUBMISSION}\b|\b${AI_SUBMISSION}\b.{0,40}\b${AI_TERM}\b`,
+        String.raw`|\b${AI_TERM}\b.{0,40}\b${AI_SUBMISSION}\b|\b${AI_SUBMISSION}\b.{0,40}\b${AI_TERM}\b` +
+        String.raw`|${AI_WAS_USED}|${AI_DID_YOU_USE}`,
       'i',
     ),
     note: 'This asks whether AI helped with your application. Answer it yourself, honestly. This tool will not answer it for you.',

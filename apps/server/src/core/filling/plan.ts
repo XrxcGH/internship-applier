@@ -154,6 +154,54 @@ export function valueFor(field: FormField, p: ConfirmedProfile): string | null {
 }
 
 /**
+ * Semantics the profile has no field for AT ALL, and the sentence to print instead.
+ *
+ * `valueFor` returns null for these the same way it returns null for a GPA the user never
+ * entered, and the generic sentence below treats both the same: "Your profile has no referral
+ * source to fill in." That sentence is true of the GPA and false of this one — it reads as a
+ * gap the user could go and close, when in fact no profile this tool can hold would ever
+ * answer "How did you hear about us?". A user who went looking for the setting would not find
+ * it, because there is nothing to find.
+ *
+ * The upload semantics are here for the same reason from the other direction. They are
+ * normally answered by the file branch above, but a form that says "Paste your resume below"
+ * classifies as `resume_upload` on a textarea, misses that branch, and produced "Your profile
+ * has no resume upload to fill in." about a box that wants pasted text.
+ */
+const NO_PROFILE_SOURCE: Partial<Record<FormField['semantic'], string>> = {
+  referral_source:
+    'How you heard about a posting is not something this tool records, so this one is yours to fill in.',
+  resume_upload: 'This asks for your resume as text rather than a file. Paste it in yourself.',
+  cover_letter_upload:
+    'This asks for your cover letter as text rather than a file. Paste it in yourself.',
+  transcript_upload:
+    'This asks for your transcript as text rather than a file. Paste it in yourself.',
+};
+
+/**
+ * How to name a semantic in the "your profile has no ___" sentence.
+ *
+ * Only the ones whose machine name does not survive having its underscores swapped for
+ * spaces. That transform is fine for `first_name` and `graduation_date`, and it produced
+ * "Your profile has no sponsorship needed to fill in.", "no address line1", "no work auth"
+ * and "no gpa" — sentences that are either not English or not the name of anything the user
+ * has ever seen in the profile editor. Whenever a semantic is added whose name is an
+ * abbreviation, an acronym or a predicate rather than a noun, give it an entry here.
+ */
+const NO_DATA_NOUN: Partial<Record<FormField['semantic'], string>> = {
+  address_line1: 'street address',
+  postal: 'postal code',
+  region: 'state or region',
+  gpa: 'GPA',
+  linkedin: 'LinkedIn URL',
+  github: 'GitHub URL',
+  work_auth: 'work authorization status',
+  sponsorship_needed: 'sponsorship status',
+  hours_available: 'weekly availability',
+  salary_expectation: 'minimum stipend',
+};
+
+/**
  * Loose match between a form's question and an approved answer's question.
  *
  * SYMMETRIC ON PURPOSE, and strict. An answer is approved at G3 as the answer to one
@@ -276,10 +324,13 @@ export function buildFillPlan(input: PlanInput): FillPlan {
 
     const value = valueFor(field, input.profile);
     if (value === null || value === '') {
+      const noSource = NO_PROFILE_SOURCE[field.semantic];
       skips.push({
         field,
         reason: 'no_data',
-        note: `Your profile has no ${field.semantic.replace(/_/g, ' ')} to fill in.`,
+        note:
+          noSource ??
+          `Your profile has no ${NO_DATA_NOUN[field.semantic] ?? field.semantic.replace(/_/g, ' ')} to fill in.`,
       });
       continue;
     }

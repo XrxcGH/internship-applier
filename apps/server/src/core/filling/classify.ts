@@ -475,12 +475,16 @@ const RULES: Rule[] = [
     confidence: 0.92,
   },
   // The word "source" has to arrive carrying the referral sense. On its own it claimed
-  // "Open source contributions", "Source code repository" and "Funding source", and since
-  // the planner has no value for this semantic the user was shown "Your profile has no
-  // referral source to fill in." beside a box asking about their open-source work — a
-  // sentence that is not true of the field it is printed next to. Those fields were also
-  // counted as fillable in the summary line, having been recognized as something the
+  // "Open source contributions", "Source code repository" and "Funding source", and the user
+  // was shown the planner's no-value sentence beside a box asking about their open-source
+  // work — a sentence that is not true of the field it is printed next to. Those fields were
+  // also counted as fillable in the summary line, having been recognized as something the
   // planner can never fill.
+  //
+  // No profile this tool holds can answer a genuine referral question either, so the planner
+  // gives this semantic a note of its own rather than blaming a gap in the profile — see
+  // `NO_PROFILE_SOURCE` in plan.ts. Recognizing the field is still worth doing: it tells the
+  // user precisely which box is theirs and why.
   {
     semantic: 'referral_source',
     test: /\bhow did you hear\b|\bhow (did|do) you (find|learn)\b|\bwhere did you hear\b|\b(referral|lead|traffic|application|candidate) sources?\b|\bsources? of (referral|application)\b/i,

@@ -5,6 +5,10 @@
  * tool may not make, which in practice means it refuses to be told an application was
  * submitted by anything other than a person clicking the button that says so. That check
  * is server-side for the same reason gate G3's is: a client-side rule is a suggestion.
+ *
+ * It holds G3 itself too, for the two statuses that claim the form has been filled from the
+ * approved answers. The fill routes are where G3 stops anything reaching an employer, but
+ * this column is what the board and the CSV export read, so it has to be as honest.
  */
 import type { FastifyInstance } from 'fastify';
 import { desc, eq } from 'drizzle-orm';
@@ -103,6 +107,15 @@ const StatusBody = z.object({
   note: z.string().max(2000).optional(),
 });
 
+/**
+ * The statuses that assert the approved answers are on the employer's form.
+ *
+ * Both of them, not just `filled` — `awaiting_submit` is the one the board renders as "Ready
+ * for you" with "The form is filled. Read it and submit it yourself." beside it, which is the
+ * stronger claim of the two.
+ */
+const CLAIMS_THE_FORM_IS_FILLED: TrackedApplication['status'][] = ['filled', 'awaiting_submit'];
+
 export async function trackerRoutes(app: FastifyInstance): Promise<void> {
   /** The board, the table, and the nudges all read from this. */
   app.get('/api/tracker', async () => {
@@ -150,6 +163,40 @@ export async function trackerRoutes(app: FastifyInstance): Promise<void> {
       return reply
         .code(409)
         .send({ error: { code: 'ILLEGAL_TRANSITION', message: allowed.reason } });
+    }
+
+    // Gate G3 holds on this column too, not only at the fill boundary.
+    //
+    // `filled` and `awaiting_submit` are the two statuses that assert the approved answers
+    // are on the employer's form. routes/filling.ts refuses to open a browser while any
+    // answer is unapproved; nothing looked here, and `answers_ready → filled → awaiting_submit`
+    // is a legal walk for a user, so a client could put an application in "Ready for you" —
+    // "The form is filled. Read it and submit it yourself." — with every answer still
+    // undrafted. The board said so, and so did the CSV export the user keeps as their record.
+    //
+    // Only a transition that newly claims one of those statuses is checked. Re-recording the
+    // status a row already has, or retreating from `filled` back to `answers_ready`, claims
+    // nothing new.
+    if (to !== from && CLAIMS_THE_FORM_IS_FILLED.includes(to)) {
+      const unapproved = db
+        .select()
+        .from(schema.applicationAnswer)
+        .where(eq(schema.applicationAnswer.applicationId, req.params.id))
+        .all()
+        .filter((a) => !a.approvedAt);
+      if (unapproved.length > 0) {
+        return reply.code(409).send({
+          error: {
+            code: 'ANSWERS_NOT_APPROVED',
+            message:
+              (unapproved.length === 1
+                ? 'One answer has not been approved yet. Review it first (gate G3).'
+                : `${unapproved.length} answers have not been approved yet. Review them first (gate G3).`) +
+              ` An application cannot be recorded as ${to.replace(/_/g, ' ')} until they are.`,
+            details: { questions: unapproved.map((a) => a.questionText) },
+          },
+        });
+      }
     }
 
     const now = new Date().toISOString();

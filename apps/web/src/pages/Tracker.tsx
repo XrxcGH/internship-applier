@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ApiError,
   downloadFile,
   getDraftMessage,
   getTracker,
@@ -9,6 +8,7 @@ import {
   type TrackedApp,
   type TrackerView,
 } from '../lib/api';
+import { refusal, REPORTABLE } from '../lib/tracker';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Badge, Button, Empty, Notice } from '../components/Controls';
 
@@ -27,39 +27,6 @@ const COLUMNS = [
   { key: 'talking', label: 'Talking', statuses: ['interview'] },
   { key: 'closed', label: 'Closed', statuses: ['offer', 'rejected', 'withdrawn', 'ghosted'] },
 ];
-
-/** Statuses a person can select. `ghosted` is absent because it is derived, not chosen. */
-const REPORTABLE = [
-  { value: 'submitted', label: 'I submitted it' },
-  { value: 'acknowledged', label: 'They acknowledged it' },
-  { value: 'interview', label: 'Interviewing' },
-  { value: 'offer', label: 'Offer' },
-  { value: 'rejected', label: 'Rejected' },
-  { value: 'withdrawn', label: 'Withdrawn' },
-];
-
-/**
- * A refused status change, said in words this screen has used before.
- *
- * The server answers with its own vocabulary — "Cannot go from draft to submitted. From
- * here: answers_ready, withdrawn." — and nobody using this board has ever seen
- * `answers_ready`. The refusal is not rare, either: it is what someone gets for the most
- * ordinary route through this tool, which is approving a posting at G2, applying on the
- * employer's own site through the ↗ link, and coming back here to record it. This tool
- * genuinely cannot record that yet, and the least it owes the person is a sentence in
- * English rather than a dump of its internal state names.
- */
-function refusal(err: unknown, status: string): string {
-  if (err instanceof ApiError && err.code === 'ILLEGAL_TRANSITION') {
-    const label = REPORTABLE.find((r) => r.value === status)?.label ?? status;
-    return (
-      `This one cannot be moved to "${label}" from where it stands. ` +
-      'Only an application that has been through the fill step can be reported as sent; ' +
-      'until then the one status you can record is Withdrawn.'
-    );
-  }
-  return err instanceof Error ? err.message : String(err);
-}
 
 const ATTENTION_TONE: Record<string, 'redline' | 'caution' | 'verified' | 'neutral'> = {
   deadline_passed: 'redline',

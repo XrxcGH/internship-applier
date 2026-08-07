@@ -122,7 +122,13 @@ describe('dedupe', () => {
     expect(unique[0]!.sources).toEqual(['greenhouse:acme', 'adzuna:us']);
   });
 
-  it('merges by fingerprint when the urls differ', () => {
+  /**
+   * Named for what it checks. "(Summer 2027)" survives `fingerprintTitle` on purpose — the
+   * test above pins that — so these two get different fingerprints and it is stage 3, the
+   * cross-source title match, that merges them. Calling it a fingerprint merge left stage 2
+   * with no coverage at all while reading as though it had some.
+   */
+  it('merges a near-duplicate title across two sources', () => {
     const { unique } = dedupe([
       { posting: posting({ canonicalUrl: 'https://a.com/1' }), source: 's1' },
       {
@@ -135,6 +141,35 @@ describe('dedupe', () => {
     ]);
     expect(unique).toHaveLength(1);
     expect(unique[0]!.sources).toEqual(['s1', 's2']);
+    expect(unique[0]!.mergedBy).toContain('title');
+  });
+
+  /**
+   * Stage 2, which is the only stage that merges within a single source. One board hands
+   * back the same requisition twice under two URLs — once bare, once with the req number
+   * appended — and stage 1 cannot see it because the URLs differ while stage 3 refuses to
+   * look, because both sightings came from the same source.
+   */
+  it('merges two urls from one source onto a single fingerprint', () => {
+    const { unique, duplicates } = dedupe([
+      { posting: posting({ canonicalUrl: 'https://acme.com/jobs/1' }), source: 'greenhouse:acme' },
+      {
+        posting: posting({
+          canonicalUrl: 'https://acme.com/jobs/2',
+          title: 'Software Engineer Intern - Req #9931',
+        }),
+        source: 'greenhouse:acme',
+      },
+    ]);
+    // Both titles reduce to the same key, which is what makes this stage 2 and not stage 3.
+    expect(fingerprint(posting())).toBe('acme|software engineer intern|boston');
+    expect(fingerprint(posting({ title: 'Software Engineer Intern - Req #9931' }))).toBe(
+      'acme|software engineer intern|boston',
+    );
+
+    expect(unique).toHaveLength(1);
+    expect(duplicates).toBe(1);
+    expect(unique[0]!.mergedBy).toContain('fingerprint');
   });
 
   it('catches near-duplicate titles across different sources', () => {

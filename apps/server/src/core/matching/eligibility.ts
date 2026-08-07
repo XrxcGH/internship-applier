@@ -392,13 +392,11 @@ export function enrollment({ profile, requirements, now }: RuleInput): RuleResul
   const reqs = requirements.filter((r) => r.kind === 'enrollment');
   if (reqs.length === 0) return na('enrollment', 'The posting does not require active enrolment.');
 
-  // A posting says this twice as a matter of course — "current students only" in the
-  // header, "recent graduates are also welcome to apply" in the small print — and reading
-  // whichever of them was extracted with the higher confidence let a coin toss filter out
-  // every graduate on a posting that had written them an invitation in so many words.
-  // Every clause is read, and the one saying enrolment is NOT needed settles it however
-  // tentatively it was worded, because a posting cannot both welcome graduates and
-  // disqualify them.
+  // Every clause is read. A posting says this twice as a matter of course — "current
+  // students only" in the header, "recent graduates are also welcome to apply" in the small
+  // print — and judging it on whichever of them was extracted with the higher confidence let
+  // a coin toss filter out every graduate on a posting that had written them an invitation
+  // in so many words.
   const parsed: Array<{ req: JobRequirement; required: boolean }> = [];
   for (const r of reqs) {
     const value = typedValue<{ required: boolean }>(r);
@@ -411,21 +409,38 @@ export function enrollment({ profile, requirements, now }: RuleInput): RuleResul
     });
   }
 
-  const welcomesGraduates = parsed.find((p) => !p.required);
-  if (welcomesGraduates) {
-    return pass('enrollment', 'Enrolment is not required.', {
-      requirementId: welcomesGraduates.req.id,
-    });
+  const demands = parsed.filter((p) => p.required);
+  const waivers = parsed.filter((p) => !p.required);
+
+  // Nothing here asks for enrolment at all, so there is no requirement to fall short of.
+  if (demands.length === 0) {
+    return pass('enrollment', 'Enrolment is not required.', { requirementId: waivers[0]!.req.id });
   }
 
-  // Whether enrolment is needed at all is settled first, because a posting that says it is
-  // not should pass however tentatively it said so. Only then does how firmly the posting
-  // asks for it matter: "preferably still enrolled" was read as a rule and filtered recent
-  // graduates out of postings that had merely expressed a wish.
-  const demands = parsed.map((p) => p.req);
-  const binding = demands.filter((r) => r.necessity === 'required');
+  // A waiver the posting states outright settles it, because a posting cannot both welcome
+  // graduates and disqualify them.
+  //
+  // Only one it states outright, though. How firmly a waiver is worded has to count for as
+  // much as how firmly the demand is, and it did not: a welcoming aside the extractor could
+  // barely read — `unclear`, confidence 0.3 — overturned a flat "must be currently enrolled"
+  // all by itself, so a graduate was told they were eligible on the weakest sentence in the
+  // posting while the posting's own rule said otherwise. The same principle already governs
+  // the other rules here: only `required` clauses are pooled into the education levels a
+  // posting wants, and only a `required` refusal to sponsor closes the work-authorization
+  // door. A softer waiver is handled at the bottom, where it can raise a question but not
+  // answer one.
+  const stated = waivers.find((p) => p.req.necessity === 'required');
+  if (stated) {
+    return pass('enrollment', 'Enrolment is not required.', { requirementId: stated.req.id });
+  }
+
+  // Only now does how firmly the posting asks for enrolment matter: "preferably still
+  // enrolled" was read as a rule and filtered recent graduates out of postings that had
+  // merely expressed a wish.
+  const demanded = demands.map((p) => p.req);
+  const binding = demanded.filter((r) => r.necessity === 'required');
   if (binding.length === 0) {
-    return softRequirement('enrollment', speaksFor(demands), 'Active enrolment')!;
+    return softRequirement('enrollment', speaksFor(demanded), 'Active enrolment')!;
   }
   const req = binding[0]!;
 
@@ -437,15 +452,33 @@ export function enrollment({ profile, requirements, now }: RuleInput): RuleResul
     });
   }
 
-  return grad >= toYearMonth(now)
-    ? pass('enrollment', `You are still enrolled (graduating ${grad}).`, {
-        requirementId: req.id,
-        profileRef: 'derived.expectedGraduation',
-      })
-    : fail('enrollment', `This posting requires active enrolment; you graduated ${grad}.`, {
-        requirementId: req.id,
-        profileRef: 'derived.expectedGraduation',
-      });
+  if (grad >= toYearMonth(now)) {
+    return pass('enrollment', `You are still enrolled (graduating ${grad}).`, {
+      requirementId: req.id,
+      profileRef: 'derived.expectedGraduation',
+    });
+  }
+
+  // The posting insists on enrolment, this user has already graduated, and somewhere else
+  // the posting hints that graduates may apply anyway. That is the posting contradicting
+  // itself on the one sentence that would filter this user out, and only they can say which
+  // of the two was written for them — the same answer the citizenship rule gives to a soft
+  // clause naming a nationality the user holds. Hiding the posting on the strict sentence
+  // alone would bury the one that invited them.
+  const hint = waivers[0];
+  if (hint) {
+    return unknown(
+      'enrollment',
+      `This posting requires active enrolment and you graduated ${grad}, but it also ` +
+        'suggests enrolment is not needed — check the posting.',
+      { requirementId: hint.req.id, profileRef: 'derived.expectedGraduation' },
+    );
+  }
+
+  return fail('enrollment', `This posting requires active enrolment; you graduated ${grad}.`, {
+    requirementId: req.id,
+    profileRef: 'derived.expectedGraduation',
+  });
 }
 
 interface WorkAuthValue {

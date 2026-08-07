@@ -24,8 +24,10 @@
     "db:generate": "npm run db:generate -w @ia/server",
     "db:migrate": "npm run db:migrate -w @ia/server",
     "hooks:install": "git config core.hooksPath .githooks",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run audit:copy",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run audit:copy && npm run guard:g4 && npm run audit:error-codes",
     "audit:copy": "tsx scripts/audit-copy.ts",
+    "guard:g4": "tsx scripts/g4-scan.ts",
+    "audit:error-codes": "tsx scripts/audit-error-codes.ts",
     "start": "npm run build && npm run start:server",
     "start:server": "npm run start -w @ia/server"
   },

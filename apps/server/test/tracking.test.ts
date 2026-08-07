@@ -290,7 +290,10 @@ describe('refusing to compute a rate from noise', () => {
   });
 
   it('carries the counts even when it refuses the rate', () => {
-    // The user should still see 2 of 5, just not "40%".
+    // Five submitted, and all five have heard back — a rejection is a response, so the
+    // three rejections count alongside the two interviews. The percentage is withheld
+    // only because five is under MIN_FOR_RATE, and the user should still see "5 of 5"
+    // rather than a blank where the counts were.
     const s = computeStats(
       [
         ...submitted(3, 'rejected'),

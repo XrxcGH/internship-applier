@@ -21,6 +21,7 @@ import {
   type FixtureServer,
 } from '@ia/fixtures';
 import { detectIntervention, openSession, type BrowserSession } from '../src/core/filling/browser';
+import { CONFIDENCE_FLOOR } from '../src/core/filling/classify';
 import { buildFormMap, frameKey } from '../src/core/filling/formMap';
 import { buildFillPlan, summarizePlan } from '../src/core/filling/plan';
 import {
@@ -963,6 +964,83 @@ describe('what the user is told when there was nothing to fill', () => {
     const said = describeFill({ results: [], filled: 0, mismatched: 0, failed: 0 });
     expect(said).toMatch(/nothing was typed/i);
     expect(said).not.toMatch(/all 0 fields filled/i);
+  });
+});
+
+/**
+ * The two guards in `buildFillPlan` that nothing on a real page can reach.
+ *
+ * Every other test in this file feeds the planner fields the scanner produced, and the
+ * scanner only ever emits a semantic it recognised at 0.8 to 0.99 with the redline pass
+ * already applied — so in `field.semantic === 'REDLINE' || red` the second disjunct never
+ * decides, and the confidence floor never has anything below it to refuse. Both exist for
+ * the classifier docs/07 § Classification specifies and this project has not built: an LLM
+ * fallback that returns its own semantic and its own confidence, neither of which has been
+ * anywhere near the redline table. These synthetic fields are what that stage would hand
+ * over on a bad day.
+ */
+describe('the plan re-checks what it was handed', () => {
+  const plan = (over: Partial<FormField>) =>
+    buildFillPlan({
+      fields: [fieldOf({ locator: '#x', control: 'text', ...over })],
+      profile: PROFILE,
+      answers: [],
+    });
+
+  it('refuses a redlined label however confidently it was classified', () => {
+    // A social security number arriving labelled as a first name, at 0.97. Trusting the
+    // handed-down semantic would type the applicant's given name into an SSN box on an
+    // employer's form.
+    const { actions, skips } = plan({
+      label: 'Social Security Number',
+      semantic: 'first_name',
+      confidence: 0.97,
+    });
+    expect(actions).toEqual([]);
+    expect(skips.map((s) => s.reason)).toEqual(['redline']);
+    expect(skips[0]!.note).toMatch(/type this yourself/i);
+  });
+
+  /**
+   * Every redline category, not only the identity number that prompted this. A guard that
+   * covered one category and missed its six siblings is how this class of hole reopens.
+   */
+  it.each([
+    ['government_id', 'Social Security Number'],
+    ['financial', 'Bank account number'],
+    ['credential', 'Password'],
+    ['attestation', 'I certify that the above is true'],
+    ['consent', 'I consent to a background check'],
+    ['eeo_demographic', 'Race / Ethnicity'],
+    ['ai_disclosure', 'Did you use AI to write this application?'],
+  ])('refuses a %s field the classifier called fillable', (_category, label) => {
+    const { actions, skips } = plan({ label, semantic: 'first_name', confidence: 0.99 });
+    expect(actions).toEqual([]);
+    expect(skips.map((s) => s.reason)).toEqual(['redline']);
+  });
+
+  it('leaves a field blank when the guess was below the confidence floor', () => {
+    // The profile HAS a phone number, so nothing but the floor can refuse this one.
+    const { actions, skips } = plan({
+      label: 'Some field',
+      semantic: 'phone',
+      confidence: 0.4,
+    });
+    expect(actions).toEqual([]);
+    expect(skips.map((s) => s.reason)).toEqual(['unknown']);
+    expect(skips[0]!.note).toMatch(/could not tell what this field is/i);
+  });
+
+  it('fills the same field once the guess reaches the floor', () => {
+    // Without this the test above would still pass if the planner had simply stopped
+    // filling phone numbers.
+    const { actions, skips } = plan({
+      label: 'Some field',
+      semantic: 'phone',
+      confidence: CONFIDENCE_FLOOR,
+    });
+    expect(skips).toEqual([]);
+    expect(actions.map((a) => a.value)).toEqual(['+1 555 0100']);
   });
 });
 

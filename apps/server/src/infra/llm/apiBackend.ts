@@ -4,6 +4,7 @@
  * Wraps the existing SDK client in the same `Backend` interface the CLI uses, so nothing
  * upstream has to know which one it is talking to.
  */
+import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { getClient, hasApiKey, MODELS, recordCall } from './client';
 import {
@@ -12,6 +13,45 @@ import {
   type GenerateRequest,
   type GenerateResult,
 } from './provider';
+
+/**
+ * The user turn, with any requested documents attached.
+ *
+ * `documents` names files on disk because that is the only form the CLI backend can use —
+ * it has no way to accept bytes, so it is granted Read on the file and opens it itself.
+ * This path has the opposite constraint: the API takes a base64 block and cannot read a
+ * path. Both halves have to exist for the seam to mean anything, and while this one did
+ * not, a request carrying a PDF reached the API with the field silently dropped and the
+ * model was asked to extract a resume it had never been shown.
+ *
+ * Only PDFs are sent as documents. Everything else is extracted to text before it gets
+ * here, and a format the API would reject is better refused than sent.
+ */
+async function userContent(req: GenerateRequest): Promise<string | ContentBlock[]> {
+  const pdfs = (req.documents ?? []).filter((f) => f.toLowerCase().endsWith('.pdf'));
+  if (pdfs.length === 0) return req.user;
+
+  const blocks: ContentBlock[] = [];
+  for (const file of pdfs) {
+    blocks.push({
+      type: 'document',
+      source: {
+        type: 'base64',
+        media_type: 'application/pdf',
+        data: (await readFile(file)).toString('base64'),
+      },
+    });
+  }
+  blocks.push({ type: 'text', text: req.user });
+  return blocks;
+}
+
+type ContentBlock =
+  | { type: 'text'; text: string }
+  | {
+      type: 'document';
+      source: { type: 'base64'; media_type: 'application/pdf'; data: string };
+    };
 
 /** Purposes map to model tiers per docs/02. */
 function modelFor(purpose: GenerateRequest['purpose']): string {
@@ -64,7 +104,7 @@ export const apiBackend: Backend = {
             },
           }
         : {}),
-      messages: [{ role: 'user' as const, content: req.user }],
+      messages: [{ role: 'user' as const, content: await userContent(req) }],
     });
 
     recordCall({

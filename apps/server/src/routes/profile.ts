@@ -1,6 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { CandidateProfile } from '@ia/shared';
-import { confirmProfile, getProfile, saveProfile } from '../core/profile/repository';
+import {
+  confirmProfile,
+  getProfile,
+  getProfileHeader,
+  saveProfile,
+} from '../core/profile/repository';
+import { dismissalRefusal } from '../core/profile/reviewFlags';
 
 export async function profileRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/profile', async (_req, reply) => {
@@ -25,7 +31,14 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
       });
     }
     // Confirmation is a separate, explicit action — a PUT can never confirm.
-    const existing = getProfile();
+    //
+    // Read through the header rather than the whole profile: only `confirmedAt` is wanted,
+    // and decrypting-and-parsing the stored row to get it made this route fail on exactly
+    // the rows it exists to repair. One field the schema will not take — a year-only
+    // graduation date, a link with no scheme — and the PUT carrying the correction threw on
+    // the way IN, before it had looked at the body, so the profile could be neither fixed
+    // nor replaced.
+    const existing = getProfileHeader();
     return saveProfile({ ...parsed.data, confirmedAt: existing?.confirmedAt ?? null });
   });
 
@@ -66,6 +79,17 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
     // never be cleared and the wizard could not be finished. A flag containing `%2F` was
     // quietly turned into `a/b`, matched nothing, and was left in place just as permanently.
     const target = req.params.path;
+
+    // A flag is dismissible only where there is nowhere to answer it. This endpoint used to
+    // drop whichever flag it was handed no matter what the field held, so a field with a
+    // control of its own could be marked reviewed while still empty — one call on
+    // `dateOfBirth` and G1 confirmed a profile with no date of birth in it. The wizard hides
+    // its button for those paths, but a rule that lives only in the client is a suggestion.
+    const refusal = dismissalRefusal(p, target);
+    if (refusal) {
+      return reply.code(409).send({ error: { code: 'ANSWER_REQUIRED', message: refusal } });
+    }
+
     return saveProfile({ ...p, needsReview: p.needsReview.filter((f) => f !== target) });
   });
 }

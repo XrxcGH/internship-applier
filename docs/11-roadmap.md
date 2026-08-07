@@ -159,7 +159,7 @@ schedule slips.
 | **StyleProfile** | Metric computation unit-tested against hand-measured samples — `styleProfile.test.ts` covers text segmentation, `computeStyleProfile`, and the adequacy check. **Not built:** the round-trip test that a draft targeting a profile lands back within tolerance. Nothing currently checks that the voice instructions the drafting prompt is given actually move the output toward the profile. |
 | **Form filling** | Playwright against `packages/fixtures` in CI (headless). Never against live employer forms in CI. **Not built:** recorded real-ATS HTML snapshots (PII-scrubbed) as regression fixtures for mapping/classification — see docs/07 § Testing. |
 | **Redlines** | A dedicated suite asserting no redlined field is ever written, across every fixture form. Release gate. |
-| **Submit gate** | An ESLint rule and a source scan over `filling/` for a submit-shaped click and the other routes to submission, plus a fixture assertion that the mock ATS recorded zero POSTs across the suite. Release gate. There is no runtime guard — docs/07 § The submit gate (G4) is the authority on which layers exist. |
+| **Submit gate** | An ESLint rule, a CI source scan, and a test that drives the CI scanner's own `scanSource` — all three over the whole of `apps/server/src` rather than `filling/` alone, because the browser session is reachable from a route handler and scoping to the filling module left the routes covered by nothing. They look for a submit-shaped click and the other routes to submission. Behind all three, a fixture assertion that the mock ATS recorded zero POSTs across the suite. Release gate. There is no runtime guard — docs/07 § The submit gate (G4) is the authority on which layers exist and where they still differ. |
 | **API contracts** | Shared Zod schemas mean a contract break is a typecheck failure. Integration tests cover each server-side invariant in doc 09. |
 | **E2E** | **Not built:** one full happy path against the fixture site — upload → confirm → discover (mocked) → match → approve → draft → review → fill → pre-submit, stopping short of submission by design. Every stage is covered on its own, and nothing yet runs them in sequence, so a break in the handoff between two of them is exactly the bug this suite would catch and the current tests would not. |
 
@@ -182,7 +182,7 @@ schedule slips.
 | Question | Decision | Consequence |
 | --- | --- | --- |
 | Build order | **M0 only, then reassess** | Skeleton is built; M1+ starts on explicit go-ahead. |
-| Submit behavior | **G4 as designed — the user clicks Submit in the browser** | No auto-submit path exists anywhere in the codebase. Enforced by an ESLint rule, a source-scan test, and a zero-POST fixture assertion. |
+| Submit behavior | **G4 as designed — the user clicks Submit in the browser** | No auto-submit path exists anywhere in the codebase. Enforced by an ESLint rule, a CI source scan, a test driving that same scanner over the server tree, and a zero-POST fixture assertion — the last of which is the only one that checks the outcome rather than the source text. |
 | Age | **18 or older** | Guardian mode is **deferred out of v1**. DOB is still collected (18+ requirements are common) and still encrypted; the minor-specific handling in doc 10 is not built. |
 | Market | **United States only** | Sources: USAJOBS, Adzuna-US, US ATS boards. Work-authorization rules built for US visa/sponsorship status and citizenship requirements. UK/EU adapters deferred. |
 

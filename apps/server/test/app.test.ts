@@ -7,6 +7,7 @@ import { HealthResponse } from '@ia/shared';
 import { buildApp, canonicalTarget } from '../src/app';
 import { config } from '../src/config';
 import { runMigrations } from '../src/infra/db/migrate';
+import { scanSource } from '../../../scripts/g4-scan';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverSrc = path.resolve(here, '../src');
@@ -227,65 +228,75 @@ describe('G4 — no auto-submit path exists', () => {
    * `form.submit()`, `requestSubmit()`, or pressing Enter, which submits a single-input
    * form in every browser.
    *
+   * TWO THINGS CHANGED HERE AND BOTH WERE HOLES.
+   *
+   * The scan reads the WHOLE of apps/server/src. It used to read only core/filling, which
+   * is eight of the seventy-one files under it — so the same `page.click('button[type=
+   * submit]')` this test exists to forbid would have passed unremarked in a route handler,
+   * in a browser helper, anywhere but the one directory. Nothing stops a submit path being
+   * written outside core/filling; only this filter stopped anyone noticing.
+   *
+   * And the patterns come from `scripts/g4-scan.ts` rather than from a second table kept
+   * here. The interface tells the user G4 is held by a test, a lint rule and a CI check,
+   * and two of those three once had a hole the third did not: the copy that lived in this
+   * file could not see `page.keyboard.press('Enter')` or a typed newline. One table cannot
+   * drift from the other, and the shared one self-tests against the submit paths a person
+   * would actually write before it is allowed to report a clean run.
+   *
    * The behavioural check is stronger than any of this and lives in fill.test.ts: the
    * fixture counts POSTs, so the suite asserts no form was submitted however it happened.
    */
-  const fillingSources = (): Array<{ file: string; src: string }> =>
-    walk(serverSrc)
-      .filter((f) => /[/\\]core[/\\]filling[/\\]/.test(f))
-      .map((f) => ({ file: path.relative(serverSrc, f), src: readFileSync(f, 'utf8') }));
+  const sourcesUnder = (dir: string): Array<{ file: string; src: string }> =>
+    walk(dir).map((f) => ({
+      file: path.relative(serverSrc, f).replace(/\\/g, '/'),
+      src: readFileSync(f, 'utf8'),
+    }));
 
-  const BANNED: Array<[RegExp, string]> = [
-    [/\.click\s*\([^)]*submit/i, 'clicks something named submit'],
-    [/submit[A-Za-z]*\s*\.\s*click\s*\(/i, 'clicks a submit locator'],
-    [/\.\s*requestSubmit\s*\(/, 'calls requestSubmit()'],
-    [/\bform[A-Za-z]*\s*\.\s*submit\s*\(/i, 'calls form.submit()'],
-    // Any receiver, not only an identifier starting with "form". The pattern above misses
-    // document.querySelector('form').submit() and page.evaluate((f) => f.submit()), both
-    // of which submit an application just as thoroughly.
-    [/\.\s*submit\s*\(\s*\)/, 'calls .submit() on something'],
-    [/new\s+SubmitEvent/, 'constructs a SubmitEvent'],
-    [/\.press\s*\(\s*['"`]Enter/i, 'presses Enter, which submits a single-input form'],
-    // Only a selector that SELECTS a submit control. The lookbehind is load-bearing:
-    // `input:not([type=submit])` is the scanner deliberately excluding them, and a guard
-    // that flagged it would be arguing for its own removal.
-    [/(?<!:not\()\[type\s*=\s*['"]?submit/i, 'targets a submit control by type'],
-  ];
+  it('contains no path to submitting a form, anywhere on the server', () => {
+    const files = sourcesUnder(serverSrc);
+    // A filter that quietly matched nothing would make this pass by scanning an empty list.
+    expect(files.length).toBeGreaterThan(20);
 
-  it('contains no path to submitting a form', () => {
-    const offenders: string[] = [];
-    for (const { file, src } of fillingSources()) {
-      for (const [pattern, why] of BANNED) {
-        if (pattern.test(src)) offenders.push(`${file} ${why}`);
-      }
-
-      // Catches the chained form the whole-file patterns miss:
-      //   page.locator('#submit-application').click()
-      // where "submit" sits in the selector rather than in the click call. Checked per
-      // line so an exclusion selector elsewhere in the file cannot trigger it.
-      //
-      // A line that is nothing but a comment is skipped, because it cannot click anything.
-      // The docblock at the top of fill.ts explains G4 by saying the fixture proves no form
-      // was submitted "rather than merely that no `.click()` was written" — a sentence about
-      // this very rule, which the rule then reported as a violation. A release gate that
-      // fails on prose describing it is a gate people start editing around. Lines that mix
-      // code and a trailing comment are still checked; only whole-comment lines are exempt.
-      src.split('\n').forEach((line, i) => {
-        if (/^\s*(?:\/\/|\/?\*)/.test(line)) return;
-        const hasClick = /\.click\s*\(/.test(line);
-        const namesSubmit = /submit/i.test(line) && !/:not\(\[type\s*=\s*['"]?submit/i.test(line);
-        if (hasClick && namesSubmit) {
-          offenders.push(`${file}:${String(i + 1)} clicks something named submit`);
-        }
-      });
-    }
-    expect(offenders).toEqual([]);
+    const offences = files.flatMap(({ file, src }) => scanSource(file, src));
+    expect(offences.map((o) => `${o.file}:${String(o.line)} ${o.why}\n    ${o.text}`)).toEqual([]);
   });
 
   it('still guards something — the filling module exists and does click things', () => {
     // Without this, deleting core/filling entirely would make the check above pass.
-    const sources = fillingSources();
+    const sources = sourcesUnder(path.join(serverSrc, 'core', 'filling'));
     expect(sources.length).toBeGreaterThan(0);
     expect(sources.some(({ src }) => /\.click\s*\(/.test(src))).toBe(true);
+  });
+
+  /**
+   * The scanner is the gate now, so a scanner that matches nothing would report every file
+   * as clean and read exactly like a passing release. `scripts/g4-scan.ts` self-tests before
+   * it prints anything; this is the same question asked from inside the suite, so the gate
+   * cannot go blind without a red test.
+   */
+  it('would catch a submit path if one were written', () => {
+    for (const sample of [
+      "await page.click('button[type=submit]');",
+      "await page.locator('#submit-application').click();",
+      'await submitButton.click();',
+      "await page.keyboard.press('Enter');",
+      'form.requestSubmit();',
+      'await page.evaluate((f) => f.submit());',
+      'await loc.type("done\\n");',
+    ]) {
+      expect(scanSource('sample.ts', sample), sample).not.toEqual([]);
+    }
+
+    // And it must not fire on the ordinary clicks and keystrokes the filler needs, or it
+    // is a gate somebody deletes rather than works around.
+    for (const sample of [
+      'await loc.click();',
+      "await loc.pressSequentially('Ada Lovelace');",
+      "await page.keyboard.insertText('\\n');",
+      "const SELECTORS = 'input:not([type=hidden]):not([type=submit])';",
+      ' * merely that no `.click()` was written. Not clicking submit is',
+    ]) {
+      expect(scanSource('sample.ts', sample), sample).toEqual([]);
+    }
   });
 });

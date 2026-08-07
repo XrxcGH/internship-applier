@@ -37,6 +37,16 @@ export interface DraftRequest {
   maxWords?: number;
   /** Title, company, and description of the posting, for relevance. */
   postingContext?: string;
+  /**
+   * The employer's name and the role title, as bare names. FactGuard needs them separately
+   * from `postingContext`: they are nowhere on the profile, so without them it reads the
+   * company the answer is addressed to as an invention. "What draws me to Stripe is the
+   * documentation" then came back blocking, the draft burned its one revision round on a
+   * sentence that was never wrong, and whatever that revision traded away to lose the
+   * company name was what the user read at G3. Mentioning is all this buys — "I interned
+   * at Stripe" is still red, by `affiliationFrame` in factGuard.ts.
+   */
+  contextNames?: string[];
   /** The measured voice. Absent means no samples yet — see `neutralVoiceNotice`. */
   style?: StyleProfile;
   /** The user's own writing, verbatim, as few-shot examples. */
@@ -245,8 +255,10 @@ export async function draftAnswer(req: DraftRequest): Promise<DraftResult> {
     baselineSentenceStdev: req.style?.sentenceLengthStdev,
   };
 
+  const contextNames = req.contextNames ?? [];
+
   let text = await generate(system, user, maxTokens);
-  let guard = guardDraft(text, evidence);
+  let guard = guardDraft(text, evidence, contextNames);
   let tells = findTells(text, scrub);
   let revised = false;
 
@@ -267,7 +279,7 @@ export async function draftAnswer(req: DraftRequest): Promise<DraftResult> {
     // Only keep the revision if it is actually better. A revision that trades two
     // unsupported claims for three is not progress.
     if (revisedText.length > 0) {
-      const revisedGuard = guardDraft(revisedText, evidence);
+      const revisedGuard = guardDraft(revisedText, evidence, contextNames);
       const revisedTells = findTells(revisedText, scrub);
       const better =
         revisedGuard.blocking.length < guard.blocking.length ||

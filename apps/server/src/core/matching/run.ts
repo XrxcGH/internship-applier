@@ -9,6 +9,7 @@ import { ulid } from 'ulid';
 import type { ConfirmedProfile, JobRequirement } from '@ia/shared';
 import { db, schema } from '../../infra/db/client';
 import { logger } from '../../infra/logger';
+import { deriveProfile } from '../ingestion/deriveFields';
 import { getProfile } from '../profile/repository';
 import { evaluateEligibility, type PostingFacts } from './eligibility';
 import { extractRequirements } from './extractRequirements';
@@ -91,8 +92,19 @@ export async function runMatching(
       code: 'PROFILE_NOT_CONFIRMED',
     });
   }
-  const confirmed = profile as ConfirmedProfile;
   const now = opts.now ?? new Date();
+
+  /**
+   * `derived` is stored as it was computed on the day the profile was last saved, and the
+   * parts of it that depend on a clock keep drifting after that. Scoring reads
+   * `derived.seniorityBand`, which flips to `new_grad` the month the user's expected
+   * graduation passes — so a student who saved their profile in March and graduated in May
+   * was still scored as an `entry_intern` in August, which drops the seniority component of
+   * every new-grad posting from 1.0 to 0.25, and the breakdown note told them so in as many
+   * words: "new_grad vs your entry_intern band". Recomputing against the same `now` the
+   * rules are given means every half of every comparison in this run reads the same clock.
+   */
+  const confirmed = { ...profile, derived: deriveProfile(profile, now) } as ConfirmedProfile;
 
   /**
    * Every posting, unless a caller explicitly asks for fewer.

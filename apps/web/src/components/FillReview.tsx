@@ -7,7 +7,9 @@ import {
   startFill,
   type FillFieldResult,
   type FillRunView,
+  type SkippedField,
 } from '../lib/api';
+import { samePage, skipReason } from '../lib/fill';
 import { Badge, Button, Empty, Notice } from './Controls';
 
 /**
@@ -92,6 +94,7 @@ export function FillReview({
   canFill,
   blockedReason,
   submittedAt,
+  skippedFields,
   onChanged,
 }: {
   applicationId: string;
@@ -100,6 +103,11 @@ export function FillReview({
   blockedReason: string | null;
   /** When the user told us they submitted it, as recorded on the server. Null until they do. */
   submittedAt: string | null;
+  /**
+   * What the last run left for the user, read back from the application rather than from
+   * the run. Empty for an application that has never been filled.
+   */
+  skippedFields: SkippedField[];
   onChanged: () => void;
 }) {
   const [run, setRun] = useState<FillRunView | null>(null);
@@ -253,6 +261,64 @@ export function FillReview({
       {error && <Notice tone="redline">{error}</Notice>}
 
       {!checked && <p className="text-faint u-data">Checking for an open browser…</p>}
+
+      {/* Which page this report is actually about.
+          The run opens the application's saved link, but a sign-in redirect, a wizard step
+          or a link that has gone stale can leave the browser somewhere else entirely, and
+          everything below — the counts, the field list, the gate — describes the page that
+          was read, not the one that was asked for. It sits up here rather than beside
+          either link because it is true of every card underneath it, and the one card it
+          matters most on, the G4 gate, has no link of its own. */}
+      {run?.pageUrl && !samePage(run.pageUrl, applyUrl) && (
+        <div className="u-tint-caution rounded px-5 py-4">
+          <p className="u-eyebrow mb-1.5">Read from a different address</p>
+          <p className="text-dim text-[0.9375rem] leading-snug">
+            The browser ended up somewhere other than the link saved with this application.
+            Everything below is about the page it read:
+          </p>
+          <a
+            href={run.pageUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="u-data text-dim hover:text-ink mt-1.5 block break-all underline underline-offset-4"
+          >
+            {run.pageUrl}
+          </a>
+        </div>
+      )}
+
+      {/* What the last run left for the user, after that run is gone.
+          The list on the review card below belongs to the run, and the run is discarded
+          when the browser closes, when a second one starts and when the server stops —
+          so someone who filled a form on Monday, closed the browser and came back on
+          Tuesday had nothing anywhere telling them which nine boxes still needed their
+          own typing. This copy is read back from the application, so it survives all
+          three. The card that starts a fresh run stays underneath it: this is a record of
+          what happened, not a reason to take the way forward away. */}
+      {checked && !run && skippedFields.length > 0 && (
+        <div className="u-card px-5 py-5">
+          <p className="u-eyebrow mb-2">Left for you by the last fill</p>
+          <p className="text-dim u-prose mb-3 text-[0.9375rem]">
+            The last run did not complete these. Unless you have since typed them into the form
+            yourself, they still need you.
+          </p>
+          <ul className="divide-rule/60 divide-y">
+            {skippedFields.map((f, i) => (
+              <li key={i} className="flex flex-wrap items-start gap-4 py-2.5">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[1rem] leading-snug">{f.label}</span>
+                  <span className="text-dim mt-1 block text-[0.9375rem] leading-snug">
+                    {skipReason(f)}
+                  </span>
+                </span>
+                <Badge tone={f.reason === 'redline' ? 'redline' : 'caution'}>
+                  {f.reason === 'redline' ? 'never auto-filled' : 'left for you'}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {checked && !run && submitted !== null && (
         <div className="u-tint-verified rounded px-5 py-5">

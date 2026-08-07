@@ -305,6 +305,32 @@ const STDIN_DIRECTIVE =
  */
 const NO_TOOLS = 'none';
 
+/**
+ * The schema, in the dialect `--json-schema` will actually take.
+ *
+ * Zod stamps `"$schema": "https://json-schema.org/draft/2020-12/schema"` on everything it
+ * emits, and the CLI's validator has no such meta-schema registered — it rejects the whole
+ * argument before the request is even made, with
+ *
+ *     Error: --json-schema is not a valid JSON Schema:
+ *     no schema with key or ref "https://json-schema.org/draft/2020-12/schema"
+ *
+ * The same schema with that one key removed is accepted. Nothing else about it changes, and
+ * the API path keeps the key because the API wants it, so this strips rather than rewrites.
+ * Recursive, because a nested `$defs` entry can carry its own.
+ */
+function forCli(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(forCli);
+  if (schema === null || typeof schema !== 'object') return schema;
+
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (k === '$schema') continue;
+    out[k] = forCli(v);
+  }
+  return out;
+}
+
 export const claudeCliBackend: Backend = {
   kind: 'claude_cli',
 
@@ -368,7 +394,7 @@ export const claudeCliBackend: Backend = {
       }
 
       if (req.schema) {
-        args.push('--json-schema', JSON.stringify(req.schema.jsonSchema));
+        args.push('--json-schema', JSON.stringify(forCli(req.schema.jsonSchema)));
       }
 
       const stdin = wantsDocuments

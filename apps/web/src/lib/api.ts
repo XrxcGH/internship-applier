@@ -199,6 +199,20 @@ export interface ModelAccess {
   limitations: string[];
 }
 
+/**
+ * A field the last fill run did not fill, as stored on the application itself.
+ *
+ * The live version of this list belongs to the fill run, and the run is gone the moment
+ * the browser closes, a second run starts or the server restarts. This copy is read back
+ * from the application, so what the user still has to type by hand outlives all three.
+ */
+export interface SkippedField {
+  label: string;
+  reason: 'redline' | 'unclassified' | 'no_match' | 'failed';
+  /** Which redline it is, when `reason` is `redline`. Absent otherwise. */
+  category?: string | null;
+}
+
 export interface ApplicationDetail {
   id: string;
   company: string;
@@ -206,6 +220,8 @@ export interface ApplicationDetail {
   description: string;
   applyUrl: string;
   answers: Answer[];
+  /** Empty for an application that has never been filled. */
+  skippedFields: SkippedField[];
   canDraft: boolean;
   modelAccess: ModelAccess;
 }
@@ -268,7 +284,14 @@ export interface FillFieldResult {
 export interface FillRunView {
   applicationId: string;
   state: 'opening' | 'reading' | 'awaiting_user' | 'filling' | 'done' | 'failed';
+  /** The address the run was asked to open — the application's own apply URL. */
   url: string;
+  /**
+   * The address the form was actually read from, which is not always the one above: a
+   * sign-in redirect, a wizard step or a stale link can put the browser somewhere else.
+   * Null until the page has been read.
+   */
+  pageUrl: string | null;
   message: string;
   startedAt: string;
   intervention: { reason: 'login' | 'captcha' | 'unknown_field'; detail: string } | null;

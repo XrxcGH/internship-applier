@@ -13,7 +13,12 @@ import { existsSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulid';
-import type { ApplicationAnswer, ApplicationStatus, ConfirmedProfile } from '@ia/shared';
+import type {
+  ApiErrorCode,
+  ApplicationAnswer,
+  ApplicationStatus,
+  ConfirmedProfile,
+} from '@ia/shared';
 import { MarkSubmittedRequest } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
 import { decryptField } from '../infra/crypto/fieldCrypto';
@@ -234,6 +239,27 @@ function skipReason(r: FieldResult): 'redline' | 'unclassified' | 'no_match' | '
   return isActionable(r.field) ? 'no_match' : 'unclassified';
 }
 
+/**
+ * The refusals `continueRun` throws about the run itself, rather than about the page.
+ *
+ * Everything out of a continue used to come back as a 502 FILL_FAILED — "the site did
+ * something we could not handle" — including the two cases that are nothing of the sort:
+ * there is no open run, or one is already typing. A client told 502 retries, which for the
+ * second of those means a second continue racing the first over the same keyboard, and the
+ * user reads a bad-gateway message about a browser that is working fine. Both are conflicts,
+ * the same way NO_RUN below already is, and both are worth naming so a caller can tell
+ * "wait" from "something broke".
+ *
+ * Matched on the message prefix because these are plain `Error`s from core/filling/run.ts.
+ * Any new refusal added there that describes the run rather than the page belongs in this
+ * list too — typed as `ApiErrorCode` so adding one without declaring it fails the build
+ * rather than waiting for scripts/audit-error-codes.ts to notice.
+ */
+const RUN_CONFLICTS: Array<{ startsWith: string; code: ApiErrorCode }> = [
+  { startsWith: 'This application is already being filled', code: 'FILL_IN_PROGRESS' },
+  { startsWith: 'No open fill run for this application', code: 'NO_RUN' },
+];
+
 function refuse(
   reply: { code: (n: number) => { send: (b: unknown) => unknown } },
   r: Extract<LoadResult, { ok: false }>,
@@ -362,13 +388,17 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
 
         return serializeRun(run);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const conflict = RUN_CONFLICTS.find((c) => message.startsWith(c.startsWith));
+        if (conflict) {
+          logger.info(
+            { applicationId: req.params.id, code: conflict.code },
+            'fill continue refused: the run is not in a state that can be continued',
+          );
+          return reply.code(409).send({ error: { code: conflict.code, message } });
+        }
         logger.error({ err, applicationId: req.params.id }, 'fill continue failed');
-        return reply.code(502).send({
-          error: {
-            code: 'FILL_FAILED',
-            message: err instanceof Error ? err.message : String(err),
-          },
-        });
+        return reply.code(502).send({ error: { code: 'FILL_FAILED', message } });
       }
     },
   );

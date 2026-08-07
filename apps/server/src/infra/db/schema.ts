@@ -59,6 +59,21 @@ export const writingSample = sqliteTable('writing_sample', {
   createdAt: text('created_at').notNull().default(now),
 });
 
+/**
+ * Not encrypted, unlike `writing_sample.content` it is derived from, and deliberately so.
+ *
+ * The encrypted columns in this file hold things the user wrote or things that identify
+ * them. This row holds neither: `metrics` is counts and averages (sentence length, how often
+ * a semicolon appears per hundred words) plus two lists drawn from fixed vocabularies — the
+ * transition words from the curated list in core/writing/styleProfile.ts, and up to eight
+ * single words people start sentences with. `qualitative_notes` is the sentences
+ * `describeStyle` builds out of those numbers. No sample text is quoted or reconstructible
+ * from any of it.
+ *
+ * If a future measurement does quote the source — an example sentence, a characteristic
+ * phrase — this column has to be encrypted with the row id as its additional data, the same
+ * way the sample itself is, and the existing plaintext rows migrated.
+ */
 export const styleProfile = sqliteTable('style_profile', {
   id: text('id').primaryKey(),
   metrics: text('metrics', { mode: 'json' }).notNull(),
