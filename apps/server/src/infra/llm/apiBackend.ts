@@ -24,15 +24,20 @@ import {
  * not, a request carrying a PDF reached the API with the field silently dropped and the
  * model was asked to extract a resume it had never been shown.
  *
- * Only PDFs are sent as documents. Everything else is extracted to text before it gets
- * here, and a format the API would reject is better refused than sent.
+ * Every path in `req.documents` is a PDF by the seam's contract (see provider.ts) — only
+ * PDFs are attached; everything else is extracted to text upstream. So ATTACH THEM ALL,
+ * matching the CLI backend, which passes every path through by name. The earlier version
+ * filtered by a `.pdf` filename suffix instead, but the caller selects a document by its
+ * MIME type and the stored name carries no extension when the upload had none — so a real
+ * PDF named `resume` was silently dropped here and the model was asked to extract a file
+ * it never saw, exactly the failure this seam existed to end, and only on the API path.
  */
 async function userContent(req: GenerateRequest): Promise<string | ContentBlock[]> {
-  const pdfs = (req.documents ?? []).filter((f) => f.toLowerCase().endsWith('.pdf'));
-  if (pdfs.length === 0) return req.user;
+  const documents = req.documents ?? [];
+  if (documents.length === 0) return req.user;
 
   const blocks: ContentBlock[] = [];
-  for (const file of pdfs) {
+  for (const file of documents) {
     blocks.push({
       type: 'document',
       source: {
@@ -96,7 +101,11 @@ export const apiBackend: Backend = {
       ...(req.schema
         ? {
             output_config: {
-              effort: 'medium' as const,
+              // Resume extraction runs at 'high': it is a one-shot read of a whole document
+              // where a missed section is a lost job, and it ran at 'high' before extraction
+              // moved onto this seam. The move hardcoded 'medium' for every schema request,
+              // silently downgrading it. Bulk, cheaper purposes stay at 'medium'.
+              effort: req.purpose === 'resume_extraction' ? ('high' as const) : ('medium' as const),
               format: {
                 type: 'json_schema' as const,
                 schema: req.schema.jsonSchema,

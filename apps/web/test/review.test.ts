@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ANSWERED_IN_WIZARD, isAnswered, isDismissible } from '../src/lib/review';
+import {
+  ANSWERED_IN_WIZARD,
+  isAnswered,
+  isDismissible,
+  OPTIONAL_WIZARD_FIELDS,
+} from '../src/lib/review';
 
 /**
  * G1 clears a review flag only when the field it names actually holds something. These
@@ -74,5 +79,17 @@ describe('isDismissible', () => {
     // button there is no way past the gate at all.
     expect(isDismissible('experience.0.startDate')).toBe(true);
     expect(isDismissible('education.2.endDate')).toBe(true);
+  });
+
+  it('leaves an optional wizard control dismissible, since its blank is a real answer', () => {
+    // Pronouns has a control on the confirm step, but a person with none to give answers by
+    // leaving it blank. Forcing it into ANSWERED_IN_WIZARD would drop the button and trap
+    // them behind a flag they could never make non-empty, so it stays dismissible — and the
+    // two lists must never both claim it.
+    for (const path of OPTIONAL_WIZARD_FIELDS) {
+      expect(isDismissible(path)).toBe(true);
+      expect(ANSWERED_IN_WIZARD[path]).toBeUndefined();
+    }
+    expect(OPTIONAL_WIZARD_FIELDS.has('pronouns')).toBe(true);
   });
 });

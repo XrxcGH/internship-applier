@@ -127,12 +127,18 @@ export async function runDiscovery(
         for (const p of result.postings) {
           collected.push({ posting: p, source: `${target.source}:${target.board}` });
         }
+        // How many are new is not knowable here: nothing is compared against the stored
+        // postings until persist() runs after every source has been fetched. Sending 0
+        // would read on a live counter as "found these, none new" — indistinguishable from
+        // a source that genuinely turned up nothing unseen — and then jump to the real total
+        // at discovery.done. null says "not counted yet"; the true per-source totals arrive
+        // on discovery.done.
         publish({
           type: 'discovery.progress',
           runId,
           source: `${target.source}:${target.board}`,
           found: result.postings.length,
-          new: 0,
+          new: null,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

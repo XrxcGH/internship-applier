@@ -153,6 +153,26 @@ function denialPatterns(word: string): RegExp[] {
 const REMOTE_DENIED = denialPatterns('remote');
 const HYBRID_DENIED = denialPatterns('hybrid');
 
+/**
+ * A remote offer that is fenced to where the APPLICANT may live.
+ *
+ * The test used to be `/(only|located in|based in)/` run over the whole description, which is
+ * a rule about words appearing, not about who they are predicated on. "based in" and "located
+ * in" are how a posting states its own headquarters — "fully remote; our company is based in
+ * Austin" — and a bare "only" turns up in "apply only through our portal"; each one tagged a
+ * genuinely unrestricted remote role as geo-restricted, so eligibility dropped its clean pass
+ * to "unknown" and the queue badge asserted a restriction the posting never made. A fence is a
+ * requirement placed on the reader — "must reside/live in", "residents of", "open only to" —
+ * so only those applicant-facing shapes count, wherever they sit in the text.
+ */
+const REMOTE_GEO_RESTRICTED =
+  /\bmust (?:reside|live|be (?:located|based|a resident))\b|\bresidents? of\b|\bresidents? only\b|\b(?:open|available|eligible) only (?:to|in|for)\b|\bonly (?:open|available|eligible) (?:to|in|for)\b|\b(?:located|based) in\b[^.;!?]{0,40}\bonly\b/i;
+// The one shape this deliberately does NOT catch is a bare "<place> only" — "Remote,
+// California only" — because recognising an arbitrary place name is a different problem, and
+// the previous over-broad `\bonly\b` matched "applicants only" and "full-time only" as
+// geographic fences. This only tags the badge; no eligibility rule reads the geo-restriction,
+// so the cost of the miss is a slightly less specific label, never a filtered-out posting.
+
 /** A remote claim the posting is making about the job it is advertising. */
 const REMOTE_EXPLICIT =
   /\b(?:fully|100%|entirely|completely|permanently|purely|totally)[- ]remote\b|\bremote[- ](?:first|only)\b|\bwork from home\b|\bwfh\b/i;
@@ -241,9 +261,7 @@ export function parseWorkArrangement(text: string): WorkArrangement | null {
   if (remoteClaimed && (hybridClaimed || onsiteClaimed)) return null;
 
   if (remoteClaimed) {
-    return /\b(only|must reside|residents of|located in|based in)\b/i.test(text)
-      ? 'remote_geo_restricted'
-      : 'remote';
+    return REMOTE_GEO_RESTRICTED.test(text) ? 'remote_geo_restricted' : 'remote';
   }
 
   // Claims first, in full, before any bare mention is consulted. Ranking the mention above
@@ -282,6 +300,9 @@ const DAYS_A_WEEK = /\b(\d)\s*(?:days?|x)\s*(?:[a-z-]+\s+){0,4}?(?:per|a|each|\/
 /** Where the work happens, written the four ways postings write it. */
 const ONSITE_WORD = /\b(?:on-?site|in[- ]person|in(?:\s+the)?\s+office|in-office)\b/i;
 
+/** The count is remote days, not onsite ones, when its own words say from-home. */
+const REMOTE_WORD = /\b(?:remote|remotely|from home|work from home|wfh)\b/i;
+
 /**
  * How many days a week the role is onsite.
  *
@@ -309,6 +330,12 @@ export function parseHybridDays(text: string): number | null {
         .split(/[.;!?\n]/)
         .pop() ?? '';
     const after = text.slice(end, end + 40).split(/[.;!?\n]/)[0] ?? '';
+    // Widening the gap between the count and "per week" to {0,4} let "2 days working from home
+    // per week" match, and with "in the office" sitting in the same clause the onsite test
+    // below passed on it — so two REMOTE days were recorded as the onsite count and a role
+    // that is onsite three days read as onsite two, the flattering direction the old {0,2}
+    // correctly declined. When the count's own span names remote, it is not an onsite count.
+    if (REMOTE_WORD.test(m[0])) continue;
     if (!ONSITE_WORD.test(m[0]) && !ONSITE_WORD.test(before) && !ONSITE_WORD.test(after)) continue;
 
     const n = Number(m[1]);
@@ -399,10 +426,18 @@ function spans(text: string, re: RegExp, toWeeks: (avg: number) => number): Span
 }
 
 export function parseDurationWeeks(text: string): number | null {
+  // A figure whose only nearby context is a NOT_TERM word scored -1, and the sort below has
+  // no sign check — so when a posting's sole span is its PTO, notice period or reply window
+  // ("You will hear back within 2 weeks."), that span won the sort and was stored as the job's
+  // length. The clause has already said this number is something other than the term; dropping
+  // every negative span keeps that "the parsers say null rather than guess" promise instead of
+  // recording a length the text explicitly denies.
   const best = [
     ...spans(text, WEEKS_RE, (avg) => Math.round(avg)),
     ...spans(text, MONTHS_RE, (avg) => Math.round(avg * 4.345)),
-  ].sort((x, y) => y.score - x.score || x.at - y.at)[0];
+  ]
+    .filter((s) => s.score >= 0)
+    .sort((x, y) => y.score - x.score || x.at - y.at)[0];
 
   return best?.value ?? null;
 }
@@ -676,11 +711,19 @@ const REFERENCE_NOT_REFEREE: OtherSense = {
  * On finance, agency and consulting postings the portfolio belongs to the firm: "our portfolio
  * companies", "the client portfolio you will support", "portfolio manager". A design intern is
  * asked for a portfolio; an analyst reading about one is not.
+ *
+ * The "of ..." release used to fire on `of (our|their|its|the)` with nothing after it, which
+ * is exactly how an applicant is asked for their own work in the third person: "a portfolio of
+ * their work", "a portfolio of the work you are proud of" — the commonest genuine phrasing of
+ * the demand. That swallowed the ask and the user was never warned a portfolio was required. A
+ * firm noun has to follow, so "of our clients/funds" still reads as the firm's holdings while
+ * "of their/the work" stays the applicant's.
  */
 const PORTFOLIO_NOT_APPLICANTS: OtherSense = {
   before:
     /\b(?:investment|investments|client|clients|customer|product|products|loan|credit|equity|asset|assets|brand|brands|stock|fund|funds|company|our|their|its)\s+$/,
-  after: /^\s*(?:compan(?:y|ies)|managers?|management|analysts?|of\s+(?:our|their|its|the)\b)/,
+  after:
+    /^\s*(?:compan(?:y|ies)|managers?|management|analysts?|of\s+(?:our|their|its|the)\s+(?:clients?|companies|compan(?:y|ies)|investments?|funds?|holdings?|assets?|borrowers?|startups?|businesses|properties))/,
 };
 
 /** A transcript is an academic record here. It is also what a meeting, a call or a video

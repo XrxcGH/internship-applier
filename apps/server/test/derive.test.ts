@@ -230,6 +230,49 @@ describe('turning an extraction into a profile the schema accepts', () => {
     }
   });
 
+  it('flags a stated GPA it cannot store rather than dropping the number', () => {
+    // The profile shape holds a value+scale pair, so a figure that is not that pair — a
+    // transcript printing only "4.321 weighted", or a number with no scale — cannot be
+    // stored. Dropping it in silence left a true "4.32 weighted GPA" sentence with nothing
+    // on the profile to match, and it came back red at G3. Each of these must be flagged so
+    // the user completes the missing half at G1.
+    function ed(over: Partial<ResumeExtraction['education'][number]>) {
+      return {
+        institution: 'Sample High',
+        level: 'high_school' as const,
+        fieldOfStudy: null,
+        startDate: null,
+        endDate: null,
+        gpaValue: null,
+        gpaScale: null,
+        gpaWeighted: null,
+        coursework: [],
+        honors: [],
+        ...over,
+      };
+    }
+
+    for (const partial of [
+      { gpaValue: null, gpaScale: 4, gpaWeighted: 4.321 }, // weighted only, with a scale
+      { gpaValue: null, gpaScale: null, gpaWeighted: 3.7 }, // weighted only, no scale
+      { gpaValue: 3.9, gpaScale: null, gpaWeighted: null }, // a number with no scale
+    ]) {
+      const d = toDraftProfile(extraction({ education: [ed(partial)] }), NOW);
+      expect(d.education[0]?.gpa, JSON.stringify(partial)).toBeUndefined();
+      expect(d.needsReview, JSON.stringify(partial)).toContain('education.0.gpa');
+      expect(CandidateProfile.safeParse(d).success, JSON.stringify(partial)).toBe(true);
+    }
+
+    // A complete pair is kept and must NOT be flagged — the guard only fires on a figure
+    // that could not be stored.
+    const kept = toDraftProfile(
+      extraction({ education: [ed({ gpaValue: 3.9, gpaScale: 4, gpaWeighted: 4.3 })] }),
+      NOW,
+    );
+    expect(kept.education[0]?.gpa).toEqual({ value: 3.9, scale: 4, weighted: 4.3 });
+    expect(kept.needsReview).not.toContain('education.0.gpa');
+  });
+
   it('repairs a project URL the same way it repairs a profile link', () => {
     const d = toDraftProfile(
       extraction({

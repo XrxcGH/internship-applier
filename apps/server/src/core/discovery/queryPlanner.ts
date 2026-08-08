@@ -75,7 +75,7 @@ const ROLE_TAXONOMY: Record<string, string[]> = {
 };
 
 /**
- * Does a taxonomy term actually appear in the corpus?
+ * Every place a taxonomy term appears in the corpus, as [start, end) spans.
  *
  * A bare `corpus.includes(t)` is what this used to be, and the short terms made a mockery
  * of the curated list that is supposed to stop a bad inference from sending forty queries
@@ -86,37 +86,88 @@ const ROLE_TAXONOMY: Record<string, string[]> = {
  * Short terms (three characters or fewer) must be whole words — they are acronyms, and an
  * acronym embedded in a longer word is a different word. Longer terms need only start at
  * a word boundary, because several entries are deliberate stems: "biolog" is meant to
- * catch "biological", "prototyp" to catch "prototyping".
+ * catch "biological", "prototyp" to catch "prototyping" — EXCEPT in `stems: false` text,
+ * where an employer name that merely begins with a stem ("Brandeis" under the "brand" stem)
+ * must not mint a family it has no other evidence for.
  */
-function termAppears(corpus: string, term: string): boolean {
+function termSpans(corpus: string, term: string, stems: boolean): Array<[number, number]> {
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = term.length <= 3 ? `\\b${escaped}\\b` : `\\b${escaped}`;
-  return new RegExp(pattern, 'i').test(corpus);
+  const pattern = stems && term.length > 3 ? `\\b${escaped}` : `\\b${escaped}\\b`;
+  const re = new RegExp(pattern, 'gi');
+  const out: Array<[number, number]> = [];
+  for (const m of corpus.matchAll(re)) out.push([m.index, m.index + m[0].length]);
+  return out;
+}
+
+/**
+ * How many DISTINCT pieces of evidence a family has in a corpus.
+ *
+ * Counting matched terms let one string stand for several: "FIRST Robotics" is hit by
+ * "robotics", by the "robot" stem, and by "first robotics" all at once, so a single
+ * water-handing volunteer line scored robotics 3 and evicted a family the resume genuinely
+ * evidenced from the four-slot plan. Overlapping matches describe the same evidence, so they
+ * are merged and counted once; two separate mentions in different parts of the corpus still
+ * count as two.
+ */
+function evidenceCount(corpus: string, terms: string[], stems: boolean): number {
+  const spans = terms.flatMap((t) => termSpans(corpus, t, stems)).sort((a, b) => a[0] - b[0]);
+  let count = 0;
+  let lastEnd = -1;
+  for (const [start, end] of spans) {
+    if (start >= lastEnd) {
+      count++;
+      lastEnd = end;
+    } else if (end > lastEnd) {
+      lastEnd = end;
+    }
+  }
+  return count;
+}
+
+/**
+ * Two idioms borrow the "robot" stem without being robotics: "robots.txt" is an SEO artefact
+ * and "robotic process automation" is an ops one. The stem matched both, so a marketing or
+ * operations resume was handed a robotics family and its queries. They are scrubbed before
+ * matching rather than by narrowing the stem, because genuine "robots"/"robotic arm" evidence
+ * must keep counting.
+ */
+function scrubFalseRobotics(corpus: string): string {
+  return corpus.replace(/\brobots\.txt\b/gi, ' ').replace(/\brobotic process automation\b/gi, ' ');
 }
 
 export function inferRoleFamilies(profile: ConfirmedProfile): string[] {
-  // Organisations and honors are evidence of a role family, not just titles and bullets.
-  // A student whose whole robotics history is "Team Captain, Sample Robotics" and a FIRST
-  // award has the family stated twice on their resume — in the org name and in the honor —
-  // and this corpus read neither, so the one search they would have typed themselves never
-  // entered the plan.
-  const corpus = [
-    ...profile.skills.map((s) => s.name),
-    ...profile.experience.map((e) => `${e.title} ${e.organization} ${e.bullets.join(' ')}`),
-    ...profile.projects.map((p) => `${p.name} ${p.description}`),
-    ...profile.education.flatMap((e) => [
-      e.fieldOfStudy ?? '',
-      ...(e.coursework ?? []),
-      ...(e.honors ?? []),
-    ]),
-  ]
-    .join(' ')
-    .toLowerCase();
+  // Titles, bullets, projects and coursework are where a stem is meant to reach ("biolog" ->
+  // "biological"), so they carry stems.
+  const stemCorpus = scrubFalseRobotics(
+    [
+      ...profile.skills.map((s) => s.name),
+      ...profile.experience.map((e) => `${e.title} ${e.bullets.join(' ')}`),
+      ...profile.projects.map((p) => `${p.name} ${p.description}`),
+      ...profile.education.flatMap((e) => [
+        e.fieldOfStudy ?? '',
+        ...(e.coursework ?? []),
+        ...(e.honors ?? []),
+      ]),
+    ]
+      .join(' ')
+      .toLowerCase(),
+  );
+
+  // Organisation names are evidence too — a robotics club is stated in the org, not the
+  // bullets — but only as whole words. Under a prefix stem "Brandeis University" scored the
+  // "brand" (marketing) term and a dining-services campus job minted marketing queries; a
+  // whole-word match still reads "Sample Robotics" as robotics without inventing the rest.
+  const orgCorpus = scrubFalseRobotics(
+    profile.experience
+      .map((e) => e.organization ?? '')
+      .join(' ')
+      .toLowerCase(),
+  );
 
   const scored = Object.entries(ROLE_TAXONOMY)
     .map(([family, terms]) => ({
       family,
-      hits: terms.filter((t) => termAppears(corpus, t)).length,
+      hits: evidenceCount(stemCorpus, terms, true) + evidenceCount(orgCorpus, terms, false),
     }))
     .filter((s) => s.hits > 0)
     .sort((a, b) => b.hits - a.hits);

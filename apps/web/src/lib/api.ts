@@ -294,7 +294,12 @@ export interface FillRunView {
   pageUrl: string | null;
   message: string;
   startedAt: string;
-  intervention: { reason: 'login' | 'captcha' | 'unknown_field'; detail: string } | null;
+  // Only the two reasons the server can actually raise (core/filling/browser.ts,
+  // `InterventionReason`). It once listed a third, `unknown_field`, that no server code path
+  // produces — and the review banner branches two ways, `login` one way and everything else
+  // to "Bot check.", so a phantom third reason would have headlined a CAPTCHA that was not on
+  // the page. The client union tracks what the server sends, not what it once might have.
+  intervention: { reason: 'login' | 'captcha'; detail: string } | null;
   summary: string | null;
   fields?: FillFieldResult[];
   counts: { filled: number; mismatched: number; failed: number; skipped: number } | null;

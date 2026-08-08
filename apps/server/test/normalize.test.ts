@@ -94,6 +94,30 @@ describe('work arrangement', () => {
     expect(parseWorkArrangement('Fully remote — must reside in California')).toBe(
       'remote_geo_restricted',
     );
+    expect(parseWorkArrangement('Fully remote. Open to residents of the EU only.')).toBe(
+      'remote_geo_restricted',
+    );
+    expect(parseWorkArrangement('Fully remote, open only to US-based candidates.')).toBe(
+      'remote_geo_restricted',
+    );
+  });
+
+  /**
+   * The geo test used to run `/(only|located in|based in)/` over the whole description, so
+   * stating where the COMPANY sits — near-universal boilerplate — fenced a genuinely open
+   * remote role. Eligibility then dropped its clean "Remote, which you accept." pass to
+   * "unknown" and the queue badge asserted a restriction the posting never made. Only a
+   * requirement on the applicant restricts them.
+   */
+  it('does not read a company location as a geographic restriction on a remote role', () => {
+    for (const text of [
+      'This internship is fully remote. Our company is based in Austin, TX.',
+      'Fully remote internship. Our headquarters are located in Boston.',
+      'This is a 100% remote role. The team is based in San Francisco.',
+      'Fully remote — open to applicants anywhere in the US.',
+    ]) {
+      expect(parseWorkArrangement(text), text).toBe('remote');
+    }
   });
 
   /**
@@ -273,6 +297,25 @@ describe('work arrangement', () => {
     expect(parseHybridDays('hybrid role')).toBeNull();
     expect(parseHybridDays('This is a 5 days a week internship.')).toBeNull();
   });
+
+  /**
+   * Widening the count-to-"per week" gap let "2 days working from home per week" match, and
+   * with "in the office" in the same clause the onsite test passed on it — so two REMOTE days
+   * were recorded as the onsite count and a role onsite three days read as onsite two, the
+   * flattering direction the field is meant never to invent. A count whose own words say
+   * from-home is not an onsite count.
+   */
+  it('does not record work-from-home days as onsite days', () => {
+    expect(
+      parseHybridDays(
+        'Employees work in the office, with 2 days working from home per week permitted.',
+      ),
+    ).toBeNull();
+    expect(
+      parseHybridDays('You will be in the office except 2 days working from home per week.'),
+    ).toBeNull();
+    expect(parseHybridDays('2 days remote per week.')).toBeNull();
+  });
 });
 
 describe('term dates and duration', () => {
@@ -308,6 +351,22 @@ describe('term dates and duration', () => {
       12,
     );
     expect(parseDurationWeeks('The internship is 12 weeks long.')).toBe(12);
+  });
+
+  /**
+   * When the ONLY figure in the text is one the clause scores as not-the-term — a reply
+   * window, a leave policy, a probation period — the sort still handed it back, so a posting
+   * that says "hear back within 2 weeks" was stored as a two-week internship. A negatively
+   * scored span is the text saying "this is not the length"; the parser says null rather than
+   * record a duration the posting denies.
+   */
+  it('returns null when the only span is scored as not-the-term', () => {
+    expect(parseDurationWeeks('You will hear back within 2 weeks.')).toBeNull();
+    expect(
+      parseDurationWeeks('Applications close in 2 weeks. We look forward to hearing from you.'),
+    ).toBeNull();
+    expect(parseDurationWeeks('Benefits include 3 weeks of vacation.')).toBeNull();
+    expect(parseDurationWeeks('There is a 3 month probation period.')).toBeNull();
   });
 });
 
@@ -393,6 +452,30 @@ describe('application demands', () => {
       transcript: true,
     });
     expect(parseRequirements('A transcript is not required.')).toMatchObject({ transcript: false });
+  });
+
+  /**
+   * The firm-portfolio release fired on a bare "of their/the", which is exactly how an
+   * applicant is asked for their own work in the third person — "a portfolio of their work",
+   * "a portfolio of the work you are proud of". The commonest genuine demand was read as no
+   * demand, and the user was never warned. A firm noun has to follow for the release to hold.
+   */
+  it('reads a portfolio demand written in the third person, and still ignores a firm portfolio', () => {
+    for (const text of [
+      'The ideal candidate will provide a portfolio of their work.',
+      'Applicants must include a portfolio of their best work.',
+      'Please include a portfolio of the work you are most proud of.',
+      'Please include a portfolio of your work.',
+    ]) {
+      expect(parseRequirements(text), text).toMatchObject({ portfolio: true });
+    }
+    for (const text of [
+      'You will support our portfolio companies.',
+      'Work with the portfolio manager on live deals.',
+      'Analysts review a portfolio of our clients each quarter.',
+    ]) {
+      expect(parseRequirements(text), text).toMatchObject({ portfolio: false });
+    }
   });
 });
 

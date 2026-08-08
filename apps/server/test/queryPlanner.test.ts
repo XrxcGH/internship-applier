@@ -78,6 +78,85 @@ describe('inferRoleFamilies', () => {
     });
     expect(inferRoleFamilies(p)).toContain('biology');
   });
+
+  /**
+   * The "robot" stem prefix-matched two idioms that are not robotics: "robots.txt" (an SEO
+   * artefact) and "robotic process automation" (an ops one). A marketing or operations resume
+   * was handed a robotics family and its queries — the substring-into-unrelated-resume failure
+   * the word-boundary work in this file exists to end.
+   */
+  it('does not read robotics out of robots.txt or robotic process automation', () => {
+    const seo = profile({
+      skills: [{ name: 'SEO' }, { name: 'Content' }],
+      experience: [{ title: 'Marketing Assistant', bullets: ['Configured robots.txt for SEO'] }],
+    });
+    expect(inferRoleFamilies(seo)).not.toContain('robotics');
+
+    const ops = profile({
+      skills: [{ name: 'Operations' }],
+      experience: [
+        { title: 'Ops Analyst', bullets: ['Automated invoicing with robotic process automation'] },
+      ],
+    });
+    expect(inferRoleFamilies(ops)).not.toContain('robotics');
+  });
+
+  /**
+   * Organisation names feed the corpus so a robotics club states the family in the org, but
+   * under a prefix stem "Brandeis University" scored the "brand" (marketing) term and a
+   * dining-services campus job — the common freshman shape — minted an evidence-free marketing
+   * family. Org names match as whole words only.
+   */
+  it('does not mint a family from a prefix of an organisation name', () => {
+    const p = profile({
+      experience: [
+        { title: 'Dining Services Assistant', organization: 'Brandeis University', bullets: [] },
+      ],
+    });
+    expect(inferRoleFamilies(p)).not.toContain('marketing');
+  });
+
+  /**
+   * "FIRST Robotics" is hit by "robotics", by the "robot" stem and by "first robotics" at once.
+   * Counting matched terms let one water-handing line score robotics 3 and evict a family the
+   * resume genuinely evidenced from the four-slot plan. Overlapping matches are one piece of
+   * evidence, so a single FIRST mention must not outrank a real, separately-evidenced family.
+   */
+  it('does not let one robotics mention evict a genuinely evidenced family', () => {
+    const p = profile({
+      skills: [{ name: 'Figma' }, { name: 'pandas' }, { name: 'SQL' }],
+      experience: [
+        {
+          title: 'Data Analyst',
+          bullets: ['Handed out water at a FIRST Robotics event', 'Built dashboards in SQL'],
+        },
+      ],
+      projects: [{ name: 'UX prototype', description: 'Designed a Figma prototype for the UI' }],
+    });
+    const families = inferRoleFamilies(p);
+    expect(families).toContain('design');
+    expect(families).toContain('data science');
+  });
+
+  /**
+   * The true positive the robotics family exists for: a FIRST-shaped history states robotics in
+   * the org name and in an award, and both have to keep inferring it.
+   */
+  it('still infers robotics from real robotics evidence in org and honors', () => {
+    const p = profile({
+      experience: [
+        { title: 'Team Captain', organization: 'Sample Robotics', bullets: [] },
+        { title: 'Mentor', organization: 'Gourd Bots, FIRST Robotics Competition', bullets: [] },
+      ],
+      education: [
+        {
+          fieldOfStudy: 'Mechanical Engineering',
+          honors: ["Dean's List, FIRST Robotics Competition"],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(p)).toContain('robotics');
+  });
 });
 
 describe('pinned companies', () => {

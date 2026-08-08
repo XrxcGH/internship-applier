@@ -8,10 +8,11 @@ import { z } from 'zod';
  * individually. Belonging to this union is not a promise that the event ever arrives, so
  * whoever wires up the first stream consumer should read the notes before waiting on one.
  *
- * The same goes one level down, which is where it was being missed: a value inside a built
- * event's enum can be just as unreachable as a whole event type, and `fill.needs_input`'s
- * `unknown_field` is. Anything here without a producer gets a note, whether it is a member
- * of this union or a member of an enum inside one.
+ * The same goes one level down, which is where it was once being missed: a value inside a
+ * built event's enum can be just as unreachable as a whole event type — `fill.needs_input`
+ * carried a third `unknown_field` reason that no code path emitted until it was removed.
+ * Anything here without a producer gets a note, whether it is a member of this union or a
+ * member of an enum inside one.
  */
 export const AppEvent = z.discriminatedUnion('type', [
   z.object({
@@ -109,19 +110,18 @@ export const AppEvent = z.discriminatedUnion('type', [
     seq: z.number().int(),
     applicationId: z.string(),
     /**
-     * `unknown_field` is not built: nothing constructs it. `detectIntervention` is the only
-     * thing that ever builds an Intervention and it returns `login`, `captcha` or nothing at
-     * all — a field the classifier cannot place is skipped and reported in the review, which
-     * is not a reason to stop and take the browser back from the user.
+     * The two reasons a run stops and hands the browser back: a login wall and a bot check.
+     * There is no third. A field the classifier cannot place is skipped and reported in the
+     * review, not a reason to halt.
      *
-     * It matters that it stays unbuilt or gets a proper home, because the one screen reading
-     * this treats "not login" as "bot check": FillReview renders every other reason as
-     * "Bot check." with a button saying the user has dealt with it. A run halted on
-     * `unknown_field` would tell the user to go and solve a challenge that is not on the
-     * page. Marked here rather than deleted only because the server's own
-     * `InterventionReason` still lists it; whoever removes it there should remove it here.
+     * `unknown_field` was once listed here as a third reason with no producer. It mattered to
+     * remove it, because the one screen reading this treats "not login" as "bot check":
+     * FillReview renders every other reason as "Bot check." with a button saying the user has
+     * dealt with it. A run halted on `unknown_field` would have told the user to go solve a
+     * challenge that is not on the page. The server's `InterventionReason` dropped it, so it
+     * is gone here too — the enum only names reasons a code path can actually emit.
      */
-    reason: z.enum(['login', 'captcha', 'unknown_field']),
+    reason: z.enum(['login', 'captcha']),
     detail: z.string(),
   }),
   z.object({

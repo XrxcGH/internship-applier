@@ -12,8 +12,12 @@
  *   /nasty          the ways real ATS forms defeat naive automation
  *   /wizard         a multi-step form where later fields do not exist until you advance
  *   /login          a sign-in wall, which must pause the run rather than be typed into
- *   /login-branded  the same wall wrapped in the header and footer a career site puts
- *                   around it, which is the shape that used to be miscounted as a form
+ *
+ * The branded sign-in wall — the same login wrapped in a career site's header and footer,
+ * the shape that used to be miscounted as an application form — is exercised directly by
+ * fill.test.ts ("telling a login wall from an application form"), which builds it with
+ * setContent and asserts the login verdict. It lived here as a route too, but nothing ever
+ * navigated to it, so the page read as coverage while guarding nothing.
  *
  * `/nasty` is the interesting one, and every widget on it mirrors something that actually
  * happens in the wild rather than being difficult for its own sake.
@@ -36,7 +40,6 @@ const INDEX = page(
     <li><a href="/nasty">Hostile widgets</a></li>
     <li><a href="/wizard">Multi-step wizard</a></li>
     <li><a href="/login">Login wall</a></li>
-    <li><a href="/login-branded">Login wall inside career-site chrome</a></li>
   </ul>`,
 );
 
@@ -298,45 +301,6 @@ const LOGIN = page(
   </form>`,
 );
 
-/**
- * The same sign-in wall, wearing the furniture every career site puts around its pages.
- *
- * This page is the boundary case of the login detector, and it is a page rather than a
- * one-off `setContent` because it is what a real branded sign-in screen looks like. The
- * detector decides a password field is a login wall by counting the OTHER controls: too many
- * and the page is an application form with an optional account section, which must not be
- * paused on. Counting across the whole document, the header's search box, the footer's region
- * picker and the sign-in form's own email field came to three, so this exact page was read as
- * an application form and the run carried on and offered to type the user's email into a
- * sign-in box.
- *
- * Both halves of the rule are here on purpose. The search input is excluded twice over — by
- * its type and by sitting in the header — while the two `<select>`s are excluded only by
- * where they sit, so a fix that dropped either half still fails on this page.
- */
-const LOGIN_BRANDED = page(
-  'Sign in — Fixture Careers',
-  /* html */ `
-  <header>
-    <a href="/">Fixture Careers</a>
-    <input type="search" name="site_search" aria-label="Search jobs">
-    <label for="lang">Language</label>
-    <select id="lang" name="language"><option>English</option><option>Français</option></select>
-  </header>
-  <main>
-    <h1>Sign in to continue your application</h1>
-    <form id="login" method="post" action="/simple">
-      <label for="b-email">Email</label><input id="b-email" name="email" type="email">
-      <label for="b-pw">Password</label><input id="b-pw" name="password" type="password">
-      <button type="submit" id="sign-in">Sign in</button>
-    </form>
-  </main>
-  <footer>
-    <label for="region">Region</label>
-    <select id="region" name="region"><option>United States</option><option>Ireland</option></select>
-  </footer>`,
-);
-
 const ROUTES: Record<string, string> = {
   '/': INDEX,
   '/simple': SIMPLE,
@@ -345,7 +309,6 @@ const ROUTES: Record<string, string> = {
   '/framed': FRAMED,
   '/wizard': WIZARD,
   '/login': LOGIN,
-  '/login-branded': LOGIN_BRANDED,
 };
 
 export function createFixtureServer() {

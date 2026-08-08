@@ -369,7 +369,13 @@ export function parseLocation(
   // Ontario" as American — and that is what gets stored on the posting and handed back in
   // the privacy export. An unknown country stays unknown, the same as every other parser
   // in the discovery path.
-  return { city: parts[0], region: parts[1], country: parts[2], remote };
+  //
+  // The trailing part goes through asCountry too, exactly like the two-part branch above: a
+  // three-part free-text string is as often "City, Region, <arrangement/metro>" as it is
+  // "City, Region, Country" — "New York, NY, Hybrid", "Austin, TX, Onsite", "San Francisco,
+  // CA, Bay Area" — and taking parts[2] verbatim filed "Hybrid" as the country and exported
+  // it as a fact. When the last part is not a country name it is dropped, not guessed at.
+  return { city: parts[0], region: parts[1], country: asCountry(parts[2]), remote };
 }
 
 export const ATS_SOURCES = { greenhouse, lever, ashby } as const;

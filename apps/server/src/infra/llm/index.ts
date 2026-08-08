@@ -105,5 +105,28 @@ export async function generate(req: GenerateRequest): Promise<GenerateResult> {
         'You can also write the answer yourself. It still gets fact-checked against your profile.',
     );
   }
-  return b.generate(req);
+
+  try {
+    return await b.generate(req);
+  } catch (err) {
+    /**
+     * Fall through when the chosen backend just discovered it cannot serve requests AT ALL.
+     *
+     * The CLI version-probes clean but is signed out; that only surfaces on a real call,
+     * which latches it unavailable. Under `auto`, a working ANTHROPIC_API_KEY was resolved
+     * as the fallback but never reached, so the user hit a "sign in to the CLI" wall with a
+     * billed key that would have worked sitting right there. Re-resolving now skips the
+     * now-unavailable CLI and lands on the API.
+     *
+     * Only when the backend has flipped to unavailable — a transient failure (a usage limit,
+     * a timeout) leaves it available, so it does NOT fall through and billing never moves to
+     * the API without the user's setup asking for it.
+     */
+    if (err instanceof NoModelAccessError && !(await b.available())) {
+      resetBackend();
+      const next = await resolveBackend();
+      if (next && next.kind !== b.kind) return next.generate(req);
+    }
+    throw err;
+  }
 }

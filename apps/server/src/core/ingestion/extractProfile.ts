@@ -186,10 +186,19 @@ function safeJson(text: string): unknown {
   const trimmed = text.trim();
   const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/.exec(trimmed);
   const body = fenced?.[1] ?? trimmed;
-  const start = body.search(/[{[]/);
-  if (start < 0) return undefined;
+  // The extraction schema's root is always an object, so the payload is the span from the
+  // first '{' to the last '}'. Parsing that span rather than everything from the first
+  // bracket to end-of-string survives the two shapes the CLI backend actually produces: a
+  // note added after the object ("...}\n\nI flagged two fields for review.") that made
+  // JSON.parse choke on trailing prose, and a stray bracket in the preamble ("I read the
+  // file [1] and extracted:\n{...}") that the old first-`{`-or-`[` search locked onto,
+  // starting the parse at the citation. Both discarded a byte-correct extraction and sent
+  // the user back to the "could not read this as a resume" error and an API key.
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  if (start < 0 || end < start) return undefined;
   try {
-    return JSON.parse(body.slice(start));
+    return JSON.parse(body.slice(start, end + 1));
   } catch {
     return undefined;
   }

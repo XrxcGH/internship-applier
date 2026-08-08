@@ -19,6 +19,7 @@ import {
   guardDraft,
   isVerifiableClaim,
   mergeModelVerdicts,
+  normalize,
   splitClaims,
 } from '../src/core/writing/factGuard';
 import { retrieveEvidence } from '../src/core/writing/retrieve';
@@ -337,6 +338,34 @@ describe('a bare acronym is not an invented employer', () => {
   it('does not exempt a name with an ordinary word beside it', () => {
     expect(verdictOf('I built the ingest layer at IBM Research last summer.')).toBe('unsupported');
   });
+
+  /**
+   * "I did/had/completed an internship at NASA" is an employment claim about an all-caps
+   * name written the plainest way there is, and every one used to slip the affiliation frame
+   * — which only listed employment verbs — and ride through unchecked. The stint noun now
+   * carries the claim, so the frame catches it without treating "I had trouble with SQL" as
+   * a job at SQL.
+   */
+  it('catches an acronym employer named through a stint noun, not just a verb', () => {
+    for (const line of [
+      'I did an internship at NASA working on flight software.',
+      'I had an internship at NASA last summer.',
+      'I completed an internship at IBM.',
+      'I finished the apprenticeship at SAP.',
+    ]) {
+      expect(verdictOf(line), line).toBe('unsupported');
+    }
+  });
+
+  it('does not read an ordinary "had ... with" as employment at a technology', () => {
+    // The stint-noun branch must not fire on these; SQL and CSV are not employers here.
+    for (const line of [
+      'I had a great time at MITRE that week.',
+      'I had trouble with the CSV parser.',
+    ]) {
+      expect(verdictOf(line), line).toBeNull();
+    }
+  });
 });
 
 describe('a short name on the profile does not vouch for an invented employer', () => {
@@ -475,6 +504,140 @@ describe('GPA extraction', () => {
 
   it('does not read arbitrary decimals as grades', () => {
     expect(extractGpas('cut latency to 1.4 seconds')).toEqual([]);
+  });
+
+  /**
+   * Transcripts print three decimals, and a rising freshman quoting one exactly is the most
+   * honest thing this guard sees. The scale-mask capped its numerator at two decimals while
+   * the number-leading pattern read three, so "3.968/4.0" slipped the mask and the guard
+   * read the SCALE on the far side of the slash — 4 — as a second claimed GPA. Every one of
+   * these must return the numerator the student wrote, never the denominator.
+   */
+  it('reads a three-decimal GPA and never the scale beside it', () => {
+    expect(extractGpas('I graduated with a 3.968/4.0 GPA.')).toEqual([3.968]);
+    expect(extractGpas('I earned a 3.968 out of 4.0 GPA.')).toEqual([3.968]);
+    expect(extractGpas('I hold a 4.321/5.0 weighted GPA.')).toEqual([4.321]);
+    expect(extractGpas('I have a 3.968 GPA on a 4.000 scale.')).toEqual([3.968]);
+    expect(extractGpas('I earned a 3.968/4 GPA')).toEqual([3.968]);
+    // Two-decimal forms still read exactly as before.
+    expect(extractGpas('3.62/4.0 GPA')).toEqual([3.62]);
+  });
+});
+
+/**
+ * A rising freshman with a three-decimal, weighted GPA — the shape the whole dossier flow
+ * was built around, and the one the scale-mask regression blocked.
+ */
+const gpaEvidenceFor = (gpa: { value: number; scale: number; weighted?: number }) =>
+  evidenceFor({
+    education: [{ ...fixture().education[0]!, gpa }],
+  } as Partial<ConfirmedProfile>);
+
+describe('a true three-decimal GPA is not blocked, and its scale is never quoted back', () => {
+  const EV = gpaEvidenceFor({ value: 3.968, scale: 4, weighted: 4.321 });
+
+  it('passes the exact figure in every notation', () => {
+    for (const line of [
+      'I graduated with a 3.968/4.0 GPA.',
+      'I earned a 3.968 out of 4.0 GPA.',
+      'I have a 3.968 GPA on a 4.000 scale.',
+      // The weighted figure the profile also holds is a true number about the same student.
+      'I hold a 4.321/5.0 weighted GPA.',
+      'I have a 3.968/4.0 GPA and a 4.321 weighted GPA.',
+    ]) {
+      expect(checkClaimDeterministically(line, EV).verdict, line).toBeNull();
+    }
+  });
+
+  it('still catches a fabricated GPA at three decimals', () => {
+    expect(checkClaimDeterministically('I graduated with a 3.100/4.0 GPA.', EV).verdict).toBe(
+      'unsupported',
+    );
+  });
+
+  it('names the weighted figure in the mismatch reason instead of only the lower one', () => {
+    const r = checkClaimDeterministically('I have a 4.5 weighted GPA.', EV);
+    expect(r.verdict).toBe('unsupported');
+    // The message must not steer the student to discard their true, higher weighted number.
+    expect(r.reason).toContain('4.321 weighted');
+    expect(r.reason).toContain('3.968');
+  });
+});
+
+describe('a name whose punctuation leaves a lone letter stays checkable', () => {
+  /**
+   * A blanket lone-"s" strip in `normalize` collapsed "S&P" to a single "p", dropped it
+   * below the checkable length, and a FABRICATED "S&P" employer sailed past with a green
+   * tick — the worst thing this file can produce. These names must survive normalisation as
+   * multi-character, checkable tokens.
+   */
+  it('keeps ampersand and hyphen names long enough to check', () => {
+    for (const raw of ['S&P', 'AT&T', 'H-E-B', 'M&S']) {
+      expect(normalize(raw).length, raw).toBeGreaterThan(1);
+    }
+  });
+
+  it('catches a fabricated S&P employer that the profile never held', () => {
+    const g = guardDraft(
+      'While a Counselor at Camp Redwood I also interned at S&P using Python and Excel.',
+      evidenceFor({
+        experience: [
+          {
+            organization: 'Camp Redwood',
+            title: 'Counselor',
+            type: 'job',
+            startDate: '2025-06',
+            endDate: '2025-08',
+            bullets: ['Led activities'],
+            skills: ['Python'],
+          },
+        ],
+      } as Partial<ConfirmedProfile>),
+    );
+    expect(g.blocking).toHaveLength(1);
+    expect(g.blocking[0]!.claim).toContain('S&P');
+  });
+
+  it('still folds a possessive so a shorter award matches a longer one', () => {
+    // Removing the lone-"s" strip must not reopen the "Dean's List" false-block: the short
+    // form has to remain a whole-word prefix of the long form.
+    expect(normalize('Dean’s List Semi-Finalist').startsWith(normalize("Dean's List"))).toBe(true);
+  });
+});
+
+describe('a possessive award reads the same with or without its apostrophe', () => {
+  /**
+   * Extraction may keep or drop the apostrophe in "Dean's List" depending on the resume,
+   * and the drafting model may write it either way. When one side wrote "Deans List" and the
+   * other "Dean's List" the two forms of the student's own honor no longer vouched for each
+   * other, and a true award was blocked at G3 as an invented name — one apostrophe away.
+   */
+  const apos = evidenceFor({
+    education: [{ ...fixture().education[0]!, honors: ["Dean's List Semi-Finalist"] }],
+  } as Partial<ConfirmedProfile>);
+  const plain = evidenceFor({
+    education: [{ ...fixture().education[0]!, honors: ['Deans List Semi-Finalist'] }],
+  } as Partial<ConfirmedProfile>);
+
+  it('does not block whichever apostrophe form each side happens to use', () => {
+    expect(
+      checkClaimDeterministically('I made the Deans List that year.', apos).verdict,
+    ).toBeNull();
+    expect(
+      checkClaimDeterministically("I made the Dean's List that year.", plain).verdict,
+    ).toBeNull();
+    expect(
+      checkClaimDeterministically("I made the Dean's List that year.", apos).verdict,
+    ).toBeNull();
+    expect(
+      checkClaimDeterministically('I made the Deans List that year.', plain).verdict,
+    ).toBeNull();
+  });
+
+  it('still blocks an award the profile does not hold', () => {
+    expect(checkClaimDeterministically("I made the Provost's List that year.", apos).verdict).toBe(
+      'unsupported',
+    );
   });
 });
 

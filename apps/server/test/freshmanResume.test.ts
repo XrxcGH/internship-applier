@@ -100,9 +100,17 @@ const EXTRACTION = {
   needsReview: ['experience.2.startDate', 'experience.3.startDate'],
 };
 
+// Derivation reads a clock: academic year floors the months since term start, and open
+// experience entries accrue months up to "now". Left on the real clock, this fixture's
+// academicYear rolled to 2 on 2026-09-01 and its seniority band to experienced_intern by
+// mid-2027 — the rising-freshman shape the header describes would have quietly aged out and
+// the green way to make CI pass again is to edit the expectations, gutting what it tests.
+// Pin the clock so every assertion below is about the code, not the calendar.
+const NOW = new Date('2026-08-03T00:00:00Z');
+
 function draftOf() {
   const parsed = ResumeExtraction.parse(EXTRACTION);
-  return toDraftProfile(parsed);
+  return toDraftProfile(parsed, NOW);
 }
 
 describe('the shape survives every schema on the way in', () => {
@@ -135,7 +143,7 @@ describe('the shape survives every schema on the way in', () => {
 });
 
 describe('FactGuard reads this resume the way its owner would write about it', () => {
-  const confirmed = { ...draftOf(), confirmedAt: '2026-08-07T00:00:00Z' };
+  const confirmed = { ...draftOf(), confirmedAt: NOW.toISOString() };
   const evidence = retrieveEvidence(confirmed as never, 'Tell us about your robotics experience.');
   const verdictOf = (claim: string) => checkClaimDeterministically(claim, evidence).verdict;
 
@@ -156,6 +164,24 @@ describe('FactGuard reads this resume the way its owner would write about it', (
     expect(verdictOf("I was a Dean's List semifinalist in the FIRST Robotics Competition.")).toBe(
       null,
     );
+  });
+
+  /**
+   * A three-decimal GPA written against its scale. Transcripts print three decimals and a
+   * "/4.0" or "out of 4.0" tail, and a scale-mask capped at two decimals let the denominator
+   * through as a second claimed GPA — so "3.968/4.0" was read as a claimed 4.0, checked
+   * against the profile's 3.968, and blocked at G3 with a message asserting a number the
+   * student never wrote. This is the exact form on the resume this fixture is drawn from.
+   */
+  it('accepts a three-decimal GPA written against its scale', () => {
+    for (const claim of [
+      'I graduated with a 3.968/4.0 GPA.',
+      'I earned a 3.968 out of 4.0 GPA.',
+      'I hold a 3.968/4 GPA and a 4.321 weighted GPA.',
+      'My GPA is 3.968 on a 4.000 scale.',
+    ]) {
+      expect(verdictOf(claim), claim).toBeNull();
+    }
   });
 
   /** And the same widening must not have opened the other direction. */

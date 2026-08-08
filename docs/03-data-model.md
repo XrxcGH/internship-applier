@@ -68,7 +68,6 @@ type DerivedProfile = {
   expectedGraduation: string | null;        // YYYY-MM
   yearsProfessionalExperience: number;      // internships weighted 0.5
   seniorityBand: 'pre_college' | 'entry_intern' | 'experienced_intern' | 'new_grad';
-  skillIndex: Record<string, SkillStrength>; // normalized skill name → evidence
 };
 ```
 

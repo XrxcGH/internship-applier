@@ -48,6 +48,32 @@ describe('discovery.progress', () => {
 });
 
 /**
+ * `fill.needs_input` names the two reasons a run stops and hands the browser back: a login
+ * wall and a bot check. `unknown_field` was once a third reason with no producer, and the
+ * screen reading these renders every non-`login` reason as "Bot check." — so a stopped run
+ * carrying `unknown_field` would have told the user to solve a challenge that is not on the
+ * page. The enum must only name reasons a code path can actually emit.
+ */
+describe('fill.needs_input', () => {
+  const needs = (reason: unknown): Record<string, unknown> => ({
+    type: 'fill.needs_input',
+    seq: 3,
+    applicationId: 'a1',
+    reason,
+    detail: 'sign in to continue',
+  });
+
+  it('accepts the two reasons the server can produce', () => {
+    expect(AppEvent.safeParse(needs('login')).success).toBe(true);
+    expect(AppEvent.safeParse(needs('captcha')).success).toBe(true);
+  });
+
+  it('rejects unknown_field, which no code path emits', () => {
+    expect(AppEvent.safeParse(needs('unknown_field')).success).toBe(false);
+  });
+});
+
+/**
  * `discovery.done` is where the true totals live, and it is the only place a consumer can
  * read them — so its own `new` stays a required integer. A null here would mean the run
  * finished without ever saying what it found.

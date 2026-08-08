@@ -302,6 +302,19 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
       ...x.education.flatMap((e, i) =>
         e.endDate && !asYearMonth(e.endDate) ? [`education.${i}.endDate`] : [],
       ),
+      // A GPA the profile shape cannot store — a weighted figure with no unweighted
+      // number (a transcript that prints only "4.321 weighted"), or either number missing
+      // its scale — used to vanish here with nothing said. The stored gpa keeps a
+      // value+scale pair, so anything less than that pair fell through the branch below and
+      // was dropped: the number the resume stated was simply gone, and a later true
+      // "4.32 weighted GPA" sentence came back red at G3 with no GPA on the profile to
+      // match it. Flag any stated-but-unstorable GPA so the user completes the missing half
+      // at G1 instead of the figure disappearing in silence.
+      ...x.education.flatMap((e, i) => {
+        const stated = e.gpaValue !== null || e.gpaScale !== null || e.gpaWeighted !== null;
+        const stored = e.gpaValue !== null && e.gpaScale !== null;
+        return stated && !stored ? [`education.${i}.gpa`] : [];
+      }),
     ]),
     createdAt: ts,
     updatedAt: ts,

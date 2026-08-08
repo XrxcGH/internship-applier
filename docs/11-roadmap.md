@@ -192,9 +192,13 @@ schedule slips.
    assumed to be **Summer 2027** unless told otherwise. Trivially changed in settings.
 2. **Field / role family.** Assumed to be derived from the resume, with the query plan
    editable by the user before each run. No hardcoded taxonomy needed up front.
-3. **Anthropic API key.** Needed from M1 onward. The design assumes `claude-opus-5` for
-   extraction, drafting, and FactGuard, with `claude-haiku-4-5` for bulk field
-   classification. M0 does not call the API at all.
+3. **Model access (CLI or API key).** Needed from M1 onward — but not necessarily a key. The
+   default backend is `auto` (see docs/14): the Claude Code CLI if it is installed, otherwise
+   an Anthropic API key, otherwise no model at all. A user on the CLI needs no key. The design
+   assumes `claude-opus-5` for extraction and drafting, with `claude-haiku-4-5` for bulk field
+   classification. FactGuard's determinations are made without a model in the shipping path
+   (its model layer is not wired into any production path — see the M5 note above). M0 does
+   not call any model at all.
 
 ## Deferred (explicitly not v1)
 

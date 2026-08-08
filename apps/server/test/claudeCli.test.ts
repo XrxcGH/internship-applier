@@ -228,6 +228,49 @@ describe('what the adapter actually runs', () => {
       $defs: { nested: { type: 'string' } },
     });
   }, 60_000);
+
+  /**
+   * `$schema` is stripped only where it is a meta-schema KEYWORD, never where it is a field
+   * NAME. A blind by-name strip dropped `properties.$schema` while `required` still listed
+   * it — an unsatisfiable schema the CLI rejects — and mutated `const`/`default` data that
+   * happened to carry a "$schema" field. So a schema describing a document that itself has a
+   * "$schema" property must reach the CLI intact.
+   */
+  it('keeps a $schema that is a field name, stripping only the meta-schema keyword', async () => {
+    writeFakeCli('ok');
+    await claudeCliBackend.generate({
+      purpose: 'resume_extraction',
+      system: 's',
+      user: 'u',
+      schema: {
+        name: 'doc',
+        jsonSchema: {
+          $schema: 'https://json-schema.org/draft/2020-12/schema',
+          type: 'object',
+          properties: {
+            // A field literally called "$schema" in the described document.
+            $schema: { type: 'string' },
+            name: { type: 'string' },
+          },
+          required: ['$schema', 'name'],
+          // Raw data values must pass through untouched, "$schema" field and all.
+          default: { $schema: 'x', keep: 1 },
+        },
+      },
+    });
+
+    const argv = invocation().argv;
+    const sent = JSON.parse(argv[argv.indexOf('--json-schema') + 1]!);
+    expect(sent).toEqual({
+      type: 'object',
+      properties: { $schema: { type: 'string' }, name: { type: 'string' } },
+      required: ['$schema', 'name'],
+      default: { $schema: 'x', keep: 1 },
+    });
+    // The field name is still required, so the schema stays satisfiable.
+    expect(sent.required).toContain('$schema');
+    expect(sent.properties.$schema).toEqual({ type: 'string' });
+  }, 60_000);
 });
 
 describe('failures a person can act on', () => {
@@ -248,6 +291,31 @@ describe('failures a person can act on', () => {
     expect(msg).toMatch(/run `claude`/);
     // "Please run /login" is accurate but assumes you are already inside Claude Code.
     expect(msg).not.toMatch(/\/login/);
+  }, 60_000);
+
+  /**
+   * A signed-out CLI version-probes clean, so before a real call it reports itself
+   * available — which under `auto` shadowed a working ANTHROPIC_API_KEY, blocking the user
+   * with a sign-in wall when a billed key that would have worked sat right there. Once a
+   * call surfaces the not-logged-in envelope the backend must flip to unavailable so the
+   * seam can fall through to the API.
+   */
+  it('reports itself unavailable after a call proves it is signed out, so it stops shadowing a key', async () => {
+    writeFakeCli('not_logged_in');
+    // Before any call: the version probe passes, so it looks usable.
+    expect(await claudeCliBackend.available()).toBe(true);
+    expect(claudeCliBackend.describe()).toMatch(/no API billing/);
+
+    await fails();
+
+    // After the call surfaces the sign-out: unavailable, and it says so plainly.
+    expect(await claudeCliBackend.available()).toBe(false);
+    expect(claudeCliBackend.describe()).toMatch(/not signed in/i);
+
+    // resetCliProbe clears the latch — signing in takes effect without a restart.
+    resetCliProbe();
+    writeFakeCli('ok');
+    expect(await claudeCliBackend.available()).toBe(true);
   }, 60_000);
 
   it('explains a used-up usage limit without treating it as a crash', async () => {

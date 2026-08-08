@@ -7,7 +7,7 @@ import { ulid } from 'ulid';
 import { config } from '../config';
 import { db, schema } from '../infra/db/client';
 import { encryptField } from '../infra/crypto/fieldCrypto';
-import { describeAccess } from '../infra/llm';
+import { describeAccess, NoModelAccessError } from '../infra/llm';
 import { extractText, mimeFromFilename, SUPPORTED_MIME } from '../core/ingestion/extractText';
 import { extractResume } from '../core/ingestion/extractProfile';
 import { toDraftProfile } from '../core/ingestion/toProfile';
@@ -109,15 +109,24 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
      */
     const access = await describeAccess();
     if (!access.available) {
+      // With LLM_PROVIDER=none the resolver short-circuits before it ever looks at the CLI
+      // or a key, so "sign in to the CLI" and "set ANTHROPIC_API_KEY" are both no-ops here —
+      // the only action that changes anything is flipping the switch back. Give that advice
+      // in that state, and the CLI/key advice in every other state where it does apply.
+      const advice =
+        config.llm.provider === 'none'
+          ? 'Model calls are switched off. Set LLM_PROVIDER=auto (or remove the line) in the ' +
+            '.env file at the root of this project and restart the server.'
+          : 'Either sign in to the Claude Code CLI by running `claude` once in a terminal, ' +
+            'or set ANTHROPIC_API_KEY in the .env file at the root of this project and ' +
+            'restart the server.';
       return reply.code(400).send({
         error: {
           code: 'NO_MODEL_ACCESS',
           message:
             `Reading a resume needs a model, and none is reachable. ${access.description} ` +
-            'Either sign in to the Claude Code CLI by running `claude` once in a terminal, ' +
-            'or set ANTHROPIC_API_KEY in the .env file at the root of this project and ' +
-            'restart the server. Everything else — matching, eligibility, the writing checks ' +
-            '— works without either.',
+            `${advice} Everything else — matching, eligibility, the writing checks — works ` +
+            'without either.',
         },
       });
     }
@@ -152,6 +161,16 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
       return { profile: saved, needsReview: saved.needsReview };
     } catch (err) {
       logger.error({ err }, 'resume extraction failed');
+      // A no-model failure carries a message written for the user (sign in, set a key) and
+      // is not an internal error — flattening it to a 502 INTERNAL both mislabels it and
+      // drops that guidance. The signed-out CLI reaches here on a machine that also has a
+      // key, because the pre-call guard sees the CLI as available and only the real call
+      // reveals it is not; the seam then falls through to the key, but if even the key is
+      // gone this is where the user must be told. Answer drafting already returns 503
+      // NO_MODEL_ACCESS for the same case; match it.
+      if (err instanceof NoModelAccessError) {
+        return reply.code(503).send({ error: { code: 'NO_MODEL_ACCESS', message: err.message } });
+      }
       return reply.code(502).send({
         error: { code: 'INTERNAL', message: (err as Error).message },
       });

@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@ia/shared';
 import * as api from '../lib/api';
-import { ANSWERED_IN_WIZARD, isAnswered, isDismissible } from '../lib/review';
+import {
+  ANSWERED_IN_WIZARD,
+  isAnswered,
+  isDismissible,
+  OPTIONAL_WIZARD_FIELDS,
+} from '../lib/review';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Notice, SelectField, TextField } from '../components/Controls';
 
@@ -64,8 +69,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
        * the six facts G1 exists to collect by touching a control and undoing it — and
        * confirm a profile whose location and work authorization are still blank. G1 only
        * means something if it checks the value rather than the interaction.
+       *
+       * An optional field is the exception: its blank is a real answer, so re-flagging one
+       * left empty would trap a person who has nothing to put there. Touching the control
+       * clears its flag whatever it holds.
        */
-      return isAnswered(at(next, clears))
+      const answered = OPTIONAL_WIZARD_FIELDS.has(clears) || isAnswered(at(next, clears));
+      return answered
         ? { ...next, needsReview: next.needsReview.filter((f) => f !== clears) }
         : { ...next, needsReview: [...new Set([...next.needsReview, clears])] };
     });
@@ -163,7 +173,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 label="Pronouns"
                 hint="Kept for your own reference. Never typed into a form — a pronoun question on an application is yours to answer."
                 value={profile.pronouns ?? ''}
-                onChange={(e) => patch((p) => ({ ...p, pronouns: e.target.value || null }))}
+                flagged={flagged('pronouns')}
+                onChange={(e) =>
+                  patch((p) => ({ ...p, pronouns: e.target.value || null }), 'pronouns')
+                }
               />
               <TextField
                 label="Email"

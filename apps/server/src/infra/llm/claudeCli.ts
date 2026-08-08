@@ -168,6 +168,18 @@ async function run(c: Candidate, args: string[], stdin: string): Promise<RunResu
 let found: Candidate | null = null;
 let version = '';
 let failure: string | null = null;
+/**
+ * Set once a real call proves the installed CLI is signed out.
+ *
+ * `--version` needs no credentials, so `probe()` cannot tell a signed-in CLI from a
+ * signed-out one — only an actual generate can. Until that happened, a signed-out CLI
+ * reported itself `available: true` and, under `auto`, shadowed a working ANTHROPIC_API_KEY:
+ * the user was told to sign in when a billed key that would have worked sat right there.
+ * Once a call surfaces the not-logged-in envelope we latch this, so `available()` says
+ * false and the seam can fall through to the API. `resetCliProbe` clears it — signing in
+ * takes effect without a restart.
+ */
+let signedOut = false;
 
 async function probe(): Promise<Candidate | null> {
   if (found) return found;
@@ -197,6 +209,7 @@ export function resetCliProbe(): void {
   found = null;
   version = '';
   failure = null;
+  signedOut = false;
 }
 
 // ────────────────────────────────────────────────────────────── response parsing
@@ -318,7 +331,25 @@ const NO_TOOLS = 'none';
  * The same schema with that one key removed is accepted. Nothing else about it changes, and
  * the API path keeps the key because the API wants it, so this strips rather than rewrites.
  * Recursive, because a nested `$defs` entry can carry its own.
+ *
+ * STRIP THE KEYWORD, NOT THE NAME. `$schema` is a meta-schema keyword only at a schema
+ * position. Inside `properties`/`$defs`/etc. the child keys are field NAMES: a schema that
+ * describes a document with a field literally called "$schema" would, under a blind
+ * by-name strip, lose that property while `required` still listed it — an unsatisfiable
+ * schema the CLI rejects. And `const`/`default`/`enum`/`examples` hold raw data values, not
+ * schemas, so a data object carrying a "$schema" field must pass through untouched. So we
+ * keep every name in a name→subschema map, never descend into data values, and drop
+ * `$schema` only where it is a keyword.
  */
+const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+]);
+const DATA_VALUES = new Set(['const', 'default', 'enum', 'examples']);
+
 function forCli(schema: unknown): unknown {
   if (Array.isArray(schema)) return schema.map(forCli);
   if (schema === null || typeof schema !== 'object') return schema;
@@ -326,7 +357,17 @@ function forCli(schema: unknown): unknown {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
     if (k === '$schema') continue;
-    out[k] = forCli(v);
+    if (DATA_VALUES.has(k)) {
+      out[k] = v;
+    } else if (SCHEMA_MAPS.has(k) && v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      const cleaned: Record<string, unknown> = {};
+      for (const [name, sub] of Object.entries(v as Record<string, unknown>)) {
+        cleaned[name] = forCli(sub);
+      }
+      out[k] = cleaned;
+    } else {
+      out[k] = forCli(v);
+    }
   }
   return out;
 }
@@ -335,13 +376,15 @@ export const claudeCliBackend: Backend = {
   kind: 'claude_cli',
 
   async available(): Promise<boolean> {
-    return (await probe()) !== null;
+    // A CLI that is installed but signed out cannot serve a request, so it must not report
+    // itself available — otherwise it shadows a working API key under `auto`.
+    return (await probe()) !== null && !signedOut;
   },
 
   describe(): string {
-    return found
-      ? `Claude Code CLI ${version} — your subscription, no API billing`
-      : 'Claude Code CLI (not installed)';
+    if (!found) return 'Claude Code CLI (not installed)';
+    if (signedOut) return 'Claude Code CLI (installed, not signed in)';
+    return `Claude Code CLI ${version} — your subscription, no API billing`;
   },
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
@@ -427,7 +470,12 @@ export const claudeCliBackend: Backend = {
       if (env?.is_error !== false) {
         const combined = `${env ? extractText(env) : r.stdout}\n${r.stderr}`;
         const notSignedIn = notLoggedInMessage(combined);
-        if (notSignedIn) throw new NoModelAccessError(notSignedIn);
+        if (notSignedIn) {
+          // Latch it: the version probe cannot see this, so without the flag `available()`
+          // would keep claiming the CLI can serve requests and keep shadowing the API key.
+          signedOut = true;
+          throw new NoModelAccessError(notSignedIn);
+        }
 
         const limit = usageLimitMessage(combined);
         if (limit) throw new NoModelAccessError(limit);

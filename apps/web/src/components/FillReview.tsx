@@ -294,8 +294,14 @@ export function FillReview({
           Tuesday had nothing anywhere telling them which nine boxes still needed their
           own typing. This copy is read back from the application, so it survives all
           three. The card that starts a fresh run stays underneath it: this is a record of
-          what happened, not a reason to take the way forward away. */}
-      {checked && !run && skippedFields.length > 0 && (
+          what happened, not a reason to take the way forward away.
+
+          Gated on `submitted === null` alongside the start-a-fill card below: once the user
+          has told us they sent it, the form these boxes belong to is gone, and "they still
+          need you" printed directly above the SUBMITTED stamp was telling someone to go back
+          and finish a page that no longer exists. A submitted application shows the stamp
+          only. */}
+      {checked && !run && submitted === null && skippedFields.length > 0 && (
         <div className="u-card px-5 py-5">
           <p className="u-eyebrow mb-2">Left for you by the last fill</p>
           <p className="text-dim u-prose mb-3 text-[0.9375rem]">

@@ -20,6 +20,33 @@ describe('samePage', () => {
     expect(samePage('https://jobs.example/apply', 'https://boards.other.test/x')).toBe(false);
     expect(samePage('https://jobs.example/apply/', 'https://jobs.example/apply/step2')).toBe(false);
   });
+
+  it('stays quiet on the changes that keep the same page', () => {
+    // A link saved as http:// is upgraded to https:// on load. This screen folds that away
+    // deliberately — the server's sameDocument does NOT (it compares origin, scheme and all),
+    // so the two are not the same test — because a soft "the page moved" warning that fires on
+    // a benign upgrade is the cry-wolf this function exists to avoid.
+    expect(samePage('http://jobs.acme.com/apply', 'https://jobs.acme.com/apply')).toBe(true);
+    // A host capitalised in one place and not the other.
+    expect(samePage('https://JOBS.ACME.COM/apply', 'https://jobs.acme.com/apply')).toBe(true);
+    // The source tag a Greenhouse or Lever board appends the moment the form opens.
+    expect(samePage('https://jobs.acme.com/apply', 'https://jobs.acme.com/apply?gh_src=abc')).toBe(
+      true,
+    );
+    expect(samePage('https://jobs.example/apply', 'https://jobs.example/apply?source=web')).toBe(
+      true,
+    );
+  });
+
+  it('keeps a different subdomain a real difference, as the server does', () => {
+    // www and the bare host can serve different content, so this is a genuine move, not noise.
+    expect(samePage('https://www.acme.com/apply', 'https://acme.com/apply')).toBe(false);
+  });
+
+  it('falls back to a trim when an address will not parse', () => {
+    expect(samePage('not a url', 'not a url')).toBe(true);
+    expect(samePage('not a url', 'other junk')).toBe(false);
+  });
 });
 
 /**

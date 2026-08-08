@@ -10,17 +10,51 @@ import type { SkippedField } from './api';
  */
 
 /**
- * Whether two addresses point at the same page.
+ * Whether two addresses point at the same page, for the purpose of a SOFT WARNING.
  *
- * A browser turns a bare origin into one with a trailing slash, so comparing the strings as
- * they arrive would announce "the form was read from somewhere else" on every run whose
- * apply URL happened to have no path — and a warning that fires when nothing is wrong is one
- * people learn to click past, including on the run where the browser really did end up on a
- * different posting. A trailing empty fragment is the same story.
+ * This is deliberately more forgiving than the server's `sameDocument` (core/filling/fill.ts),
+ * and the two are NOT the same test — a claim an earlier version of this comment made and the
+ * scheme case disproves. The server decides whether to keep TYPING into a page, which is
+ * safety-critical, so it compares origin (scheme included) and path and treats an http→https
+ * move as a different document. This function decides only whether to show the user a "the
+ * page moved" note, where the failure that matters is the opposite one: a warning that fires
+ * when nothing is wrong is one people learn to click past, including on the run where the
+ * browser really did land on a different posting.
+ *
+ * So the benign address changes are folded away here even though the server would not fold
+ * them: a bare origin arrives with a trailing slash the path form lacks; a link saved as
+ * `http://` is upgraded to `https://` on load; a host is capitalised in one place and not the
+ * other; a Greenhouse or Lever board appends `?gh_src=…`/`?source=…` the moment the form
+ * opens. None of those changes the page, so comparing host and path (case-folded, scheme- and
+ * query-agnostic) keeps the warning for a genuinely different host or path, a login redirect,
+ * a further step into a wizard. A different subdomain (`www.` vs bare) is left as a real
+ * difference: it can serve different content.
+ *
+ * The consequence of the divergence, stated plainly: on an http→https move the server may
+ * stop the fill while this screen stays quiet. That is the safe direction — the run halts and
+ * the pre-submit review shows nothing was submitted — but it is a gap worth knowing about,
+ * not the parity the old comment promised.
+ *
+ * An address that will not parse falls back to the trailing-slash/fragment trim, so a
+ * malformed record gets some comparison rather than warning on every run.
  */
 export function samePage(a: string, b: string): boolean {
-  const bare = (u: string) => u.trim().replace(/[/#]+$/, '');
-  return bare(a) === bare(b);
+  const norm = (u: string): string | null => {
+    try {
+      const url = new URL(u.trim());
+      const scheme = url.protocol === 'http:' || url.protocol === 'https:' ? 'web:' : url.protocol;
+      return `${scheme}//${url.host}${url.pathname}`;
+    } catch {
+      return null;
+    }
+  };
+  const na = norm(a);
+  const nb = norm(b);
+  if (na === null || nb === null) {
+    const bare = (u: string) => u.trim().replace(/[/#]+$/, '');
+    return bare(a) === bare(b);
+  }
+  return na === nb;
 }
 
 /** Why a field was left for the user, in the words the review list already uses. */

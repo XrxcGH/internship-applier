@@ -38,6 +38,21 @@ describe('parseLocation', () => {
     expect(parseLocation('Austin, TX, US').country).toBe('US');
   });
 
+  /**
+   * The three-part branch returned the trailing part as the country verbatim, with no
+   * name-check — so "New York, NY, Hybrid" and "Austin, TX, Onsite" (an arrangement or a metro
+   * area in the third slot, at least as common on real boards as a spelled-out country) filed
+   * "Hybrid" as the country and the privacy export claimed it as a fact. The last part goes
+   * through the same name-check the two-part branch uses; when it is not a country, it is
+   * dropped, not guessed.
+   */
+  it('does not read a third part that is not a country as one', () => {
+    expect(parseLocation('New York, NY, Hybrid').country).toBeUndefined();
+    expect(parseLocation('Austin, TX, Onsite').country).toBeUndefined();
+    expect(parseLocation('Brooklyn, New York, NY').country).toBeUndefined();
+    expect(parseLocation('New York, NY, Hybrid')).toMatchObject({ city: 'New York', region: 'NY' });
+  });
+
   it('reads remote out of the string and drops the word from the parts', () => {
     const remote = parseLocation('Remote');
     expect(remote.remote).toBe(true);

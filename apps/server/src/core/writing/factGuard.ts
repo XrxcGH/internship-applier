@@ -97,15 +97,28 @@ export function normalize(s: string): string {
       .toLowerCase()
       .replace(/[‘’]/g, "'")
       .replace(/\b(inc|llc|ltd|corp|corporation|co|university|college|school)\b\.?/g, ' ')
-      // A possessive before the punctuation strip, or after it. The claim side strips
-      // "Dean's" down to "dean" when it extracts proper nouns, while this side turned the
-      // same word into "dean s" — and that orphaned letter meant "Dean's List" from a
-      // draft could never be found inside "Dean's List Semi-Finalist" from the profile,
-      // so a true sentence about the user's own award was blocked as an invented name.
-      // Both sides now shed the possessive the same way.
+      // A possessive before the punctuation strip. The claim side strips "Dean's" down to
+      // "dean" when it extracts proper nouns, while this side turned the same word into
+      // "dean s" — and that orphaned letter meant "Dean's List" from a draft could never be
+      // found inside "Dean's List Semi-Finalist" from the profile, so a true sentence about
+      // the user's own award was blocked as an invented name. Both sides now shed the
+      // possessive the same way. This is the ONLY place a lone "s" is removed: a blanket
+      // `\bs\b` strip that also ran here collapsed a name whose "&" left a real lone letter
+      // — "S&P" became "p", dropped below the checkable length, and a FABRICATED "S&P"
+      // employer sailed past the invented-employer check with a green tick, the worst thing
+      // this file can produce.
       .replace(/'s\b/g, '')
       .replace(/[^a-z0-9+#.]+/g, ' ')
-      .replace(/\b[s]\b/g, ' ')
+      // A trailing plural "s" is not a different word, on ANY word of a name, not only the
+      // last. The apostrophe strip above turns "Dean's List" into "dean list", but a draft
+      // that writes the same award without the apostrophe — "Deans List" — kept its "s" and
+      // read as "deans list", so the two forms of the user's own honor no longer vouched for
+      // each other and a true award was blocked at G3 as an invented name. Folding the "s"
+      // on both sides makes them match. Applied to both sides equally, so exact names are
+      // untouched (they transform identically); only genuine plural/possessive variants
+      // converge. Guarded to words of five letters or more that do not already end in "ss",
+      // so short acronyms ("aws", "css", "sql") and words like "business" are left alone.
+      .replace(/\b([a-z]{4,})s\b/g, (m, stem: string) => (stem.endsWith('s') ? m : stem))
       .replace(/\s+/g, ' ')
       .trim()
   );
@@ -263,9 +276,19 @@ export function extractDurations(text: string): DurationClaim[] {
   return out;
 }
 
-/** The denominator of "3.62/4.0" or "3.62 out of 4", and the tail of "on a 4.0 scale". */
-const GPA_SCALE_TAIL = /\b(\d\.\d{1,2})\s*(?:\/|out of)\s*(?:4|4\.0|5|5\.0)\b/gi;
-const GPA_SCALE_PHRASE = /\bon\s+a\s+\d(?:\.\d{1,2})?[\s-]*(?:point\s*)?scale\b/gi;
+/**
+ * The denominator of "3.968/4.0" or "3.968 out of 4", and the tail of "on a 4.000 scale".
+ *
+ * The numerator carries up to three decimals because transcripts print three, and the mask
+ * has to see the whole numerator or it does not fire. When this capped the numerator at two
+ * decimals while the number-leading pattern below read three, "I graduated with a 3.968/4.0
+ * GPA" slipped the mask: the scale on the far side of the slash was left in place, read as a
+ * second claimed GPA of 4, and a literally-true sentence came back blocking at G3 with a
+ * message asserting a "4" the user never wrote. The denominator accepts its own decimals
+ * ("4.0", "4.00", "4.000") so "on a 4.000 scale" is masked as a scale and not counted.
+ */
+const GPA_SCALE_TAIL = /\b(\d\.\d{1,3})\s*(?:\/|out of)\s*(?:4|5)(?:\.\d{1,3})?\b/gi;
+const GPA_SCALE_PHRASE = /\bon\s+a\s+\d(?:\.\d{1,3})?[\s-]*(?:point\s*)?scale\b/gi;
 
 /**
  * Nouns that make a nearby whole number a count of something rather than a grade. "GPA
@@ -493,7 +516,22 @@ const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\
  */
 const affiliationFrame = (name: string): RegExp =>
   new RegExp(
-    String.raw`(?:\b(?:i|we)\b[\w\s,'’-]{0,30}?\b(?:intern(?:ed|ing|s)?|work(?:ed|ing|s)?|stud(?:ied|ying|y)|spent|spend(?:ing)?|join(?:ed|ing)?|serv(?:ed|ing)?|hired|employed|volunteer(?:ed|ing)?|apprenticed)\b|\b(?:my|our)\b[\w\s,'’-]{0,20}?\b(?:internship|apprenticeship|fellowship|placement|role|position|job|time|tenure|summer|semester)\b)` +
+    String.raw`(?:` +
+      // I/we + an employment verb: "I interned at NASA", "we spent last summer at JPL".
+      String.raw`\b(?:i|we)\b[\w\s,'’-]{0,30}?\b(?:intern(?:ed|ing|s)?|work(?:ed|ing|s)?|stud(?:ied|ying|y)|spent|spend(?:ing)?|join(?:ed|ing)?|serv(?:ed|ing)?|hired|employed|volunteer(?:ed|ing)?|apprenticed)\b` +
+      String.raw`|` +
+      // A stint the writer calls their own: "my internship at NASA", "my time at MITRE".
+      String.raw`\b(?:my|our)\b[\w\s,'’-]{0,20}?\b(?:internship|apprenticeship|fellowship|placement|role|position|job|time|tenure|summer|semester)\b` +
+      String.raw`|` +
+      // "I did an internship at NASA", "I had a fellowship at JPL", "I completed the
+      // apprenticeship at MITRE" — the plainest way to state a stint, and the verb branch
+      // above misses it because did/had/completed/finished are too generic to list beside
+      // the ordinary "I had trouble with SQL". So only an unambiguous stint noun after
+      // "i/we ... a/an/the" carries the claim here; the vaguer nouns (role, time, summer)
+      // stay behind the "my/our" anchor to keep "I had a great time with SQL" from reading
+      // as employment at SQL.
+      String.raw`\b(?:i|we)\b[\w\s,'’-]{0,25}?\b(?:an?|the)\b[\w\s,'’-]{0,10}?\b(?:internship|apprenticeship|fellowship|placement)\b` +
+      String.raw`)` +
       String.raw`[\w\s,'’-]{0,25}?\b(?:at|for|with)\s+` +
       escapeRegExp(name),
     'i',
@@ -629,10 +667,25 @@ export function checkClaimDeterministically(
         ),
     );
     if (wrong !== undefined) {
-      const k = known[0]!;
+      // Cite the entry closest to the number the draft wrote, not always known[0]. A student
+      // with two degrees on file would otherwise be told their draft disagrees with an
+      // unrelated entry's GPA. And name the weighted figure when the profile holds one: the
+      // message used to say only the unweighted 3.968, steering the user to rewrite toward
+      // the lower number and discard the true, higher 4.321 weighted GPA they are entitled
+      // to state.
+      const distance = (k: (typeof known)[number]): number =>
+        Math.min(
+          Math.abs(k.value - wrong),
+          k.weighted !== undefined ? Math.abs(k.weighted - wrong) : Infinity,
+        );
+      const k = known.reduce((a, b) => (distance(b) < distance(a) ? b : a));
+      const held =
+        k.weighted !== undefined
+          ? `${k.value} (${k.weighted} weighted) on a ${k.scale}-point scale`
+          : `${k.value} on a ${k.scale}-point scale`;
       return {
         verdict: 'unsupported',
-        reason: `The draft says GPA ${wrong}; your profile says ${k.value} on a ${k.scale}-point scale.`,
+        reason: `The draft says GPA ${wrong}; your profile says ${held}.`,
         profileRef: k.ref,
       };
     }
