@@ -228,8 +228,14 @@ export function retrieveEvidence(
     items.push({
       ref: `certifications.${i}`,
       kind: 'certification',
-      text: `${c.name}${c.issuer ? ` from ${c.issuer}` : ''}`,
-      facts: { title: c.name, organization: c.issuer },
+      text: `${c.name}${c.issuer ? ` from ${c.issuer}` : ''}${c.date ? ` (${c.date})` : ''}`,
+      // The date a card was earned is the ceiling on "I have been CPR certified for N
+      // years" — the one duration claim a certification can support. Without it the entry
+      // was undated, fell out of the duration pool entirely, and the claim was measured
+      // against the longest JOB on the profile instead: a true sentence about a card the
+      // student has held since freshman year came back blocking at G3 quoting a two-month
+      // internship as the reason.
+      facts: { title: c.name, organization: c.issuer, startDate: c.date },
       score: overlap(query, tokens(c.name)) + 0.05,
     });
   });

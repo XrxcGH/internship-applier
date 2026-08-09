@@ -734,15 +734,78 @@ describe('honors carry a rank, and an organisation is not an employer', () => {
     ).toBeNull();
   });
 
-  it('a certification is not a duration claim about a job', () => {
+  /**
+   * Every rank below first, not just the one that was reported. An honorable mention was
+   * the example that found this; a profile reading "Second Place" was diminished by none of
+   * the words the first fix added, so the identical false green survived one step further up
+   * the podium.
+   */
+  it('sees every placing below first, however the profile spells it', () => {
+    for (const honor of [
+      'State Science Olympiad Second Place',
+      'State Science Olympiad 3rd Place',
+      'State Science Olympiad Top 10',
+      'State Science Olympiad Silver Medal',
+      'State Science Olympiad Semifinalist',
+      'State Science Olympiad Regional Qualifier',
+    ]) {
+      const ev = evidenceFor({
+        education: [{ ...fixture().education[0]!, honors: [honor] }],
+      } as Partial<ConfirmedProfile>);
+      expect(
+        checkClaimDeterministically('I won the State Science Olympiad.', ev).verdict,
+        honor,
+      ).toBe('overstated');
+    }
+  });
+
+  it('a first place is the win and is never read as short of one', () => {
+    for (const honor of [
+      'State Science Olympiad First Place',
+      'State Science Olympiad 1st Place',
+      'State Science Olympiad Champion',
+    ]) {
+      const ev = evidenceFor({
+        education: [{ ...fixture().education[0]!, honors: [honor] }],
+      } as Partial<ConfirmedProfile>);
+      expect(
+        checkClaimDeterministically('I won the State Science Olympiad.', ev).verdict,
+        honor,
+      ).toBeNull();
+    }
+  });
+
+  it('a certification is measured against its own date, not against a job', () => {
     // "certified" sat in the employment vocabulary, so a true sentence about a CPR card was
-    // measured against the longest job on the profile and blocked at G3.
-    const certified = evidenceFor({
+    // measured against the longest job on the profile — two months — and blocked at G3.
+    const dated = evidenceFor({
+      certifications: [
+        { name: 'CPR Certification', issuer: 'American Red Cross', date: '2023-01' },
+      ],
+    } as Partial<ConfirmedProfile>);
+    expect(
+      checkClaimDeterministically('I have been CPR certified for three years.', dated).verdict,
+    ).toBeNull();
+    expect(
+      checkClaimDeterministically('I have been CPR certified for eleven years.', dated).verdict,
+    ).toBe('overstated');
+  });
+
+  it('an undated credential bounds nothing, so it blocks nothing', () => {
+    // Undated is not the same as false. The entry the sentence is about is right there with
+    // no date on it; measuring it against the longest OTHER entry answers a different
+    // question, and answers it wrongly.
+    const undated = evidenceFor({
       certifications: [{ name: 'CPR Certification', issuer: 'American Red Cross' }],
     } as Partial<ConfirmedProfile>);
     expect(
-      checkClaimDeterministically('I have been CPR certified for three years.', certified).verdict,
+      checkClaimDeterministically('I have been CPR certified for three years.', undated).verdict,
     ).toBeNull();
+
+    // Naming no certification at all still falls back to the profile-wide ceiling.
+    expect(
+      checkClaimDeterministically('I have been licensed for eleven years.', undated).verdict,
+    ).toBe('overstated');
   });
 });
 

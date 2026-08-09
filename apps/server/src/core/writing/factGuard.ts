@@ -531,6 +531,18 @@ const PRACTICE_CONTEXT =
  * and through, and the word "school" in the store's name was enough to hand it the
  * education ceiling back.
  */
+/**
+ * Holding a credential. Its own vocabulary because it belongs to neither list above:
+ * "certified" once sat in WORK_CONTEXT, so "I have been CPR certified for three years" was
+ * measured against the longest JOB on the profile and blocked at G3 — a first-aid card is
+ * not a job, and the student who has one usually has no job long enough to clear it. It
+ * still has to be MEASURED, though, or an invented decade of licensure goes unchecked: the
+ * ceiling is the certification's own date, and an undated one falls back to the whole
+ * profile rather than to work alone.
+ */
+const CERT_CONTEXT =
+  /\b(certified|certification|licen[cs]ed|licen[cs]e|accredited|credential(?:ed|s)?)\b/i;
+
 const STUDY_CONTEXT =
   /\b(stud(?:y|ied|ies|ying)|attend(?:ed|ing)?|enroll(?:ed|ment)?|schooling|class(?:es|work)?|course(?:s|work)?|semester|grade|gpa|graduat(?:e|ed|ing|ion))\b/i;
 
@@ -744,8 +756,29 @@ function initialismVouched(rawName: string, fullNames: string[]): boolean {
  * of the few things on a young applicant's resume an employer can verify in a minute, so
  * this is the overstatement least worth letting through.
  */
-const RANK_QUALIFIER =
-  /\b(?:honorable mention|honourable mention|semi-?finalist|finalist|runner-?up|participant|nominee|nominated|qualifier|commended|shortlisted|alternate)\b/i;
+const RANK_QUALIFIER = new RegExp(
+  '\\b(?:' +
+    [
+      'honou?rable mention',
+      '(?:semi-?|quarter-?)?finalist',
+      'runner-?up',
+      'participant',
+      'nominee|nominated',
+      'qualifier|qualified for',
+      'commended|shortlisted|alternate',
+      // Placings by number and by metal. A profile reading "Second Place" is not diminished
+      // by any of the words above, so "I won the state tournament" against it came back
+      // green — the same false green the honorable mention produced, one step further up
+      // the podium. Anything that is not first is a placing; "1st place" is deliberately
+      // NOT here, because a first place is the win and must not be read as short of one.
+      '(?:second|third|fourth|fifth)\\s+place',
+      '(?:[2-9]|\\d\\d+)(?:st|nd|rd|th)\\s+place',
+      'top\\s+\\d+',
+      '(?:silver|bronze)\\s+medal',
+    ].join('|') +
+    ')\\b',
+  'i',
+);
 
 /**
  * Language that claims the top of the podium and nothing less. Kept tight on purpose: an
@@ -848,7 +881,7 @@ export function checkClaimDeterministically(
   if (
     durations.length > 0 &&
     FIRST_PERSON.test(claim) &&
-    (WORK_CONTEXT.test(claim) || PRACTICE_CONTEXT.test(claim))
+    (WORK_CONTEXT.test(claim) || PRACTICE_CONTEXT.test(claim) || CERT_CONTEXT.test(claim))
   ) {
     const dated = evidence
       .filter((e) => e.facts.startDate)
@@ -869,9 +902,35 @@ export function checkClaimDeterministically(
     // Whole words here too, for the same reason as the organisation check below: a bare
     // `includes` let a claim naming MIT scope itself to an entry at "Summit Labs" and take
     // that entry's ceiling.
-    const scoped = dated.filter((d) =>
-      claimedNames.some((c) => d.names.some((n) => n === c.norm || containsPhrase(n, c.norm))),
-    );
+    const namesThis = (names: string[]): boolean =>
+      claimedNames.some((c) => names.some((n) => n === c.norm || containsPhrase(n, c.norm)));
+
+    const scoped = dated.filter((d) => namesThis(d.names));
+
+    /**
+     * A credential is a date, not a span, and an UNDATED one bounds nothing at all.
+     *
+     * When the claim names a certification the profile holds but never dated, the fallback
+     * measured it against the longest other entry — so "I have been CPR certified for three
+     * years" was blocked at G3 by a two-month camp counsellor job. The entry the sentence is
+     * actually about is right there and simply has no date on it; the honest answer is that
+     * this is not checkable, not that it is false. A dated certification is still measured
+     * (it lands in `scoped`), and a claim naming no certification still falls back.
+     */
+    const undatedCredential =
+      CERT_CONTEXT.test(claim) &&
+      !WORK_CONTEXT.test(claim) &&
+      scoped.length === 0 &&
+      evidence.some(
+        (e) =>
+          e.kind === 'certification' &&
+          !e.facts.startDate &&
+          namesThis(
+            [e.facts.title, e.facts.organization]
+              .filter((v): v is string => Boolean(v))
+              .map(normalize),
+          ),
+      );
 
     // A work-duration claim is bounded by work, not by school. The unscoped pool used to
     // include the education entries, and every young applicant carries a roughly four-year
@@ -885,7 +944,7 @@ export function checkClaimDeterministically(
     const pool =
       scoped.length > 0 ? scoped : dated.filter((d) => !(workClaim && d.kind === 'education'));
 
-    if (pool.length > 0) {
+    if (pool.length > 0 && !undatedCredential) {
       const longest = pool.reduce((x, y) => (y.months > x.months ? y : x));
       // 25% plus a month of slack — people round honestly, and everyone calls a ten-week
       // internship "three months".
