@@ -8,7 +8,7 @@
  * reports success because it called a method without error; the question that matters is
  * whether the page kept the value.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -30,6 +30,7 @@ import {
   executePlan,
   type SelectOption,
 } from '../src/core/filling/fill';
+import { removeTempDir } from './support/tempDir';
 
 let fixture: FixtureServer;
 let session: BrowserSession;
@@ -134,7 +135,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await session?.close();
   await fixture?.close();
-  if (workDir) rmSync(workDir, { recursive: true, force: true });
+  removeTempDir(workDir);
 });
 
 async function run(pathname: string, answers: ApplicationAnswer[] = []) {

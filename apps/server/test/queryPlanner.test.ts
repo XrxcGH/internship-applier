@@ -157,6 +157,285 @@ describe('inferRoleFamilies', () => {
     });
     expect(inferRoleFamilies(p)).toContain('robotics');
   });
+
+  /**
+   * "Designed weekly practice plans" is among the commonest resume verbs in every
+   * domain. As a bare stem it was the ONLY taxonomy hit on a swim coach's profile, so
+   * the coach got UX and Figma internship queries. Design now needs design evidence.
+   */
+  it('does not read UX design out of the verb "designed"', () => {
+    const coach = profile({
+      experience: [
+        {
+          title: 'Assistant Swim Coach',
+          organization: 'Harborview Aquatic Club',
+          bullets: ['Designed weekly practice plans with the head coach'],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(coach)).not.toContain('design');
+
+    // The true positive the family exists for still infers.
+    const ux = profile({
+      projects: [
+        { name: 'Club site', description: 'Designed Figma wireframes for the signup flow' },
+      ],
+    });
+    expect(inferRoleFamilies(ux)).toContain('design');
+  });
+
+  it('does not read product management out of photographing products', () => {
+    const etsy = profile({
+      experience: [
+        {
+          title: 'Founder',
+          organization: 'Reyes Custom Prints',
+          bullets: ['Set prices, photograph products, and answer customer messages'],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(etsy)).not.toContain('product management');
+
+    const pm = profile({
+      experience: [
+        { title: 'Product Intern', bullets: ['Owned the product roadmap for the beta'] },
+      ],
+    });
+    expect(inferRoleFamilies(pm)).toContain('product management');
+  });
+
+  /**
+   * "Sample Regional Science and Engineering Fair" is a science fair, not a software
+   * background — the "engineer" stem minted software queries for a Behavioral Sciences
+   * award. Meanwhile USACO Silver plus AP Computer Science A — what a competition
+   * programmer's resume actually prints — evidenced nothing.
+   */
+  it('reads software engineering from USACO and CS coursework, not from a fair name', () => {
+    const fair = profile({
+      education: [
+        {
+          honors: [
+            'Sample Regional Science and Engineering Fair, Grand Award, Behavioral Sciences (2025)',
+          ],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(fair)).not.toContain('software engineering');
+
+    const usaco = profile({
+      education: [
+        { coursework: ['AP Computer Science A'], honors: ['USACO Silver Division (2024)'] },
+      ],
+    });
+    expect(inferRoleFamilies(usaco)).toContain('software engineering');
+  });
+
+  it('reads microbiology as biology', () => {
+    // "biolog" is a word-START stem and cannot see itself inside "microbiology"; an ISEF
+    // finalist whose resume never prints the bare word inferred no biology family.
+    const p = profile({
+      education: [{ honors: ['Regeneron ISEF Finalist, Microbiology (2025)'] }],
+    });
+    expect(inferRoleFamilies(p)).toContain('biology');
+  });
+});
+
+/**
+ * The four young-applicant families: each exists because a fully-loaded domain resume
+ * inferred ZERO families and fell to the broad-search note — the one search its student
+ * would have typed never ran. Every term is tested beside the trap it was qualified
+ * against, because the last four spurious-family bugs ("ml" in "html", "brand" in
+ * "Brandeis", "robot" in "robots.txt", "design" in "designed") were all one homonym away.
+ */
+describe('young-applicant role families: true positives and their traps', () => {
+  it('education: coaching and tutoring infer it; tutorials and self-teaching do not', () => {
+    const coach = profile({
+      experience: [
+        { title: 'Assistant Swim Coach', organization: 'Harborview Aquatic Club', bullets: [] },
+        {
+          title: 'Volunteer Math Tutor',
+          organization: 'Bridgeview Community Center',
+          bullets: ['Tutor middle school students in pre-algebra twice a week'],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(coach)).toContain('education');
+
+    // Learning is not teaching: following a tutorial, teaching yourself, being mentored.
+    const learner = profile({
+      experience: [
+        {
+          title: 'Web Assistant',
+          bullets: [
+            'Built the site following React tutorials',
+            'Self-taught Python over the summer',
+            'Mentored by senior engineers on the team',
+          ],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(learner)).not.toContain('education');
+  });
+
+  it('healthcare: a hospital and HOSA infer it; a patient temperament and a CPR card do not', () => {
+    const premed = profile({
+      experience: [
+        {
+          title: 'Patient Transport Volunteer',
+          organization: 'Mercy Sample Regional Medical Center',
+          bullets: [],
+        },
+      ],
+      education: [
+        { honors: ['HOSA State Leadership Conference Qualifier — Medical Terminology (2025)'] },
+      ],
+    });
+    expect(inferRoleFamilies(premed)).toContain('healthcare');
+
+    // "patient debugging" is a temperament, and First Aid/CPR is held by every coach and
+    // babysitter — neither is a healthcare career signal.
+    const engineer = profile({
+      experience: [
+        {
+          title: 'QA Assistant',
+          bullets: [
+            'Patient and attentive debugging of flaky tests',
+            'First Aid/CPR/AED certified for the summer camp job',
+          ],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(engineer)).not.toContain('healthcare');
+  });
+
+  it('journalism: a masthead infers it; a text editor and a WebSocket broadcast do not', () => {
+    const editor = profile({
+      experience: [
+        {
+          title: 'Editor-in-Chief',
+          organization: 'The Sample Sentinel (Student Newspaper)',
+          bullets: [],
+        },
+        { title: 'Copy Editor', organization: 'The Sampler Yearbook', bullets: [] },
+      ],
+      education: [{ coursework: ['Honors Journalism'] }],
+    });
+    expect(inferRoleFamilies(editor)).toContain('journalism');
+
+    const dev = profile({
+      skills: [{ name: 'Vim text editor' }],
+      experience: [
+        {
+          title: 'Backend Assistant',
+          bullets: ['Broadcast messages over a WebSocket to every editor session'],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(dev)).not.toContain('journalism');
+  });
+
+  it('public policy: debate, MUN and student government infer it; privacy policies do not', () => {
+    const debater = profile({
+      experience: [
+        {
+          title: 'Debate Captain',
+          organization: 'St. Sample High School Speech & Debate Team',
+          bullets: [],
+        },
+        { title: 'Secretary-General', organization: 'Model United Nations Club', bullets: [] },
+        {
+          title: 'Student Body Treasurer',
+          organization: 'St. Sample High School Student Government',
+          bullets: [],
+        },
+      ],
+      education: [
+        {
+          fieldOfStudy: 'Political Science',
+          coursework: ['AP United States Government and Politics'],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(debater)).toContain('public policy');
+
+    // The homonyms: site policies and debated tradeoffs are not civic life.
+    const web = profile({
+      experience: [
+        {
+          title: 'Web Assistant',
+          bullets: [
+            'Wrote the privacy policy and return policy pages',
+            'Debated tradeoffs with teammates before shipping',
+          ],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(web)).not.toContain('public policy');
+  });
+
+  /**
+   * A school's NAME is identity, not role evidence. Young resumes write clubs as
+   * "Student Ambassador, Design and Architecture Senior High", and the school's own words
+   * minted a design family with zero design work behind it. The name is scrubbed from the
+   * org corpus; the club text written beside it keeps counting.
+   */
+  it('does not mint a family from a school name used as an organisation', () => {
+    const p = profile({
+      education: [{ institution: 'Design and Architecture Senior High' }],
+      experience: [
+        {
+          title: 'Student Ambassador',
+          organization: 'Design and Architecture Senior High',
+          bullets: [],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(p)).not.toContain('design');
+
+    // The scrub removes only the school's name: a real club after the school name in the
+    // same org line still evidences its family.
+    const club = profile({
+      education: [{ institution: 'Design and Architecture Senior High' }],
+      experience: [
+        {
+          title: 'Captain',
+          organization: 'Design and Architecture Senior High Speech & Debate Team',
+          bullets: [],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(club)).toContain('public policy');
+  });
+
+  /**
+   * "PM" is the product-management acronym and only two letters long, so it matches as a
+   * whole word — and an hourly student writes their shift times down. A cashier who worked
+   * "4 to 9 PM shifts" was handed a product-management search plan.
+   */
+  it('reads a clock time as hours worked, not as product management', () => {
+    const cashier = profile({
+      experience: [
+        {
+          title: 'Cashier',
+          organization: 'Corner Market',
+          bullets: ['Worked 4 to 9 PM shifts on weekends', 'Closed the 9am-5pm register'],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(cashier)).not.toContain('product management');
+
+    // The acronym in a title still counts — the scrub takes clock times, not the word.
+    const pm = profile({
+      experience: [
+        {
+          title: 'PM Intern',
+          organization: 'Sample Software',
+          bullets: ['Owned the roadmap for one surface and ran stakeholder reviews'],
+        },
+      ],
+    });
+    expect(inferRoleFamilies(pm)).toContain('product management');
+  });
 });
 
 describe('pinned companies', () => {

@@ -467,6 +467,43 @@ describe('duration extraction', () => {
   });
 });
 
+describe('service verbs are durations too', () => {
+  /**
+   * The duration gate once held only office and engineering verbs, so "I volunteered /
+   * tutored / served there for five years" — how a clubs-and-activities resume states
+   * tenure — was never measured at all. And the unscoped ceiling pool included the
+   * education entry, so every young applicant's four-year school span silently vouched
+   * for invented work tenure. Work claims now measure against work.
+   */
+  it('measures a service-verb duration against the entry it names', () => {
+    expect(verdictOf('I have volunteered at Kestrel Analytics for two years.')).toBe('overstated');
+    expect(verdictOf('I tutored at Kestrel Analytics for two years.')).toBe('overstated');
+  });
+
+  it('does not let the degree span vouch for an unscoped work claim', () => {
+    // The degree runs 44 months; the longest job is far shorter. Ten claimed years of
+    // WORK must be measured against work.
+    expect(verdictOf('I have worked as a barista for ten years.')).toBe('overstated');
+  });
+
+  it('still lets the degree bound a practice claim about schooling and craft', () => {
+    // "Writing code for 2.5 years" is not tenure at any employer; the degree span is
+    // the honest, generous ceiling it has always had.
+    expect(verdictOf('I have been writing code for 2.5 years.')).toBeNull();
+  });
+});
+
+describe('a spelled-out state and its abbreviation are one place', () => {
+  it('accepts the home state written out when the profile abbreviates it', () => {
+    // The identity line prints "New Brunswick, NJ"; essays write "New Jersey".
+    expect(guardDraft('I live in New Brunswick, New Jersey.', EVIDENCE).blocking).toEqual([]);
+  });
+
+  it('still blocks a state the profile does not hold', () => {
+    expect(verdictOf('I grew up in Ohio before moving east.')).toBe('unsupported');
+  });
+});
+
 describe('half-years are not read as whole ones', () => {
   // Nothing on this profile is longer than the degree, at 44 months.
   it('does not flag an honest half-year', () => {
@@ -641,6 +678,74 @@ describe('a possessive award reads the same with or without its apostrophe', () 
   });
 });
 
+/**
+ * The awards-and-activities resume, which is what a rising sophomore actually has. A
+ * profile like this is mostly honors and clubs and almost no employment, and each case
+ * below is a way that shape broke the guard in both directions at once.
+ */
+describe('honors carry a rank, and an organisation is not an employer', () => {
+  const awards = evidenceFor({
+    education: [
+      {
+        ...fixture().education[0]!,
+        honors: [
+          'Future Business Leaders of America State Finalist',
+          'NSPA Feature Story of the Year Honorable Mention',
+          'Math League Champion',
+        ],
+      },
+    ],
+  } as Partial<ConfirmedProfile>);
+
+  it('an award does not vouch for a job at the organisation that gave it', () => {
+    // Winning an FBLA event puts "Future Business Leaders of America" on the profile, and
+    // its initialism is FBLA — so an internship the student never held was green.
+    expect(checkClaimDeterministically('I had an internship at FBLA.', awards).verdict).toBe(
+      'unsupported',
+    );
+    expect(checkClaimDeterministically('I competed at FBLA in the spring.', awards).verdict).toBe(
+      null,
+    );
+  });
+
+  it('a placing may not be written up as a win', () => {
+    const det = checkClaimDeterministically(
+      'I won the NSPA Feature Story of the Year award.',
+      awards,
+    );
+    expect(det.verdict).toBe('overstated');
+    expect(det.quote).toBe('NSPA Feature Story of the Year Honorable Mention');
+  });
+
+  it('the same award stated at its real rank is fine, however it is shortened', () => {
+    expect(
+      checkClaimDeterministically('I received an NSPA Honorable Mention.', awards).verdict,
+    ).toBeNull();
+    expect(checkClaimDeterministically('I was an FBLA State Finalist.', awards).verdict).toBeNull();
+    // An honorable mention IS an award and IS received. Nothing here is overstated.
+    expect(
+      checkClaimDeterministically('I received an award from NSPA that year.', awards).verdict,
+    ).toBeNull();
+  });
+
+  it('a real win survives the -ship the student writes it with', () => {
+    expect(
+      checkClaimDeterministically('I won the Math League Championship.', awards).verdict,
+    ).toBeNull();
+  });
+
+  it('a certification is not a duration claim about a job', () => {
+    // "certified" sat in the employment vocabulary, so a true sentence about a CPR card was
+    // measured against the longest job on the profile and blocked at G3.
+    const certified = evidenceFor({
+      certifications: [{ name: 'CPR Certification', issuer: 'American Red Cross' }],
+    } as Partial<ConfirmedProfile>);
+    expect(
+      checkClaimDeterministically('I have been CPR certified for three years.', certified).verdict,
+    ).toBeNull();
+  });
+});
+
 describe('proper-noun extraction', () => {
   it('finds names wherever they sit in the sentence', () => {
     expect(extractProperNouns('I worked at Kestrel Analytics.')).toContain('Kestrel Analytics');
@@ -722,6 +827,48 @@ describe('claim segmentation', () => {
     for (const c of splitClaims(text)) {
       expect(text.slice(c.span.start, c.span.end)).toBe(c.text);
     }
+  });
+
+  /**
+   * Intl.Segmenter reads the dot of "St." as a full stop, so "St. Sample High School" —
+   * among the most common school-name shapes for young applicants — arrived cut in half:
+   * the name was never checked whole, and an invented "St. Jude" employer escaped the
+   * invented-org check because each fragment looked ordinary alone.
+   */
+  it('does not cut a sentence at an abbreviation dot', () => {
+    const text = 'I am a member of the Chess Club at St. Sample High School. It meets weekly.';
+    const claims = splitClaims(text);
+    expect(claims).toHaveLength(2);
+    expect(claims[0]!.text).toContain('St. Sample High School');
+    for (const c of claims) {
+      expect(text.slice(c.span.start, c.span.end)).toBe(c.text);
+    }
+  });
+});
+
+describe('an abbreviation dot does not split a name from itself', () => {
+  /**
+   * normalize kept the dot ("st. sample high") while the claim side stripped it
+   * ("st sample high"), so the profile's own "St."-prefixed school never vouched for a
+   * draft that named it — a true sentence, red at G3, where there is no override.
+   */
+  const ST = evidenceFor({
+    education: [{ ...fixture().education[0]!, institution: 'St. Sample High School' }],
+  } as Partial<ConfirmedProfile>);
+
+  it('accepts the school with the dot, without it, and inside a whole sentence', () => {
+    for (const line of [
+      'I attend St. Sample High School.',
+      'I attend St Sample High School.',
+      'I am a member of the chess club at St. Sample High School.',
+    ]) {
+      expect(checkClaimDeterministically(line, ST).verdict, line).toBeNull();
+    }
+  });
+
+  it('still blocks a different St. name, as one whole claim', () => {
+    const g = guardDraft('I interned at St. Jude last summer.', ST);
+    expect(g.blocking.some((c) => (c.reason ?? '').includes('Jude'))).toBe(true);
   });
 });
 

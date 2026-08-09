@@ -118,9 +118,29 @@ export function deriveAcademicYear(profile: CandidateProfile, now: Date): number
   return year >= 1 && year <= 8 ? year : null;
 }
 
+/** Months covered by a set of [start, end] YYYY-MM spans, with overlaps counted once. */
+function unionMonths(spans: Array<[string, string]>): number {
+  const sorted = [...spans].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  let total = 0;
+  let curStart: string | null = null;
+  let curEnd = '';
+  for (const [s, e] of sorted) {
+    if (curStart === null || s > curEnd) {
+      if (curStart !== null) total += monthsBetween(curStart, curEnd);
+      curStart = s;
+      curEnd = e;
+    } else if (e > curEnd) {
+      curEnd = e;
+    }
+  }
+  if (curStart !== null) total += monthsBetween(curStart, curEnd);
+  return total;
+}
+
 export function deriveYearsExperience(profile: CandidateProfile, now: Date): number {
   const nowYm = toYearMonth(now);
   let months = 0;
+  const counted: Array<[string, string]> = [];
   for (const e of profile.experience) {
     const weight = WEIGHTS[e.type] ?? 0;
     if (weight === 0) continue;
@@ -129,8 +149,14 @@ export function deriveYearsExperience(profile: CandidateProfile, now: Date): num
     if (!e.startDate) continue;
     const end = e.endDate ?? nowYm;
     months += monthsBetween(e.startDate, end) * weight;
+    counted.push([e.startDate, end]);
   }
-  return Math.round((months / 12) * 10) / 10;
+  // Concurrent entries do not sum past the calendar. A school-store job beside an Etsy
+  // side venture — the standard DECA/FBLA shape — added up to 4.1 years of professional
+  // experience for a student whose entire work history spans 26 calendar months, and that
+  // figure feeds the experience-ceiling check against "3+ years required" postings.
+  // Nobody has more professional experience than time in which to have gained it.
+  return Math.round((Math.min(months, unionMonths(counted)) / 12) * 10) / 10;
 }
 
 /**
@@ -142,11 +168,23 @@ export function deriveSeniorityBand(
   years: number,
   expectedGraduation: string | null,
   now: Date,
+  highSchoolEnd: string | null = null,
 ): SeniorityBand {
   if (academicLevel === 'high_school') return 'pre_college';
 
+  // Still enrolled in high school: dual-enrollment coursework does not put a student in
+  // an intern band, whatever level its community-college entry claims.
+  if (highSchoolEnd !== null && highSchoolEnd >= toYearMonth(now)) return 'pre_college';
+
   const graduated = expectedGraduation !== null && expectedGraduation < toYearMonth(now);
-  if (graduated && academicLevel !== 'none') return 'new_grad';
+  // A "degree" that ended no later than high school did is dual enrollment, not a
+  // completed college program. Without this, a community-college entry labelled
+  // "associate" outranked the high school for academicLevel, its year-only end date
+  // slipped behind the clock, and a 17-year-old high schooler was banded new_grad — the
+  // band that tells eligibility they have finished college. A real associate's earned
+  // after high school still promotes: its end date is later than the school's.
+  const dualEnrollment = highSchoolEnd !== null && highSchoolEnd >= (expectedGraduation ?? '');
+  if (graduated && academicLevel !== 'none' && !dualEnrollment) return 'new_grad';
   if (years >= 1) return 'experienced_intern';
   return 'entry_intern';
 }
@@ -156,6 +194,12 @@ export function deriveProfile(profile: CandidateProfile, now: Date = new Date())
   const academicLevel = deriveAcademicLevel(profile);
   const expectedGraduation = deriveExpectedGraduation(profile);
   const years = deriveYearsExperience(profile, now);
+  // The latest high-school end date, for the dual-enrollment guards in the band.
+  const highSchoolEnd = profile.education
+    .filter((e) => e.level === 'high_school')
+    .map((e) => e.endDate)
+    .filter((d): d is string => Boolean(d))
+    .reduce<string | null>((a, b) => (a !== null && a > b ? a : b), null);
 
   return {
     age,
@@ -169,6 +213,12 @@ export function deriveProfile(profile: CandidateProfile, now: Date = new Date())
     academicYear: deriveAcademicYear(profile, now),
     expectedGraduation,
     yearsProfessionalExperience: years,
-    seniorityBand: deriveSeniorityBand(academicLevel, years, expectedGraduation, now),
+    seniorityBand: deriveSeniorityBand(
+      academicLevel,
+      years,
+      expectedGraduation,
+      now,
+      highSchoolEnd,
+    ),
   };
 }

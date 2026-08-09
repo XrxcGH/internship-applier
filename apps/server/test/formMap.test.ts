@@ -6,7 +6,7 @@
  * the six different places a label can hide, and that when it cannot find one it says
  * `unknown` rather than guessing.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,7 @@ import {
   type FormMap,
 } from '../src/core/filling/formMap';
 import { FILLABLE_CONTROLS } from '../src/core/filling/selectors';
+import { removeTempDir } from './support/tempDir';
 
 let fixture: FixtureServer;
 let session: BrowserSession;
@@ -38,7 +39,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await session?.close();
   await fixture?.close();
-  if (profileDir) rmSync(profileDir, { recursive: true, force: true });
+  removeTempDir(profileDir);
 });
 
 async function mapOf(pathname: string): Promise<FormMap> {

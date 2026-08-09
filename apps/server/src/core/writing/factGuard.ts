@@ -57,6 +57,18 @@ export interface CheckedClaim {
 // ─────────────────────────────────────────────── segmentation
 
 /**
+ * "St." is an abbreviation, not a full stop. Intl.Segmenter ends a sentence at it, so
+ * "St. Sample High School" — one of the most common school-name shapes there is — arrived
+ * as two half-claims: the name was never checked whole, the first fragment ("I have
+ * volunteered at St.") drew a "loosely tied" amber on a fully true sentence, and in the
+ * other direction an invented "St. Jude" employer escaped the invented-org check entirely
+ * because each half looked ordinary alone. A segment ending in one of these is glued back
+ * to the segment that follows it.
+ */
+const ABBREVIATION_END =
+  /\b(?:St|Mt|Ft|Mr|Mrs|Ms|Dr|Prof|Rev|Jr|Sr|Lt|Sgt|Capt|Col|Gen|vs|No)\.\s*$/;
+
+/**
  * Sentence-level, with clause splitting only where punctuation makes coordination
  * unambiguous (`, and` / `, but` / `; then`). A bare "and" is left alone: splitting
  * "research and development" into two claims invents a fabrication that isn't there.
@@ -65,16 +77,26 @@ export interface CheckedClaim {
  */
 export function splitClaims(text: string): Claim[] {
   const seg = new Intl.Segmenter('en', { granularity: 'sentence' });
-  const out: Claim[] = [];
+  const sentences: Array<{ text: string; start: number }> = [];
   let offset = 0;
 
   for (const s of seg.segment(text)) {
-    const sentence = s.segment;
-    const base = text.indexOf(sentence, offset);
+    const segment = s.segment;
+    const base = text.indexOf(segment, offset);
     if (base < 0) continue;
-    offset = base + sentence.length;
-    if (!/\p{L}/u.test(sentence)) continue;
+    offset = base + segment.length;
+    if (!/\p{L}/u.test(segment)) continue;
 
+    const prev = sentences[sentences.length - 1];
+    if (prev && ABBREVIATION_END.test(prev.text)) {
+      prev.text = text.slice(prev.start, base + segment.length);
+    } else {
+      sentences.push({ text: segment, start: base });
+    }
+  }
+
+  const out: Claim[] = [];
+  for (const { text: sentence, start } of sentences) {
     const parts = sentence.split(/[,;]\s+(?:and then|and also|and|but|then)\s+(?=\p{L})/giu);
     let local = 0;
     for (const part of parts) {
@@ -82,7 +104,7 @@ export function splitClaims(text: string): Claim[] {
       if (trimmed.length < 12 || !/\p{L}/u.test(trimmed)) continue;
       const idx = sentence.indexOf(trimmed, local);
       local = idx + trimmed.length;
-      out.push({ text: trimmed, span: { start: base + idx, end: base + idx + trimmed.length } });
+      out.push({ text: trimmed, span: { start: start + idx, end: start + idx + trimmed.length } });
     }
   }
   return out;
@@ -109,6 +131,14 @@ export function normalize(s: string): string {
       // this file can produce.
       .replace(/'s\b/g, '')
       .replace(/[^a-z0-9+#.]+/g, ' ')
+      // An abbreviation dot is not part of the word. The claim side has always shed it —
+      // extractProperNouns trims "St." to "St" — while this side kept it, so the profile's
+      // own "St. Sample High School" normalised to "st. sample high", the same school in a
+      // draft to "st sample high", and the two spellings of one name could never vouch for
+      // each other: a true sentence about the student's own school was red at G3, where
+      // there is no override. Word-EDGE dots come off on both sides equally; the dot inside
+      // "node.js" is part of the name and stays.
+      .replace(/(?<=^|\s)\.+|\.+(?=\s|$)/g, '')
       // A trailing plural "s" is not a different word, on ANY word of a name, not only the
       // last. The apostrophe strip above turns "Dean's List" into "dean list", but a draft
       // that writes the same award without the apostrophe — "Deans List" — kept its "s" and
@@ -366,6 +396,13 @@ const COMMON_CAPITALS = new Set(
     'summer spring fall autumn winter today yesterday tomorrow ' +
     'instead rather besides meanwhile later once twice often sometimes always never ' +
     'perhaps maybe within without between among across over under ' +
+    // Prepositions that open a sentence. "At ICDC, I advanced to the finals" is the most
+    // ordinary way a competition student opens a sentence, and with "At" missing here the
+    // pair was extracted as a two-word name — mixed case, so the acronym skip never fired
+    // — and "At ICDC" was reported as an invented organisation on a profile whose honors
+    // print "(ICDC)" verbatim. Peeling only trims run EDGES, so "University of Akron"
+    // keeps its interior "of".
+    'at as in on by of to for from with ' +
     // Contraction stems: what "Don't" or "Wasn't" reduces to once its tail is removed by
     // `withoutTail`. Without these a negated sentence opener reads as a company name.
     'do does did don doesn didn won couldn shouldn wouldn isn aren wasn weren haven ' +
@@ -467,9 +504,35 @@ const FIRST_PERSON = /\b(i|i'm|i've|i'd|i'll|me|my|mine|we|we've|our)\b/i;
  * A duration only means "how long I did this" when the sentence is about doing
  * something. Without this, "I've followed Acme for ten years" gets measured against an
  * internship and flagged as inflated.
+ *
+ * Two vocabularies, because the ceiling pool differs (see the duration check):
+ *
+ *   - WORK_CONTEXT is holding a role: employment, service, membership. This list once
+ *     held only office and engineering verbs (worked, interned, coded, built...), so
+ *     "I tutored / coached / volunteered / served / performed there for five years" —
+ *     the way a clubs-and-activities resume actually states tenure — was never measured
+ *     at all, and a five-year claim against an eleven-month entry came back green with
+ *     the real entry quoted beside it as proof.
+ *   - PRACTICE_CONTEXT is doing a thing rather than holding a post ("writing code for
+ *     three years", "played clarinet for six years"): still a checkable duration, but
+ *     legitimately bounded by the longest thing on the profile, schooling included.
  */
-const DURATION_CONTEXT =
-  /\b(work(?:ed|ing|s)?|intern(?:ed|ing|ship)?|spent|studi(?:ed|es|ing)|experience|employ(?:ed|ment)|role|position|job|tenure|program(?:med|ming)|cod(?:ed|ing)|develop(?:ed|ing|ment)|build(?:ing)?|built|us(?:ed|ing)|writing|wrote|led|ran|taught|research(?:ed|ing)?)\b/i;
+const WORK_CONTEXT =
+  /\b(work(?:ed|ing|s)?|intern(?:ed|ing|ship)?|employ(?:ed|ment)|role|position|job|tenure|led|ran|taught|teach(?:ing)?|tutor(?:ed|ing)?|coach(?:ed|ing)?|volunteer(?:ed|ing)?|mentor(?:ed|ing)?|serv(?:e|ed|ing)|shadow(?:ed|ing)|member(?:ship)?)\b/i;
+
+const PRACTICE_CONTEXT =
+  /\b(spent|studi(?:ed|es|ing)|experience|program(?:med|ming)|cod(?:ed|ing)|develop(?:ed|ing|ment)|build(?:ing)?|built|us(?:ed|ing)|writing|wrote|research(?:ed|ing)?|perform(?:ed|ing)|s(?:a|u)ng|sing(?:ing)?|play(?:ed|ing)?|act(?:ed|ing)|rehears(?:ed|ing|al)|danc(?:ed|ing)|march(?:ed|ing)|direct(?:ed|ing)|conduct(?:ed|ing)|compet(?:ed|ing|e)|attend(?:ed|ing)?)\b/i;
+
+/**
+ * Words that make a duration about schooling, so the degree span may bound it even when
+ * an employment verb also appears ("I worked on my thesis while studying there for four
+ * years"). Bare "school" is deliberately NOT here: it names places as often as it names
+ * studying — "I have worked at the school store for four years" is a work claim through
+ * and through, and the word "school" in the store's name was enough to hand it the
+ * education ceiling back.
+ */
+const STUDY_CONTEXT =
+  /\b(stud(?:y|ied|ies|ying)|attend(?:ed|ing)?|enroll(?:ed|ment)?|schooling|class(?:es|work)?|course(?:s|work)?|semester|grade|gpa|graduat(?:e|ed|ing|ion))\b/i;
 
 /**
  * Sentences of intent or feeling rather than fact. Only consulted when the sentence
@@ -548,6 +611,181 @@ const affiliationFrame = (name: string): RegExp =>
 const isAcronymRun = (raw: string): boolean =>
   /^[A-Z][A-Z0-9]{1,4}(?:\s+[A-Z][A-Z0-9]{1,4})*$/.test(raw);
 
+/**
+ * "Ohio" and "OH" are one place. Resumes abbreviate the state, essays spell it out, and a
+ * profile holding only the abbreviation blocked "I live in Springfield, Ohio." at G3 as an
+ * invented name — a true sentence about the writer's own home. The abbreviated direction
+ * ("OH" against a profile that spells it out) is already saved by the acronym-run skip.
+ *
+ * The lookup key is built through `normalize` at load, because the plural fold rewrites
+ * several state names ("illinois" → "illinoi") and a raw-string key would silently stop
+ * matching the claim side.
+ */
+const US_STATE_NAMES: Array<[string, string]> = [
+  ['alabama', 'AL'],
+  ['alaska', 'AK'],
+  ['arizona', 'AZ'],
+  ['arkansas', 'AR'],
+  ['california', 'CA'],
+  ['colorado', 'CO'],
+  ['connecticut', 'CT'],
+  ['delaware', 'DE'],
+  ['florida', 'FL'],
+  ['georgia', 'GA'],
+  ['hawaii', 'HI'],
+  ['idaho', 'ID'],
+  ['illinois', 'IL'],
+  ['indiana', 'IN'],
+  ['iowa', 'IA'],
+  ['kansas', 'KS'],
+  ['kentucky', 'KY'],
+  ['louisiana', 'LA'],
+  ['maine', 'ME'],
+  ['maryland', 'MD'],
+  ['massachusetts', 'MA'],
+  ['michigan', 'MI'],
+  ['minnesota', 'MN'],
+  ['mississippi', 'MS'],
+  ['missouri', 'MO'],
+  ['montana', 'MT'],
+  ['nebraska', 'NE'],
+  ['nevada', 'NV'],
+  ['new hampshire', 'NH'],
+  ['new jersey', 'NJ'],
+  ['new mexico', 'NM'],
+  ['new york', 'NY'],
+  ['north carolina', 'NC'],
+  ['north dakota', 'ND'],
+  ['ohio', 'OH'],
+  ['oklahoma', 'OK'],
+  ['oregon', 'OR'],
+  ['pennsylvania', 'PA'],
+  ['rhode island', 'RI'],
+  ['south carolina', 'SC'],
+  ['south dakota', 'SD'],
+  ['tennessee', 'TN'],
+  ['texas', 'TX'],
+  ['utah', 'UT'],
+  ['vermont', 'VT'],
+  ['virginia', 'VA'],
+  ['washington', 'WA'],
+  ['west virginia', 'WV'],
+  ['wisconsin', 'WI'],
+  ['wyoming', 'WY'],
+];
+const STATE_ABBREV = new Map(US_STATE_NAMES.map(([name, ab]) => [normalize(name), ab]));
+
+/** All-caps tokens of two to six letters read as initialisms; everything else is a word. */
+const ACRONYM_TOKEN = /^[A-Z]{2,6}$/;
+
+/** Words an expansion may bridge without consuming an initial: "Bank of America" → "BofA". */
+const EXPANSION_SKIP = new Set(['of', 'the', 'and', 'for', 'in', 'at', 'to']);
+
+/**
+ * Whether a claimed name matches a full name on the profile once its all-caps tokens are
+ * read as initialisms. "Model UN" is how every MUN student writes the Model United Nations
+ * Club; "NSDA Academic All-American" is how the National Speech & Debate Association
+ * abbreviates its own award — and both were blocked at G3 as invented names while the full
+ * form sat on the profile. Only the profile's structured names and honors are searched,
+ * never free prose, so a coincidental run of prose initials cannot spell a fabricated
+ * employer into existence.
+ */
+function initialismVouched(rawName: string, fullNames: string[]): boolean {
+  interface Part {
+    letter?: string;
+    word?: string;
+  }
+  const parts: Part[] = rawName.split(/\s+/).flatMap((w): Part[] =>
+    ACRONYM_TOKEN.test(w)
+      ? [...w.toLowerCase()].map((letter) => ({ letter }))
+      : normalize(w)
+          .split(' ')
+          .filter(Boolean)
+          .map((word) => ({ word })),
+  );
+  if (!parts.some((p) => p.letter !== undefined) || parts.length < 2) return false;
+
+  const fits = (candidate: string, p: Part): boolean =>
+    p.letter !== undefined ? candidate.startsWith(p.letter) : candidate === p.word;
+
+  return fullNames.some((full) => {
+    const words = full.split(' ').filter(Boolean);
+    outer: for (let start = 0; start < words.length; start++) {
+      let i = start;
+      for (const p of parts) {
+        while (i < words.length && EXPANSION_SKIP.has(words[i]!) && !fits(words[i]!, p)) i++;
+        if (i >= words.length || !fits(words[i]!, p)) continue outer;
+        i++;
+      }
+      return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * An award written short. The profile holds "NSPA Individual Awards Honorable Mention,
+ * Feature Story of the Year (2024)"; the student writes "an NSPA Honorable Mention", or
+ * leads with the story part. Awards lived only in the education evidence TEXT — never in
+ * the structured names — so they got none of the shortening allowances organisation and
+ * school names have always had, and any interior-word omission or reorder was reported as
+ * an invented name at G3, sometimes quoting a mangled fragment the user never wrote.
+ * Every word of the claimed name must appear in ONE honor; recombining words across two
+ * different honors still fails.
+ */
+/**
+ * Words that say how far the student actually got.
+ *
+ * Dropping one of these turns a placing into a win, and the word-subset rule above cannot
+ * see the difference: "NSPA Individual Awards Honorable Mention, Feature Story of the Year"
+ * contains every word of "NSPA Feature Story of the Year", so a draft claiming the outright
+ * award was vouched for by the honorable mention and came back GREEN with the mention quoted
+ * underneath as its support — the screen telling the reader it checks out. An award is one
+ * of the few things on a young applicant's resume an employer can verify in a minute, so
+ * this is the overstatement least worth letting through.
+ */
+const RANK_QUALIFIER =
+  /\b(?:honorable mention|honourable mention|semi-?finalist|finalist|runner-?up|participant|nominee|nominated|qualifier|commended|shortlisted|alternate)\b/i;
+
+/**
+ * Language that claims the top of the podium and nothing less. Kept tight on purpose: an
+ * honorable mention IS an award and IS received, so "I received an award from NSPA" is a
+ * true sentence and must not be flagged. Only wording that cannot be read as a placing
+ * belongs here.
+ */
+const OUTRIGHT_WIN =
+  /\b(?:won|win|wins|winner|winning|first place|1st place|placed first|took first|champion(?:s|ship)?|grand prize|top prize|gold medal|best in)\b/i;
+
+/**
+ * "Championship" and "Champion" are the same award. `normalize` already folds a plural, but
+ * the -ship nominal survived it, so a profile reading "Math League Champion" could not
+ * vouch for a draft reading "I won the Math League Championship" and the student's own win
+ * was blocked at G3 as an invented name. Applied to BOTH sides identically, so this can
+ * only ever merge two spellings of one word — it never lets two different words match.
+ * Deliberately not in `normalize`: employer names run through that too, and "Champion
+ * Motors" is not "Champions Sports".
+ */
+function awardWord(w: string): string {
+  return w.length > 6 ? w.replace(/ship$/, '') : w;
+}
+
+export interface HonorPhrase {
+  norm: string;
+  words: Set<string>;
+}
+
+function awardVouched(norm: string, honors: HonorPhrase[]): boolean {
+  const words = norm.split(' ').filter(Boolean).map(awardWord);
+  if (words.length === 0) return false;
+
+  return honors.some((h) => {
+    if (!words.every((w) => h.words.has(w))) return false;
+    const diminished = RANK_QUALIFIER.test(h.norm);
+    // A claim that keeps the qualifier is the same fact stated shorter, and still vouches.
+    return !diminished || RANK_QUALIFIER.test(norm);
+  });
+}
+
 export interface DeterministicResult {
   verdict: ClaimVerdict | null;
   reason?: string;
@@ -586,6 +824,17 @@ export function checkClaimDeterministically(
     }
   }
 
+  // Awards, as structured phrases rather than only prose — see `awardVouched`. The raw
+  // spelling and the owning ref are kept beside the normalised form so the rank check
+  // below can quote the profile's own wording back at the user.
+  const honors = evidence
+    .flatMap((e) =>
+      (e.facts.honors ?? []).map((raw) => ({ ref: e.ref, raw, norm: normalize(raw) })),
+    )
+    .filter((h) => h.norm.length > 1)
+    .map((h) => ({ ...h, words: new Set(h.norm.split(' ').filter(Boolean).map(awardWord)) }));
+  const honorPhrases = honors.map((h) => h.norm);
+
   // Names the application supplies. Kept apart from the profile's own, because they are
   // mentionable but not claimable.
   const contextNorms = contextNames.map(normalize).filter((n) => n.length > 1);
@@ -596,11 +845,16 @@ export function checkClaimDeterministically(
 
   // ── durations. "Two years" against a three-month internship is the classic inflation.
   const durations = extractDurations(claim);
-  if (durations.length > 0 && FIRST_PERSON.test(claim) && DURATION_CONTEXT.test(claim)) {
+  if (
+    durations.length > 0 &&
+    FIRST_PERSON.test(claim) &&
+    (WORK_CONTEXT.test(claim) || PRACTICE_CONTEXT.test(claim))
+  ) {
     const dated = evidence
       .filter((e) => e.facts.startDate)
       .map((e) => ({
         ref: e.ref,
+        kind: e.kind,
         text: e.text,
         months: monthsBetween(e.facts.startDate!, e.facts.endDate ?? nowYearMonth()),
         names: [e.facts.organization, e.facts.institution, e.facts.title]
@@ -618,7 +872,18 @@ export function checkClaimDeterministically(
     const scoped = dated.filter((d) =>
       claimedNames.some((c) => d.names.some((n) => n === c.norm || containsPhrase(n, c.norm))),
     );
-    const pool = scoped.length > 0 ? scoped : dated;
+
+    // A work-duration claim is bounded by work, not by school. The unscoped pool used to
+    // include the education entries, and every young applicant carries a roughly four-year
+    // high-school span — often ending at a graduation that has not happened yet — so
+    // "I have worked as a swim coach for four years" cleared a 56-month ceiling set by the
+    // SCHOOL entry while the longest actual job was 26 months. For exactly the population
+    // this tool serves, invented work tenure up to the length of a school career was never
+    // caught. Claims about schooling itself ("I studied there for three years") still
+    // measure against the degree.
+    const workClaim = WORK_CONTEXT.test(claim) && !STUDY_CONTEXT.test(claim);
+    const pool =
+      scoped.length > 0 ? scoped : dated.filter((d) => !(workClaim && d.kind === 'education'));
 
     if (pool.length > 0) {
       const longest = pool.reduce((x, y) => (y.months > x.months ? y : x));
@@ -720,6 +985,35 @@ export function checkClaimDeterministically(
 
     if (matches([...knownNames]) || containsPhrase(normEvidence, norm)) continue;
 
+    // A spelled-out state whose abbreviation the profile prints. The abbreviation must
+    // appear capitalised in the raw evidence, so the preposition "in" can never vouch for
+    // Indiana or an "or" for Oregon.
+    const stateAb = STATE_ABBREV.get(norm);
+    if (stateAb && evidence.some((e) => new RegExp(`\\b${stateAb}\\b`).test(e.text))) continue;
+
+    /**
+     * An AWARD vouches for a name being mentioned; it never vouches for having WORKED there.
+     *
+     * Winning a Future Business Leaders of America event puts "Future Business Leaders of
+     * America" on the profile, and its initialism is "FBLA" — so "I had an internship at
+     * FBLA", a job the student never held, came back green with the award as its support.
+     * The same shape covers every acronym-named organisation a student competes under: NHS,
+     * DECA, HOSA, CSPA. An honor is evidence of an achievement, and an employment sentence
+     * is a different claim about a different fact, so when this name sits inside an
+     * employment frame only the profile's real organisations and institutions may speak for
+     * it. Outside such a frame ("I competed at FBLA"), the honor is exactly the right
+     * evidence and still counts.
+     */
+    const claimsEmployment = affiliationFrame(raw).test(claim);
+    const vouchers = claimsEmployment ? knownNames : [...knownNames, ...honorPhrases];
+
+    // The standard short form of a name the profile holds in full — "Model UN" for the
+    // Model United Nations Club, "NSDA Academic All-American" for the association's award.
+    if (initialismVouched(raw, [...vouchers])) continue;
+
+    // An award shortened or reordered by its writer, matched word-for-word inside one honor.
+    if (!claimsEmployment && awardVouched(norm, honors)) continue;
+
     // The company being applied to may be named freely, but not worked at.
     if (matches(contextNorms)) {
       if (!affiliationFrame(raw).test(claim)) continue;
@@ -744,6 +1038,40 @@ export function checkClaimDeterministically(
       verdict: 'unsupported',
       reason: `"${raw}" does not appear anywhere on your profile.`,
     };
+  }
+
+  /**
+   * ── a placing written up as a win.
+   *
+   * The name check above cannot see this one: "NSPA Feature Story of the Year" really is on
+   * the profile, so nothing was invented, and the sentence came back green with the
+   * honorable mention quoted underneath as its support. The only difference between the
+   * profile and the draft is the word the draft left out, and that word is the whole fact.
+   *
+   * Deliberately narrow, because `overstated` blocks at G3 with no override:
+   *   - the sentence has to use outright-win language and NOT carry the qualifier itself;
+   *   - the name has to be at least two words, so a bare "DECA" cannot trip it;
+   *   - the name must not be one of the profile's own organisations or schools, which are
+   *     free to appear inside an honor's wording without the claim being about the honor;
+   *   - and EVERY honor the name matches has to be a placing. A profile holding both
+   *     "Math League Champion" and "Math League Participant" says a win is on the record.
+   */
+  if (honors.length > 0 && OUTRIGHT_WIN.test(claim) && !RANK_QUALIFIER.test(claim)) {
+    for (const { norm } of claimedNames) {
+      const words = norm.split(' ').filter(Boolean).map(awardWord);
+      if (words.length < 2 || knownNames.has(norm)) continue;
+      const named = honors.filter((h) => words.every((w) => h.words.has(w)));
+      if (named.length === 0 || !named.every((h) => RANK_QUALIFIER.test(h.norm))) continue;
+      const record = named[0]!;
+      return {
+        verdict: 'overstated',
+        reason:
+          `Your profile records this as "${record.raw}", which is a placing rather than ` +
+          `an outright win. Say it the way the profile does.`,
+        profileRef: record.ref,
+        quote: record.raw,
+      };
+    }
   }
 
   // ── skills claimed but not held.
@@ -785,6 +1113,24 @@ export function isVerifiableClaim(claim: string): boolean {
 // ─────────────────────────────────────────────── lexical support
 
 /**
+ * "tutored" and "Tutor" are one word doing two jobs. A bullet-less resume's only evidence
+ * for a role is its title line, so without inflection folding the past tense a student
+ * writes never met the noun their resume prints: coverage fell under the action-claim bar
+ * and TRUE sentences about the profile's own volunteer-tutor role were blocked at G3.
+ * Applied to both sides equally, so it can only align genuine inflections — it never
+ * creates overlap that exists on one side alone. The length floors keep short words whole
+ * ("string" does not become "str", "speed" does not become "spe").
+ */
+function fold(t: string): string {
+  let w = t;
+  if (w.length >= 5 && w.endsWith('ies')) w = `${w.slice(0, -3)}y`;
+  else if (w.length >= 4 && w.endsWith('s') && !w.endsWith('ss')) w = w.slice(0, -1);
+  if (w.length >= 7 && w.endsWith('ing')) w = w.slice(0, -3);
+  else if (w.length >= 6 && w.endsWith('ed')) w = w.slice(0, -2);
+  return w;
+}
+
+/**
  * How much of the claim's content is traceable to the evidence set at all. Coverage is
  * measured against the union of the evidence — a claim may legitimately draw on two
  * facts — while `ref` points at whichever single item contributed most, since that is
@@ -794,10 +1140,10 @@ function supportFor(
   claim: string,
   evidence: Evidence[],
 ): { ref: string; text: string; coverage: number } | null {
-  const claimTokens = [...new Set(tokens(claim))];
+  const claimTokens = [...new Set(tokens(claim).map(fold))];
   if (claimTokens.length === 0 || evidence.length === 0) return null;
 
-  const perItem = evidence.map((e) => ({ e, set: new Set(tokens(e.text)) }));
+  const perItem = evidence.map((e) => ({ e, set: new Set(tokens(e.text).map(fold)) }));
   const union = new Set(perItem.flatMap((p) => [...p.set]));
   const coverage = claimTokens.filter((t) => union.has(t)).length / claimTokens.length;
 
@@ -811,6 +1157,65 @@ function supportFor(
     }
   }
   return { ref: best.e.ref, text: best.e.text, coverage };
+}
+
+/**
+ * "I served as X", "I was the X" — the writer naming an office they held. Position
+ * inflation (president for treasurer, head coach for assistant) is exactly the lie a
+ * thin resume invites, and it is semantic, so the deterministic layer cannot red it —
+ * but the lexical layer must not UPGRADE it either. "I served as student body president"
+ * scored three of four tokens against the Student Body TREASURER line and came back
+ * 'supported', quoting the contradicting entry as its proof — telling the human at G3,
+ * the only layer that catches this class, that it checks out.
+ */
+const ROLE_FRAME =
+  /\b(?:i|we)\s+(?:have\s+|had\s+|also\s+)?(?:been|was|were|am|became|serv(?:e|ed|ing)\s+as)\s+(?:elected\s+|named\s+)?(?:the\s+|an?\s+|our\s+|its\s+)?([a-z][a-z'’ -]{2,60}?)(?=\s+(?:of|at|for|in|on|with|from|during|while|since|until|to|and|but|when|where|that|who|through|over|last|this|my|our)\b|\s*[,.;:!?]|\s*$)/i;
+
+/**
+ * Fillers that complete the frame without naming a role: "I was proud", "I was able to",
+ * "I am a rising sophomore". Nothing here can be an office, so nothing here is worth an
+ * amber that trains the user to click through warnings.
+ */
+const ROLE_NOISE = new Set(
+  (
+    'able willing lucky fortunate glad proud happy excited eager thrilled honored ' +
+    'honoured grateful thankful responsible part one first second third new young ' +
+    'involved drawn curious interested ready determined surprised amazed inspired ' +
+    'raised born told taught asked given left back home alone busy free sure unsure ' +
+    'there away not never always good better best ' +
+    'rising freshman sophomore junior senior student graduate'
+  ).split(' '),
+);
+
+function claimedRole(text: string): string | null {
+  const m = ROLE_FRAME.exec(text);
+  if (!m) return null;
+  const phrase = m[1]!.trim();
+  const norm = normalize(phrase);
+  if (norm.length < 3 || norm.split(' ').every((w) => ROLE_NOISE.has(w))) return null;
+  return phrase;
+}
+
+/**
+ * Whether a claimed role matches a title or honor the profile holds — exactly, as a
+ * contained phrase, or word-for-word within one entry ("founding team captain" against
+ * "Team Captain / Founding Member"). Free evidence prose deliberately does not count: the
+ * head-coach fabrication scored precisely because a bullet MENTIONS the head coach — the
+ * writer's boss — and a mention of somebody else's office must not vouch for claiming it.
+ */
+function roleOnProfile(role: string, evidence: Evidence[]): boolean {
+  const norm = normalize(role);
+  const held = [
+    ...evidence.map((e) => e.facts.title ?? ''),
+    ...evidence.flatMap((e) => e.facts.honors ?? []),
+  ]
+    .map(normalize)
+    .filter((t) => t.length > 1);
+  return held.some((t) => {
+    if (t === norm || containsPhrase(t, norm) || containsPhrase(norm, t)) return true;
+    const set = new Set(t.split(' '));
+    return norm.split(' ').every((w) => set.has(w));
+  });
 }
 
 export interface GuardResult {
@@ -873,14 +1278,39 @@ export function guardDraft(
     const support = supportFor(c.text, evidence);
     const coverage = support?.coverage ?? 0;
 
+    // A GPA in this claim was just checked by the deterministic layer and MATCHED — an
+    // unmatched one would have returned red above, before this line ran. The lexical
+    // heuristic must not overrule a number the guard itself verified: "I maintained a
+    // 3.972 unweighted GPA on a 4.000 scale while taking five AP courses" used to block
+    // at G3 because "unweighted" and "scale" appear nowhere in the evidence text —
+    // moments after the 3.972 had been confirmed against the profile.
+    const gpaVerified = extractGpas(c.text).length > 0;
+
     // Weak overlap only turns red for a claim that asserts an act. Anything else stays
     // amber: the lexical layer is a heuristic, and heuristics do not get to hard-block.
-    const verdict: ClaimVerdict =
+    let verdict: ClaimVerdict =
       coverage >= 0.5
         ? 'supported'
-        : coverage >= 0.25 || !ACTION_CLAIM.test(c.text)
+        : coverage >= 0.25 || gpaVerified || !ACTION_CLAIM.test(c.text)
           ? 'inferred'
           : 'unsupported';
+    let reason: string | undefined =
+      verdict === 'unsupported'
+        ? 'Nothing in the retrieved evidence backs this up. Rewrite it, or add the fact to your profile.'
+        : coverage < 0.25
+          ? 'Only loosely tied to your profile. Worth a second read before you approve it.'
+          : undefined;
+
+    // Token overlap must not put a green tick on a different office — see ROLE_FRAME.
+    // Capped at amber, never red: the semantic judgement stays with the human at G3, but
+    // that human must not be handed 'supported' with a contradicting quote beside it.
+    if (verdict === 'supported') {
+      const role = claimedRole(c.text);
+      if (role && !roleOnProfile(role, evidence)) {
+        verdict = 'inferred';
+        reason = `The draft calls you "${role}", which does not match a title on your profile. Worth a second read before you approve it.`;
+      }
+    }
 
     checked.push({
       claim: c.text,
@@ -888,12 +1318,7 @@ export function guardDraft(
       verdict,
       profileRef: verdict === 'unsupported' ? null : (support?.ref ?? null),
       quote: verdict === 'unsupported' ? null : (support?.text ?? null),
-      reason:
-        verdict === 'unsupported'
-          ? 'Nothing in the retrieved evidence backs this up. Rewrite it, or add the fact to your profile.'
-          : coverage < 0.25
-            ? 'Only loosely tied to your profile. Worth a second read before you approve it.'
-            : undefined,
+      reason,
       decidedBy: 'deterministic',
     });
   }

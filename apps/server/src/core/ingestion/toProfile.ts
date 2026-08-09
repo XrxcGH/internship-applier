@@ -302,6 +302,18 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
       ...x.education.flatMap((e, i) =>
         e.endDate && !asYearMonth(e.endDate) ? [`education.${i}.endDate`] : [],
       ),
+      // A stated education start date the schema will not take ("2023" alone) used to be
+      // dropped in silence, unlike its experience twin: academicYear quietly degraded from
+      // a number to null and nobody was asked. Same rule as the endDate above — flag only
+      // what was stated but unusable, since a start date absent from the resume is normal.
+      ...x.education.flatMap((e, i) =>
+        e.startDate && !asYearMonth(e.startDate) ? [`education.${i}.startDate`] : [],
+      ),
+      // Level "other" is the extraction's honest answer for a homeschool co-op or a
+      // dual-enrollment academy, and derivation cannot rank it: academicLevel degrades to
+      // 'none', the seniority band to entry_intern, and an actively enrolled student
+      // silently loses pre-college treatment. Only the user can say what the entry is.
+      ...x.education.flatMap((e, i) => (e.level === 'other' ? [`education.${i}.level`] : [])),
       // A GPA the profile shape cannot store — a weighted figure with no unweighted
       // number (a transcript that prints only "4.321 weighted"), or either number missing
       // its scale — used to vanish here with nothing said. The stored gpa keeps a

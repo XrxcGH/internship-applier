@@ -34,15 +34,24 @@ export interface QueryPlan {
  * it — this is the guard against a plan full of roles the user never did.
  */
 const ROLE_TAXONOMY: Record<string, string[]> = {
+  // "engineer" is gone from this list: as a prefix stem it matched the word "Engineering"
+  // inside science-FAIR names ("Sample Regional Science and Engineering Fair"), so a
+  // debate-and-theatre student with a Behavioral Sciences award got software queries. The
+  // terms that remain are ones only a software resume says — and "computer science" /
+  // "usaco" / "algorithm" are what a competition-programming high schooler actually
+  // prints, which used to evidence nothing at all.
   'software engineering': [
     'software',
-    'engineer',
     'developer',
     'programming',
     'backend',
     'frontend',
     'fullstack',
     'swe',
+    'computer science',
+    'usaco',
+    'algorithm',
+    'coding',
   ],
   'data science': ['data', 'analytics', 'statistics', 'pandas', 'sql', 'analysis'],
   'machine learning': [
@@ -54,8 +63,26 @@ const ROLE_TAXONOMY: Record<string, string[]> = {
     'tensorflow',
     'nlp',
   ],
-  'product management': ['product', 'roadmap', 'pm', 'stakeholder'],
-  design: ['design', 'ux', 'ui', 'figma', 'prototyp'],
+  // "product" alone matched "photograph products" in an Etsy-shop bullet and handed a
+  // sticker seller a product-management family, which then evicted the marketing family
+  // their state-championship award had genuinely earned. Only the qualified form counts.
+  'product management': ['product manag', 'roadmap', 'pm', 'stakeholder'],
+  // "design" alone is one of the commonest resume VERBS in every domain — "Designed
+  // weekly practice plans" gave a swim coach UX queries — and it sits inside school names
+  // ("Design and Architecture Senior High") and theatre credits ("Lighting Designer").
+  // A genuine UX resume says ux/ui/figma/wireframe or a qualified "«x» design".
+  design: [
+    'ux',
+    'ui',
+    'figma',
+    'prototyp',
+    'wireframe',
+    'user experience',
+    'user interface',
+    'graphic design',
+    'product design',
+    'visual design',
+  ],
   'hardware engineering': ['hardware', 'circuit', 'pcb', 'embedded', 'fpga', 'verilog'],
   // FIRST alone is four seasons of a student's life, and the word "robotics" appeared
   // nowhere in this table — so the resumes most likely to say it (team captains, mentors,
@@ -65,10 +92,96 @@ const ROLE_TAXONOMY: Record<string, string[]> = {
   'mechanical engineering': ['mechanical', 'cad', 'solidworks', 'thermodynamic'],
   'electrical engineering': ['electrical', 'signal', 'power systems'],
   'civil engineering': ['civil', 'structural', 'geotechnical'],
-  biology: ['biology', 'biolog', 'genom', 'molecular', 'lab'],
+  // "biolog" is a word-START stem, so it cannot see itself inside "microbiology" — a
+  // Regeneron ISEF Finalist in Microbiology whose resume never prints the bare word
+  // "Biology" inferred no biology family and the search they would have typed never ran.
+  // The sub-disciplines are stems of their own.
+  biology: [
+    'biology',
+    'biolog',
+    'microbiolog',
+    'neurobiolog',
+    'biochem',
+    'genom',
+    'molecular',
+    'lab',
+  ],
   chemistry: ['chemistry', 'chemical', 'organic synthesis'],
   finance: ['finance', 'financial', 'accounting', 'investment', 'valuation', 'trading'],
   consulting: ['consulting', 'strategy', 'advisory'],
+  // The four families below exist because their students inferred NOTHING: a hospital
+  // volunteer with HOSA honors, a swim coach who tutors at two community centers, an
+  // editor-in-chief with CSPA and NSPA awards, and a debate captain who volunteered in a
+  // state representative's office each fell to the "no role family could be inferred"
+  // note — so the one search each of them would have typed by hand never ran. Terms are
+  // deliberately qualified against prose homonyms: bare "editor" is a text editor, bare
+  // "patient" is a temperament, bare "policy" is a privacy policy, bare "debate" is
+  // "debated tradeoffs" in an engineering bullet.
+  healthcare: [
+    'hospital',
+    'clinical',
+    'patient care',
+    'patient transport',
+    'pre-med',
+    'premed',
+    'nursing',
+    'medical',
+    'medicine',
+    'hosa',
+    'public health',
+    'healthcare',
+    'health care',
+  ],
+  education: [
+    'tutor',
+    'teaching',
+    'taught',
+    'teacher',
+    'mentor',
+    'coach',
+    'camp counselor',
+    'classroom',
+    'curriculum',
+    'youth',
+  ],
+  journalism: [
+    'journalism',
+    'journalist',
+    'newspaper',
+    'yearbook',
+    'editor-in-chief',
+    'editorial',
+    'news writing',
+    'student press',
+    'copy editor',
+    'section editor',
+    'broadcast journalism',
+    'quill and scroll',
+    'cspa',
+    'nspa',
+  ],
+  'public policy': [
+    'public policy',
+    'legislative',
+    'legislature',
+    'model united nations',
+    'model un',
+    'mun',
+    'mock trial',
+    'debate team',
+    'debate club',
+    'debate captain',
+    'debate tournament',
+    'debater',
+    'speech and debate',
+    'speech & debate',
+    'lincoln-douglas',
+    'student government',
+    'political science',
+    'government',
+    'civic',
+    'pre-law',
+  ],
   marketing: ['marketing', 'brand', 'seo', 'content', 'growth'],
   operations: ['operations', 'supply chain', 'logistics'],
   research: ['research', 'publication', 'thesis', 'laboratory'],
@@ -125,20 +238,38 @@ function evidenceCount(corpus: string, terms: string[], stems: boolean): number 
 }
 
 /**
- * Two idioms borrow the "robot" stem without being robotics: "robots.txt" is an SEO artefact
- * and "robotic process automation" is an ops one. The stem matched both, so a marketing or
- * operations resume was handed a robotics family and its queries. They are scrubbed before
- * matching rather than by narrowing the stem, because genuine "robots"/"robotic arm" evidence
- * must keep counting.
+ * Idioms that borrow a taxonomy stem without being its evidence, scrubbed before matching
+ * rather than by narrowing the stem, because the genuine uses must keep counting:
+ *
+ *   - "robots.txt" is an SEO artefact and "robotic process automation" an ops one — the
+ *     "robot" stem matched both, and a marketing resume was handed robotics queries;
+ *   - "tutorial(s)" starts with the "tutor" stem, so following a React tutorial would
+ *     read as teaching experience;
+ *   - "self-taught" and "taught/teaching myself" describe learning, not teaching; being
+ *     "mentored by" someone is receiving mentorship, not giving it. Each would mint an
+ *     education family for a resume with no teaching in it;
+ *   - a clock time is not a job title. "PM" is the product-management acronym and is only
+ *     two letters, so it matches as a whole word — and the first resume any of this is
+ *     built for says "Worked 4 to 9 PM shifts on weekends", which handed a cashier a
+ *     product-management search plan. Hourly students write their hours down; this has to
+ *     read them as hours.
  */
-function scrubFalseRobotics(corpus: string): string {
-  return corpus.replace(/\brobots\.txt\b/gi, ' ').replace(/\brobotic process automation\b/gi, ' ');
+function scrubFalseSignals(corpus: string): string {
+  return corpus
+    .replace(/\brobots\.txt\b/gi, ' ')
+    .replace(/\brobotic process automation\b/gi, ' ')
+    .replace(/\btutorials?\b/gi, ' ')
+    .replace(/\bself-taught\b/gi, ' ')
+    .replace(/\b(?:taught|teaching)\s+myself\b/gi, ' ')
+    .replace(/\bmentored by\b/gi, ' ')
+    .replace(/\b\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?(?!\w)/gi, ' ')
+    .replace(/\b[ap]\.?m\.?\s+(?=shift|slot|hours|block|rush|closing|opening)/gi, ' ');
 }
 
 export function inferRoleFamilies(profile: ConfirmedProfile): string[] {
   // Titles, bullets, projects and coursework are where a stem is meant to reach ("biolog" ->
   // "biological"), so they carry stems.
-  const stemCorpus = scrubFalseRobotics(
+  const stemCorpus = scrubFalseSignals(
     [
       ...profile.skills.map((s) => s.name),
       ...profile.experience.map((e) => `${e.title} ${e.bullets.join(' ')}`),
@@ -157,12 +288,23 @@ export function inferRoleFamilies(profile: ConfirmedProfile): string[] {
   // bullets — but only as whole words. Under a prefix stem "Brandeis University" scored the
   // "brand" (marketing) term and a dining-services campus job minted marketing queries; a
   // whole-word match still reads "Sample Robotics" as robotics without inventing the rest.
-  const orgCorpus = scrubFalseRobotics(
+  let orgCorpus = scrubFalseSignals(
     profile.experience
       .map((e) => e.organization ?? '')
       .join(' ')
       .toLowerCase(),
   );
+
+  // A school's NAME is identity, not role evidence. Young resumes write clubs as
+  // "Student Ambassador, Design and Architecture Senior High", and the school name's own
+  // words minted a design family with zero design work behind it. The institution field is
+  // already kept out of the corpus; it gets the same treatment when it reappears inside an
+  // experience organisation, while the rest of that org line ("Speech & Debate Team",
+  // written after the school's name) keeps counting.
+  for (const e of profile.education) {
+    const inst = e.institution?.toLowerCase().trim();
+    if (inst && inst.length > 3) orgCorpus = orgCorpus.split(inst).join(' ');
+  }
 
   const scored = Object.entries(ROLE_TAXONOMY)
     .map(([family, terms]) => ({

@@ -28,6 +28,13 @@ export interface Evidence {
     endDate?: string;
     gpa?: { value: number; scale: number; weighted?: number };
     skills?: string[];
+    /**
+     * Awards, as structured phrases and not only prose. FactGuard grants organisation and
+     * school names shortening allowances it can only grant a name it can see whole; with
+     * honors living solely inside the education TEXT, "an NSPA Honorable Mention" was an
+     * invented name because the profile spells out four more words in the middle.
+     */
+    honors?: string[];
   };
   score: number;
 }
@@ -110,7 +117,18 @@ export function retrieveEvidence(
   const query = new Set([...tokens(question), ...tokens(opts.postingContext ?? '')]);
   const items: Evidence[] = [];
 
+  // Real work — the entries whose dates and employers FactGuard interrogates hardest.
+  const workRefs = new Set<string>();
+
   profile.experience.forEach((e, i) => {
+    if (
+      e.type === 'job' ||
+      e.type === 'internship' ||
+      e.type === 'freelance' ||
+      e.type === 'research'
+    ) {
+      workRefs.add(`experience.${i}`);
+    }
     const skills = e.skills ?? [];
     e.bullets.forEach((b, j) => {
       items.push({
@@ -187,6 +205,7 @@ export function retrieveEvidence(
         startDate: e.startDate,
         endDate: e.endDate,
         gpa: e.gpa,
+        honors: e.honors ?? [],
       },
       score:
         overlap(query, tokens(`${e.fieldOfStudy ?? ''} ${e.institution} ${course} ${honors}`)) +
@@ -219,21 +238,36 @@ export function retrieveEvidence(
   const limit = Math.max(0, (opts.limit ?? 14) - (identity ? 1 : 0));
   const ranked = items.sort((a, b) => b.score - a.score);
 
-  // Always keep at least one education and one experience item if the profile has them,
-  // even when the question is about something else. Each missing kind takes its own slot
-  // at the tail: both used to be written into the last one, so a profile where neither
-  // made the cut got its education item and then had it overwritten by the experience
-  // one, and a true "my GPA is 3.8" sentence was blocked for having no education fact to
-  // check against.
+  // Always keep the entries a claim is most likely to be about, even when the question's
+  // keywords rank them last. At the default limit a sixteen-activity resume — a real
+  // young-applicant volume — dropped its last few entries for ANY generic question, and
+  // one of them was the student's only real job: "I worked as a math tutor at Bright
+  // Minds Tutoring Center", a true sentence about their own employment, came back red at
+  // G3 as an invented employer. A second school fell the same way, so a dual-enrollment
+  // GPA was blocked with a message quoting the OTHER school's number as the profile's.
+  // Every education entry and every real-work entry is rescued into a tail slot: schools
+  // and jobs are few and carry the facts most often checked; clubs are many, and a
+  // dropped club costs a weaker draft rather than a false red.
   const chosen = ranked.slice(0, limit);
-  const topUps = (['education', 'experience'] as const)
-    .filter((kind) => !chosen.some((c) => c.kind === kind))
-    .map((kind) => ranked.find((r) => r.kind === kind))
-    .filter((e): e is Evidence => e !== undefined);
-  topUps.forEach((item, i) => {
-    const slot = chosen.length - 1 - i;
-    if (slot >= 0) chosen[slot] = item;
-  });
+  const mustKeep = (e: Evidence): boolean => e.kind === 'education' || workRefs.has(e.ref);
+  const inChosen = new Set(chosen.map((c) => c.ref));
+  const topUps = ranked.filter((r) => mustKeep(r) && !inChosen.has(r.ref));
+
+  // The old guarantee still holds: at least one experience item of any kind.
+  if (
+    !chosen.some((c) => c.kind === 'experience') &&
+    !topUps.some((t) => t.kind === 'experience')
+  ) {
+    const exp = ranked.find((r) => r.kind === 'experience');
+    if (exp) topUps.push(exp);
+  }
+
+  let slot = chosen.length - 1;
+  for (const item of topUps) {
+    while (slot >= 0 && mustKeep(chosen[slot]!)) slot--;
+    if (slot < 0) break;
+    chosen[slot--] = item;
+  }
   return identity ? [identity, ...chosen] : chosen;
 }
 

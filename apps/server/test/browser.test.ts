@@ -7,12 +7,13 @@
  * fixture, and the intervention detector are all wired correctly. The behavioural fill
  * tests build on this.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startFixtureServer, submissions, type FixtureServer } from '@ia/fixtures';
 import { detectIntervention, openSession, type BrowserSession } from '../src/core/filling/browser';
+import { removeTempDir } from './support/tempDir';
 
 let fixture: FixtureServer;
 let session: BrowserSession;
@@ -27,7 +28,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await session?.close();
   await fixture?.close();
-  if (profileDir) rmSync(profileDir, { recursive: true, force: true });
+  removeTempDir(profileDir);
 });
 
 describe('browser session', () => {
