@@ -16,9 +16,11 @@ import { config } from '../src/config';
 import { db, schema } from '../src/infra/db/client';
 import { runMigrations } from '../src/infra/db/migrate';
 import { encryptField, isEncrypted } from '../src/infra/crypto/fieldCrypto';
-import { confirmProfile, saveProfile } from '../src/core/profile/repository';
-import { buildFillPlan } from '../src/core/filling/plan';
+import { confirmProfile, getProfile, saveProfile } from '../src/core/profile/repository';
+import { buildFillPlan, WHOLE_PROFILE } from '../src/core/filling/plan';
+import { retrieveEvidence } from '../src/core/writing/retrieve';
 import { load } from '../src/routes/filling';
+import { sweepApprovals } from '../src/routes/profile';
 
 let app: FastifyInstance;
 let applicationId: string;
@@ -221,6 +223,585 @@ describe('gate G3 blocks filling', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.code).toBe('ANSWERS_NOT_APPROVED');
+  });
+});
+
+/**
+ * G3 approval is a point in time. The profile is not.
+ *
+ * The user approves "I interned at Kestrel Analytics", then goes back to the wizard — which
+ * stays reachable from the nav after G1, and whose Save button PUTs the whole profile — and
+ * deletes that job. Before these tests, the answer kept its green tick, kept an evidence
+ * panel citing `experience.0` while `experience` was empty, and the fill planner went on
+ * offering the sentence as something to type into an employer's form. Every trigger that
+ * re-ran verification was a change to the ANSWER; nothing watched the profile.
+ *
+ * Both directions are asserted here on purpose. An edit that touches nothing an answer
+ * relies on must leave every tick where it is, and an answer that names the employer must
+ * survive a profile save — re-checking it without the company's name would turn "What draws
+ * me to Northwind Systems" red at the last gate, where there is no override.
+ */
+describe('an approval does not outlive the profile it was checked against', () => {
+  const RICH = {
+    ...PROFILE,
+    education: [
+      {
+        institution: 'Rutgers University',
+        level: 'bachelor',
+        fieldOfStudy: 'Computer Science',
+        endDate: '2028-05',
+        gpa: { value: 3.9, scale: 4 },
+        coursework: [],
+        honors: ['National Merit Finalist'],
+      },
+    ],
+    experience: [
+      {
+        type: 'internship',
+        organization: 'Kestrel Analytics',
+        title: 'Software Engineering Intern',
+        startDate: '2026-06',
+        endDate: '2026-08',
+        bullets: ['Built internal tooling in TypeScript.'],
+        skills: ['TypeScript'],
+      },
+    ],
+    skills: [{ name: 'TypeScript', category: 'language', evidence: [] }],
+  } as CandidateProfile;
+
+  const ESSAY: FormField = {
+    id: 'f_essay',
+    locator: '#essay',
+    label: 'Tell us about a project you are proud of',
+    control: 'textarea',
+    required: true,
+    semantic: 'essay',
+    confidence: 0.9,
+  };
+
+  const KESTREL_QUESTION = 'Tell us about a project you are proud of.';
+  const KESTREL_TEXT =
+    'I interned at Kestrel Analytics, where I built internal tooling in TypeScript.';
+
+  beforeEach(() => {
+    // `submittedAt` matters: an answer on an application the user has already sent is left
+    // alone on purpose, and the G4 tests below share this row.
+    db.update(schema.application)
+      .set({ status: 'draft', submittedAt: null })
+      .where(eq(schema.application.id, applicationId))
+      .run();
+    saveProfile(RICH);
+    confirmProfile();
+  });
+
+  afterEach(() => {
+    db.delete(schema.applicationEvent).run();
+    saveProfile(PROFILE);
+    confirmProfile();
+  });
+
+  /** Seeds one answer and takes it through the real G3 gate, evidence and all. */
+  async function approved(question: string, text: string): Promise<string> {
+    const id = ulid();
+    db.insert(schema.applicationAnswer)
+      .values({
+        id,
+        applicationId,
+        questionText: question,
+        fieldKey: 'q1',
+        answerType: 'long_text',
+        draftText: text,
+        finalText: text,
+      })
+      .run();
+    const res = await app.inject({ method: 'POST', url: `/api/answers/${id}/approve` });
+    expect(res.statusCode, res.body).toBe(200);
+    return id;
+  }
+
+  const answerRow = (id: string) =>
+    db.select().from(schema.applicationAnswer).where(eq(schema.applicationAnswer.id, id)).all()[0]!;
+
+  const savedProfile = (): CandidateProfile => getProfile()!;
+
+  const put = (edit: (p: CandidateProfile) => CandidateProfile) =>
+    app.inject({ method: 'PUT', url: '/api/profile', payload: edit(savedProfile()) });
+
+  const planFor = (id: string) =>
+    buildFillPlan({
+      fields: [ESSAY],
+      profile: getProfile() as never,
+      answers: [answerRow(id)] as never,
+    });
+
+  it('withdraws the tick when the job the answer names is deleted, and says why', async () => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    expect(answerRow(id).approvedAt).toBeTruthy();
+
+    const res = await put((p) => ({ ...p, experience: [] }));
+    expect(res.statusCode).toBe(200);
+
+    const row = answerRow(id);
+    expect(row.approvedAt).toBeNull();
+
+    // The claim's own reason, and the sentence that explains why a card the user approved
+    // is suddenly not approved. Without the second one this reads as lost work.
+    const flags = (row.flags ?? []) as Array<{ type: string; note: string }>;
+    expect(flags[0]?.type).toBe('unsupported');
+    expect(flags[0]?.note).toContain('Kestrel Analytics');
+    expect(flags[0]?.note).toMatch(/your profile changed after you approved this answer/i);
+
+    // The stored evidence is the new verdict, not the one from before the edit. A panel
+    // still quoting `experience.0` beside an empty experience list is the shape of this bug.
+    const evidence = (row.evidence ?? []) as Array<{ verdict: string; profileRef: string | null }>;
+    expect(evidence[0]?.verdict).toBe('unsupported');
+    expect(evidence[0]?.profileRef).toBeNull();
+
+    // And the write said so in its own reply.
+    expect(res.json().withdrawnApprovals).toHaveLength(1);
+    expect(res.json().withdrawnApprovals[0].question).toBe(KESTREL_QUESTION);
+  });
+
+  it('refuses the fill and types nothing after a withdrawal', async () => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    await put((p) => ({ ...p, experience: [] }));
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/applications/${applicationId}/fill`,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('ANSWERS_NOT_APPROVED');
+
+    const plan = planFor(id);
+    expect(plan.actions).toEqual([]);
+    expect(plan.skips[0]?.reason).toBe('needs_answer');
+  });
+
+  /**
+   * The family, not the instance. The reported case was a deleted job; a corrected GPA, a
+   * deleted award, a corrected home city and a replaced school are the same failure through
+   * different fields, and the home city is reachable from a single TextField on the G1
+   * wizard — the smallest edit the shipped UI can make.
+   */
+  it.each([
+    [
+      'the job is deleted',
+      KESTREL_QUESTION,
+      KESTREL_TEXT,
+      (p: CandidateProfile) => ({ ...p, experience: [] }),
+    ],
+    [
+      'the GPA is corrected downward',
+      'What are you proudest of academically?',
+      'I hold a 3.9 GPA at Rutgers University.',
+      (p: CandidateProfile) => ({
+        ...p,
+        education: [{ ...p.education[0]!, gpa: { value: 3.1, scale: 4 } }],
+      }),
+    ],
+    [
+      'the award is deleted',
+      'Tell us about an honour you have received.',
+      'I was named a National Merit Finalist.',
+      (p: CandidateProfile) => ({ ...p, education: [{ ...p.education[0]!, honors: [] }] }),
+    ],
+    [
+      'the home city is corrected in the wizard',
+      'Why are you interested in this location?',
+      'I am based in New Brunswick, so the commute is short.',
+      (p: CandidateProfile) => ({
+        ...p,
+        locationPrefs: {
+          ...p.locationPrefs,
+          base: { city: 'Trenton', region: 'NJ', country: 'US' },
+        },
+      }),
+    ],
+    [
+      'the school is replaced',
+      'Where do you study?',
+      'I study Computer Science at Rutgers University.',
+      (p: CandidateProfile) => ({
+        ...p,
+        education: [{ ...p.education[0]!, institution: 'Montclair State University' }],
+      }),
+    ],
+  ])('withdraws the tick when %s', async (_name, question, text, edit) => {
+    const id = await approved(question, text);
+    const res = await put(edit);
+    expect(res.statusCode).toBe(200);
+
+    expect(answerRow(id).approvedAt).toBeNull();
+    expect(res.json().withdrawnApprovals).toHaveLength(1);
+    expect(load(applicationId)).toMatchObject({ ok: false, code: 'ANSWERS_NOT_APPROVED' });
+  });
+
+  /**
+   * The profile route is not the only writer. A resume re-extraction goes straight to
+   * `saveProfile` from routes/resumes.ts, so a sweep that lived only in the route would let
+   * a whole new profile land under a set of approvals untouched. The fill loader is the last
+   * place to catch that, and it has to catch it whatever wrote the profile.
+   */
+  it('catches a profile written past the profile route, at the fill gate', async () => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    saveProfile({ ...savedProfile(), experience: [] });
+
+    // The route-level sweep really was bypassed, so this is the loader's catch and nothing else.
+    expect(answerRow(id).approvedAt).toBeTruthy();
+
+    const refusal = load(applicationId);
+    expect(refusal.ok).toBe(false);
+    if (refusal.ok) throw new Error('unreachable');
+    expect(refusal.code).toBe('ANSWERS_NOT_APPROVED');
+    expect(refusal.message).toMatch(/older version of your profile/i);
+    expect(refusal.message).toMatch(/nothing was typed/i);
+
+    // The row is repaired on the way past, so the review screen the message sends the user
+    // to does not still show a green tick with nothing wrong on it.
+    const row = answerRow(id);
+    expect(row.approvedAt).toBeNull();
+    expect((row.flags ?? []) as unknown[]).not.toEqual([]);
+  });
+
+  /**
+   * The other direction, which is weighted the same. Nothing here changed a fact any of
+   * these answers leans on, so every tick must survive. A tool that dropped approvals on
+   * every save would teach the user to re-approve without reading, which is the same
+   * failure as never checking.
+   */
+  it.each([
+    [
+      'a skill is added',
+      (p: CandidateProfile) => ({
+        ...p,
+        skills: [...p.skills, { name: 'Python', category: 'language' as const, evidence: [] }],
+      }),
+    ],
+    [
+      'a postal code is filled in',
+      (p: CandidateProfile) => ({ ...p, address: { ...p.address, postal: '08901' } }),
+    ],
+    ['the profile is saved back unchanged', (p: CandidateProfile) => p],
+  ])('keeps the tick when %s', async (_name, edit) => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    const res = await put(edit);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().withdrawnApprovals).toEqual([]);
+    expect(answerRow(id).approvedAt).toBeTruthy();
+    expect(load(applicationId).ok).toBe(true);
+    expect(planFor(id).actions[0]?.value).toBe(KESTREL_TEXT);
+  });
+
+  /**
+   * The false red this whole mechanism is one mistake away from.
+   *
+   * The employer's name is nowhere on the candidate's profile, so a re-check that forgets to
+   * pass it reads "Northwind Systems" as an invention and pulls the approval off the most
+   * ordinary sentence a "why this company" answer contains — at a gate with no override,
+   * on an answer G3 approved and would approve again.
+   */
+  it('keeps the tick on an answer that names the employer', async () => {
+    const id = await approved(
+      'Why do you want to work at Northwind Systems?',
+      'What draws me to Northwind Systems is the internal tooling work. ' +
+        'I built internal tooling in TypeScript at Kestrel Analytics and want more of it.',
+    );
+
+    const res = await put((p) => ({ ...p, address: { ...p.address, postal: '08901' } }));
+    expect(res.json().withdrawnApprovals).toEqual([]);
+    expect(answerRow(id).approvedAt).toBeTruthy();
+    expect(load(applicationId).ok).toBe(true);
+  });
+
+  /**
+   * The planner's own gate, on the one row shape nothing legitimate produces: an approval
+   * stamp beside a blocking verdict. Approval writes `guard.blocking` empty by definition,
+   * so the two can only meet where the verdicts were recomputed after the stamp was granted
+   * — and reading the stamp alone is what let a deleted job's sentence reach a form.
+   */
+  it('will not type an approved answer that is carrying a rejection', async () => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    db.update(schema.applicationAnswer)
+      .set({
+        flags: [{ type: 'unsupported', span: { start: 0, end: 10 }, note: 'Not on your profile.' }],
+      })
+      .where(eq(schema.applicationAnswer.id, id))
+      .run();
+
+    const plan = planFor(id);
+    expect(plan.actions).toEqual([]);
+    expect(plan.skips[0]?.note).toMatch(/older version of your profile/i);
+  });
+
+  it('reads the evidence column too, not only the flags', async () => {
+    // A writer that refreshed the verdicts and forgot the flags would otherwise hand the
+    // planner the one field it was not reading and get a green tick back for it.
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    db.update(schema.applicationAnswer)
+      .set({
+        evidence: [{ claim: KESTREL_TEXT, verdict: 'unsupported', profileRef: null, quote: null }],
+      })
+      .where(eq(schema.applicationAnswer.id, id))
+      .run();
+
+    expect(planFor(id).actions).toEqual([]);
+  });
+
+  /** Amber is not red. A style flag has never blocked anything and must not start now. */
+  it('still types an approved answer carrying only a style flag', async () => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    db.update(schema.applicationAnswer)
+      .set({
+        flags: [{ type: 'ai_tell', span: { start: 0, end: 4 }, note: 'Reads a little formal.' }],
+      })
+      .where(eq(schema.applicationAnswer.id, id))
+      .run();
+
+    expect(planFor(id).actions[0]?.value).toBe(KESTREL_TEXT);
+  });
+
+  /**
+   * The amber flags survive the withdrawal. They were measured against how this person
+   * writes, which a profile edit does not touch, and dropping them would quietly empty half
+   * the review screen every time a fact changed.
+   */
+  it('keeps the style flags it did not recompute', async () => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    db.update(schema.applicationAnswer)
+      .set({
+        flags: [{ type: 'ai_tell', span: { start: 0, end: 4 }, note: 'Reads a little formal.' }],
+      })
+      .where(eq(schema.applicationAnswer.id, id))
+      .run();
+
+    await put((p) => ({ ...p, experience: [] }));
+
+    const flags = (answerRow(id).flags ?? []) as Array<{ type: string }>;
+    expect(flags.map((f) => f.type)).toContain('ai_tell');
+    expect(flags.map((f) => f.type)).toContain('unsupported');
+  });
+
+  /** An answer already in front of an employer is history, and history is not re-litigated. */
+  it('leaves an application the user has already sent alone', async () => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    db.update(schema.application)
+      .set({ status: 'submitted', submittedAt: new Date().toISOString() })
+      .where(eq(schema.application.id, applicationId))
+      .run();
+
+    const res = await put((p) => ({ ...p, experience: [] }));
+    expect(res.json().withdrawnApprovals).toEqual([]);
+    expect(answerRow(id).approvedAt).toBeTruthy();
+  });
+
+  /**
+   * The false red that comes from the two gates sizing their own evidence corpus.
+   *
+   * `RICH` above is one job, one school and one skill — about eight buckets, comfortably
+   * inside retrieval's default floor — so the approve pass and the re-check happened to
+   * return the same corpus and no assertion here could see them diverge. The population this
+   * tool is built for does not look like that. A sixteen-activity resume with three bullets
+   * each is fifty-odd facts, and while `recheckApproval` took the default floor while
+   * `verify()` in routes/answers.ts passed `WHOLE_PROFILE`, the re-check verified against
+   * twenty items fewer than the pass that granted the tick — and the twenty it lost were the
+   * second and third bullets of the lower-ranked entries, which is exactly where the tool
+   * names and award names FactGuard treats as distinctive proper nouns live.
+   *
+   * Measured before the fix on this shape: fourteen of thirty-three true, G3-approved
+   * sentences were withdrawn by a profile save that changed nothing at all, and the fill was
+   * refused with no profile edit anywhere in between. `Ran the Larkspur fundraiser for Math
+   * League.` is one of them, and it is a sentence the student typed into their own profile.
+   */
+  describe('a busy activities resume, where the two gates can size their corpus differently', () => {
+    const CLUBS = [
+      'Debate Team',
+      'Math League',
+      'Science Olympiad',
+      'Model UN',
+      'Key Club',
+      'Marching Band',
+      'Yearbook',
+      'Environmental Club',
+      'Coding Club',
+      'Red Cross Club',
+      'Chess Club',
+      'Volunteer Tutoring',
+      'Food Bank',
+      'Student Government',
+      'Track Team',
+      'Art Club',
+    ];
+    // One distinctive proper noun per entry, on the LAST bullet — the one that falls off the
+    // end of a corpus sized for a prompt rather than for the gate.
+    const FUNDS = [
+      'Calloway',
+      'Larkspur',
+      'Marchmont',
+      'Ainsley',
+      'Ferndale',
+      'Winsford',
+      'Orchard Street',
+      'Bellingham',
+      'Kittiwake',
+      'Highbury',
+      'Ravenswood',
+      'Thornbury',
+      'Ellesmere',
+      'Wexford',
+      'Cranbourne',
+      'Pemberton',
+    ];
+
+    const BUSY = {
+      ...PROFILE,
+      experience: CLUBS.map((org, i) => ({
+        type: 'club' as const,
+        organization: org,
+        title: 'Member',
+        startDate: '2024-09',
+        endDate: '2025-06',
+        bullets: [
+          `Attended weekly meetings for ${org}.`,
+          `Helped organise the annual ${org} showcase.`,
+          `Ran the ${FUNDS[i]} fundraiser for ${org}.`,
+        ],
+        skills: [],
+      })),
+    } as CandidateProfile;
+
+    beforeEach(() => {
+      saveProfile(BUSY);
+      confirmProfile();
+    });
+
+    it.each(
+      // The last bullet of the lower-ranked entries. The first two are inside any corpus.
+      [1, 4, 9, 15].map((i) => [CLUBS[i]!, `Ran the ${FUNDS[i]} fundraiser for ${CLUBS[i]}.`]),
+    )('keeps the tick on a verbatim bullet from %s', async (_club, text) => {
+      const id = await approved(KESTREL_QUESTION, text);
+      expect(answerRow(id).approvedAt).toBeTruthy();
+
+      // A save that changes nothing. Anything withdrawn here was withdrawn by the re-check
+      // disagreeing with the approval, not by an edit.
+      const res = await put((p) => p);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().withdrawnApprovals).toEqual([]);
+      expect(answerRow(id).approvedAt).toBeTruthy();
+
+      // And the last gate before the form agrees with G3 rather than overruling it.
+      expect(load(applicationId).ok).toBe(true);
+      expect(planFor(id).actions[0]?.value).toBe(text);
+    });
+
+    /**
+     * Why the approvals above hold, asserted directly, so that a retrieval ceiling put back
+     * over an explicit limit fails with its cause named instead of showing up as one
+     * approval case going red for no visible reason.
+     *
+     * `WHOLE_PROFILE` is only worth passing if retrieval honours it, and for a while it did
+     * not: `retrieveEvidence` clamped every caller to its own ceiling, so this profile's last
+     * bullets sat outside the corpus at G3 and `Ran the Pemberton fundraiser for Art Club.`
+     * came back `"Pemberton" does not appear anywhere on your profile` from a route with no
+     * override, over a sentence the student typed into their own profile.
+     *
+     * No number is written down here on purpose. The claim is the relation — an explicit ask
+     * beats whatever a caller who states no preference gets, and every bullet is in it —
+     * which stays the assertion this file wants whatever those two numbers become.
+     */
+    it('gives the gate every bullet on the profile, not the default corpus', () => {
+      // The profile the gate itself reads: the one `beforeEach` saved and confirmed.
+      const confirmed = getProfile() as never;
+      const asked = retrieveEvidence(confirmed, KESTREL_QUESTION, { limit: WHOLE_PROFILE });
+      const noPreference = retrieveEvidence(confirmed, KESTREL_QUESTION, {});
+      expect(asked.length).toBeGreaterThan(noPreference.length);
+
+      const corpus = asked.map((e) => e.text).join('\n');
+      for (const bullet of BUSY.experience.flatMap((e) => e.bullets ?? [])) {
+        expect(corpus).toContain(bullet);
+      }
+    });
+
+    /**
+     * The other direction on the same profile, so the agreement above is not agreement by
+     * way of a corpus that swallows everything. A fabrication placed beside real bullets is
+     * still refused at G3, and the re-check still refuses it.
+     */
+    it('still refuses a fabrication sitting beside those bullets', async () => {
+      const id = ulid();
+      const text = 'I ran the Gaylord fundraiser for the Debate Team.';
+      db.insert(schema.applicationAnswer)
+        .values({
+          id,
+          applicationId,
+          questionText: KESTREL_QUESTION,
+          fieldKey: 'q1',
+          answerType: 'long_text',
+          draftText: text,
+          finalText: text,
+        })
+        .run();
+
+      const res = await app.inject({ method: 'POST', url: `/api/answers/${id}/approve` });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.details.claims[0].reason).toContain('Gaylord');
+      expect(answerRow(id).approvedAt).toBeNull();
+    });
+  });
+
+  /**
+   * The other door onto the same event: a resume re-upload.
+   *
+   * `routes/resumes.ts` replaces the whole profile through `saveProfile` and, because a
+   * re-extraction is a machine read that has not been confirmed, resets `confirmedAt` to
+   * null. The sweep used to open with `if (!profile.confirmedAt) return []`, which switched
+   * it off at exactly the door it was exported for: every G3 card went on showing a green
+   * tick beside an evidence panel quoting entries the new extraction had not produced.
+   *
+   * The extract route itself cannot be driven here — reading a resume needs a model and the
+   * suite pins `LLM_PROVIDER=none` — so this asserts the sweep on the profile shape that
+   * route saves, which is the part that was switched off. The route wiring is one call.
+   */
+  it('withdraws the tick when a resume re-extraction replaces the profile', async () => {
+    const id = await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    expect(answerRow(id).approvedAt).toBeTruthy();
+
+    // Exactly what routes/resumes.ts stores: a fresh draft, the old id, confirmedAt null.
+    const reExtracted = saveProfile({
+      ...PROFILE,
+      id: savedProfile().id,
+      experience: [],
+      confirmedAt: null,
+    });
+    expect(reExtracted.confirmedAt).toBeNull();
+
+    const withdrawn = sweepApprovals(reExtracted, 'resume_reextracted');
+    expect(withdrawn).toHaveLength(1);
+    expect(withdrawn[0]?.question).toBe(KESTREL_QUESTION);
+    expect(withdrawn[0]?.claims[0]?.reason).toContain('Kestrel Analytics');
+
+    const row = answerRow(id);
+    expect(row.approvedAt).toBeNull();
+    const flags = (row.flags ?? []) as Array<{ note: string }>;
+    expect(flags[0]?.note).toMatch(/your profile changed after you approved this answer/i);
+
+    // G4 is untouched: with no confirmed profile, the fill loader still refuses outright.
+    expect(load(applicationId)).toMatchObject({ ok: false, code: 'PROFILE_INCOMPLETE' });
+  });
+
+  /** Whatever else changed, nothing here submits anything. */
+  it('adds no way to submit and moves no application forward', async () => {
+    await approved(KESTREL_QUESTION, KESTREL_TEXT);
+    await put((p) => ({ ...p, experience: [] }));
+
+    const status = db
+      .select({ status: schema.application.status, submittedAt: schema.application.submittedAt })
+      .from(schema.application)
+      .where(eq(schema.application.id, applicationId))
+      .all()[0]!;
+    expect(status.status).toBe('draft');
+    expect(status.submittedAt).toBeNull();
   });
 });
 

@@ -12,7 +12,7 @@
  * and quote them; the judgement is plain TypeScript over structured fields.
  */
 import type { ConfirmedProfile, JobRequirement, RuleResult } from '@ia/shared';
-import { ageFrom, deriveYearsExperience } from '../ingestion/deriveFields';
+import { ageFrom, deriveYearsExperience, hasDualEnrollment } from '../ingestion/deriveFields';
 import { validateValue } from './requirementValues';
 
 export interface PostingFacts {
@@ -166,6 +166,45 @@ function currentAge(profile: ConfirmedProfile, now: Date): number | null {
   return ageFrom(profile.dateOfBirth, now) ?? profile.derived.age;
 }
 
+/**
+ * How long after leaving high school a student is still read as on the way somewhere.
+ *
+ * A high-school diploma is not the end of anybody's education in this population, and the
+ * resume rarely says what comes next: a rising freshman admitted in April lists the school
+ * he is leaving and not the one he is going to. Reading "you graduated 2026-06" off that
+ * and hard-failing him on "must be currently enrolled" filtered out the postings written
+ * for exactly him, two months after he stopped being a high schooler, with no override at
+ * G2 or G3. Three years covers a gap year and then some; past that the silence really has
+ * started to mean something, and someone who left school in 2011 is still refused on a
+ * current-students-only posting.
+ */
+const HIGH_SCHOOL_CONTINUATION_MONTHS = 36;
+
+function monthsSince(ym: string, now: Date): number {
+  const [y, m] = ym.split('-').map(Number) as [number, number];
+  return (now.getUTCFullYear() - y) * 12 + (now.getUTCMonth() + 1 - m);
+}
+
+/**
+ * Has this person left high school recently enough that whatever came next simply has not
+ * been written down yet? Their expectedGraduation is a high-school date, which answers a
+ * different question from the one a posting about degrees is asking.
+ */
+function recentlyLeftHighSchool(profile: ConfirmedProfile, now: Date): boolean {
+  if (profile.derived.academicLevel !== 'high_school') return false;
+  const grad = profile.derived.expectedGraduation;
+  // No graduation date is derivation saying it CANNOT TELL, and it withholds one whenever a
+  // student has two entries of the same rank with one still open — a transfer, a magnet or
+  // governor's-school line beside the home high school, the same school read twice. That is
+  // an ordinary young resume, and treating the silence as proof of nothing-since flipped the
+  // very student this escape was built for from `unknown` to a hard `ineligible`: one extra
+  // high-school line, and the same person was refused. A date the app admits it does not have
+  // may never be read as an answer, so an unknown graduation keeps the escape open.
+  if (!grad) return true;
+  if (grad >= toYearMonth(now)) return false;
+  return monthsSince(grad, now) <= HIGH_SCHOOL_CONTINUATION_MONTHS;
+}
+
 function currentExperienceYears(profile: ConfirmedProfile, now: Date): number {
   // Experience only accrues, so the stored figure can only ever be stale downwards; taking
   // the larger of the two means an incomplete experience list can never invent a shortfall
@@ -235,7 +274,7 @@ const ACADEMIC_TO_LEVEL: Record<string, string> = {
   none: 'none',
 };
 
-export function educationLevel({ profile, requirements }: RuleInput): RuleResult {
+export function educationLevel({ profile, requirements, now }: RuleInput): RuleResult {
   const reqs = requirements.filter((r) => r.kind === 'education_level');
   if (reqs.length === 0) {
     return na('education_level', 'The posting does not state an education level.');
@@ -313,16 +352,54 @@ export function educationLevel({ profile, requirements }: RuleInput): RuleResult
     return rank === -1 ? false : mineRank >= rank;
   });
 
-  return met
-    ? pass('education_level', `Your level (${mine}) meets the requirement.`, {
-        requirementId: met[1].id,
-        profileRef: 'derived.academicLevel',
-      })
-    : fail(
-        'education_level',
-        `This posting wants ${[...wanted.keys()].join(' or ')}; your level is ${mine}.`,
-        { requirementId: binding[0]!.id, profileRef: 'derived.academicLevel' },
-      );
+  if (met) {
+    return pass('education_level', `Your level (${mine}) meets the requirement.`, {
+      requirementId: met[1].id,
+      profileRef: 'derived.academicLevel',
+    });
+  }
+
+  const asked = [...wanted.keys()].join(' or ');
+
+  // Two shapes of young applicant fall short of a degree level on paper and are still not
+  // people this rule may refuse.
+  //
+  // The first is dual enrollment. Deriving that student as `undergrad` used to tell a
+  // high-school junior "Your level (bachelor) meets the requirement" — a green tick on a
+  // hard gate he had not cleared — and deriving him honestly as `high_school` would simply
+  // move the error to the other side of the line and refuse a student whose community
+  // college transcript may well be what the posting means. Neither answer is ours to give.
+  //
+  // The second is the student who has left high school and not yet written down where they
+  // went. Refusing them on a degree level quotes a resume that stops one line too early.
+  //
+  // The sentence says what the resume fails to establish, not what the coursework does. It
+  // used to read "runs alongside high school rather than after it", which is a claim about
+  // the user's own record that the derivation cannot always back: a high-school line with
+  // no dates on it sets the coursework aside because nothing on the page places it either
+  // way, and telling that student his coursework runs alongside school is an invention.
+  if (hasDualEnrollment(profile, now)) {
+    return unknown(
+      'education_level',
+      `This posting wants ${asked}. Your resume does not place your college coursework ` +
+        'after high school, so only you can say whether it counts — check the posting.',
+      { requirementId: binding[0]!.id, profileRef: 'education' },
+    );
+  }
+
+  if (recentlyLeftHighSchool(profile, now)) {
+    return unknown(
+      'education_level',
+      `This posting wants ${asked} and your education history stops at high school. ` +
+        'If you have enrolled somewhere since, add it to your profile; otherwise check the posting.',
+      { requirementId: binding[0]!.id, profileRef: 'education' },
+    );
+  }
+
+  return fail('education_level', `This posting wants ${asked}; your level is ${mine}.`, {
+    requirementId: binding[0]!.id,
+    profileRef: 'derived.academicLevel',
+  });
 }
 
 export function graduationWindow({ profile, requirements }: RuleInput): RuleResult {
@@ -377,6 +454,25 @@ export function graduationWindow({ profile, requirements }: RuleInput): RuleResu
       speaksFor(parsed.map((w) => w.req)),
       'A graduation window',
     )!;
+  }
+
+  // A graduation window is about the degree the employer is hiring for, and a profile whose
+  // only date is a high-school one has not got that date yet. The college date is LATER
+  // than the one on file by an unknown amount, so a window this user falls short of is a
+  // window their real graduation could still land in: a senior finishing school in 2026-11
+  // was refused a "graduating 2029 to 2030" posting on his high-school date, which is the
+  // class he would be in. Being too EARLY is therefore a question. Being too late is not:
+  // a window that closed before the user had even left school is one no later degree can
+  // reach backwards into, so that refusal still stands.
+  const tooEarly = binding.filter((w) => w.from !== undefined && grad < w.from);
+  if (profile.derived.academicLevel === 'high_school' && tooEarly.length > 0) {
+    return unknown(
+      'graduation_window',
+      `This posting wants graduation between ${tooEarly.map(label).join(' or ')}, and the ` +
+        `only graduation date on file is high school in ${grad}. Add the programme you are ` +
+        'going on to, or check the posting.',
+      { requirementId: tooEarly[0]!.req.id, profileRef: 'derived.expectedGraduation' },
+    );
   }
 
   // Naming every window the user was actually measured against, so the sentence cannot
@@ -472,6 +568,22 @@ export function enrollment({ profile, requirements, now }: RuleInput): RuleResul
       `This posting requires active enrolment and you graduated ${grad}, but it also ` +
         'suggests enrolment is not needed — check the posting.',
       { requirementId: hint.req.id, profileRef: 'derived.expectedGraduation' },
+    );
+  }
+
+  // Leaving high school is not finishing your education, and this tool's users are the
+  // people that is least true of. A rising freshman's resume names the school he is walking
+  // out of and not the one he starts in September, so the only date on file says "graduated
+  // 2026-06" and it filtered him out of every current-students-only posting written for
+  // him. See HIGH_SCHOOL_CONTINUATION_MONTHS: recently enough and this is a question, long
+  // enough ago and the refusal stands.
+  if (recentlyLeftHighSchool(profile, now)) {
+    return unknown(
+      'enrollment',
+      `This posting requires active enrolment. Your education history ends with high ` +
+        `school in ${grad} and does not say what came next, so only you can say whether ` +
+        'you are enrolled now.',
+      { requirementId: req.id, profileRef: 'derived.expectedGraduation' },
     );
   }
 

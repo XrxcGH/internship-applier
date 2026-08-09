@@ -33,7 +33,7 @@ export interface QueryPlan {
  * Curated taxonomy. A role family only enters the plan if the profile actually evidences
  * it — this is the guard against a plan full of roles the user never did.
  */
-const ROLE_TAXONOMY: Record<string, string[]> = {
+export const ROLE_TAXONOMY: Record<string, string[]> = {
   // "engineer" is gone from this list: as a prefix stem it matched the word "Engineering"
   // inside science-FAIR names ("Sample Regional Science and Engineering Fair"), so a
   // debate-and-theatre student with a Behavioral Sciences award got software queries. The

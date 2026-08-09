@@ -700,9 +700,24 @@ describe('honors carry a rank, and an organisation is not an employer', () => {
   it('an award does not vouch for a job at the organisation that gave it', () => {
     // Winning an FBLA event puts "Future Business Leaders of America" on the profile, and
     // its initialism is FBLA — so an internship the student never held was green.
-    expect(checkClaimDeterministically('I had an internship at FBLA.', awards).verdict).toBe(
-      'unsupported',
-    );
+    //
+    // Every employment frame, not only the one that was reported. The first version listed
+    // the prepositions at|for|with with the name immediately after, and required an "I" or
+    // "we" before the verb, so "employed BY", "at THE Courier" and the passive-agent order
+    // "FBLA employed me" each escaped the rule entirely.
+    for (const claim of [
+      'I had an internship at FBLA.',
+      'I was an intern at FBLA last summer.',
+      'I joined the staff at FBLA last summer.',
+      'My role at FBLA was to run the front desk.',
+      'I work for FBLA on weekends.',
+      'I was employed by FBLA last summer.',
+      'I got a job at FBLA last summer.',
+      'FBLA employed me for the whole summer.',
+      'FBLA hired me for the whole summer.',
+    ]) {
+      expect(checkClaimDeterministically(claim, awards).verdict, claim).toBe('unsupported');
+    }
     expect(checkClaimDeterministically('I competed at FBLA in the spring.', awards).verdict).toBe(
       null,
     );
@@ -740,6 +755,11 @@ describe('honors carry a rank, and an organisation is not an employer', () => {
    * the words the first fix added, so the identical false green survived one step further up
    * the podium.
    */
+  const withHonor = (honor: string) =>
+    evidenceFor({
+      education: [{ ...fixture().education[0]!, honors: [honor] }],
+    } as Partial<ConfirmedProfile>);
+
   it('sees every placing below first, however the profile spells it', () => {
     for (const honor of [
       'State Science Olympiad Second Place',
@@ -748,12 +768,22 @@ describe('honors carry a rank, and an organisation is not an employer', () => {
       'State Science Olympiad Silver Medal',
       'State Science Olympiad Semifinalist',
       'State Science Olympiad Regional Qualifier',
+      // Spellings the first version could not see. Every honor-side test runs against
+      // `normalize`d text, and normalize turns the hyphen into a space — so `runner-?up`
+      // never matched the "runner up" it was given, and the commonest placing after second
+      // place was silently dead. The ordinals stopped at fifth and "top N" at digits.
+      'State Science Olympiad Runner-Up',
+      'State Science Olympiad Runner Up',
+      'State Science Olympiad Semi-Finalist',
+      'State Science Olympiad Sixth Place',
+      'State Science Olympiad Ninth Place',
+      'State Science Olympiad Twelfth Place',
+      'State Science Olympiad 14th Place',
+      'State Science Olympiad Top Ten',
+      'State Science Olympiad Bronze Medalist',
     ]) {
-      const ev = evidenceFor({
-        education: [{ ...fixture().education[0]!, honors: [honor] }],
-      } as Partial<ConfirmedProfile>);
       expect(
-        checkClaimDeterministically('I won the State Science Olympiad.', ev).verdict,
+        checkClaimDeterministically('I won the State Science Olympiad.', withHonor(honor)).verdict,
         honor,
       ).toBe('overstated');
     }
@@ -764,14 +794,56 @@ describe('honors carry a rank, and an organisation is not an employer', () => {
       'State Science Olympiad First Place',
       'State Science Olympiad 1st Place',
       'State Science Olympiad Champion',
+      // One honor line carries two facts, because extraction copies honors verbatim and
+      // that is how a results sheet is written. Reading the whole line as a placing on the
+      // strength of "Qualifier" alone told a student who WON that their own sentence
+      // overstated it, with no override and with the remedy already satisfied.
+      'State Science Olympiad First Place, National Qualifier',
+      'State Science Olympiad Championship Winner and State Qualifier',
+      'State Science Olympiad 1st Place Anatomy, 4th Place Disease Detectives',
     ]) {
-      const ev = evidenceFor({
-        education: [{ ...fixture().education[0]!, honors: [honor] }],
-      } as Partial<ConfirmedProfile>);
       expect(
-        checkClaimDeterministically('I won the State Science Olympiad.', ev).verdict,
+        checkClaimDeterministically('I won the State Science Olympiad.', withHonor(honor)).verdict,
         honor,
       ).toBeNull();
+    }
+  });
+
+  /**
+   * The win language has to GOVERN the name, not merely share a sentence with it. Honors are
+   * conventionally written "<Organisation> <Rank>", so before this, naming the club in any
+   * sentence using "won" in its everyday transitive sense was hard-blocked at G3 with "say it
+   * the way the profile does" — advice about an honor the sentence was not discussing.
+   */
+  it('ordinary idiom is not a claim to have won an award', () => {
+    const ev = withHonor('Sample Speech Team Regional Finalist');
+    for (const claim of [
+      'I won a spot on the Sample Speech Team after two rounds of tryouts.',
+      'I won the Sample Speech Team over with one argument about school lunches.',
+      'I won two of my four Sample Speech Team rounds that weekend.',
+      'What I love about the Sample Speech Team is that the best argument wins.',
+      'The Sample Speech Team was the best in the district that year.',
+      'Our Sample Speech Team won the judges over in the final round.',
+    ]) {
+      expect(checkClaimDeterministically(claim, ev).verdict, claim).toBeNull();
+    }
+  });
+
+  /**
+   * Nearly every competition a young applicant enters is NAMED a Championship, and the bare
+   * word fired on the event's name rather than on any claim. A student writing the strictly
+   * more modest truth was told they had overstated it.
+   */
+  it('an honest hedge is not an overstatement, whatever the event is called', () => {
+    const ev = withHonor('ProStart Invitational, California State Championship, 2nd Place (2025)');
+    for (const claim of [
+      'I placed 2nd at the ProStart Invitational California State Championship.',
+      'I placed second at the ProStart Invitational California State Championship.',
+      'I came in 2nd at the ProStart Invitational California State Championship.',
+      'I finished 2nd in the ProStart Invitational California State Championship.',
+      'My team placed 2nd at the ProStart Invitational California State Championship.',
+    ]) {
+      expect(checkClaimDeterministically(claim, ev).verdict, claim).toBeNull();
     }
   });
 
@@ -806,6 +878,238 @@ describe('honors carry a rank, and an organisation is not an employer', () => {
     expect(
       checkClaimDeterministically('I have been licensed for eleven years.', undated).verdict,
     ).toBe('overstated');
+  });
+});
+
+/**
+ * The clubs-and-titles resume states tenure with no verb but the copula, and a name rather
+ * than a job description. Every case here was a green tick on a sentence the profile
+ * contradicts, or a red on one it supports.
+ */
+describe('a title, an organisation, and a span', () => {
+  const captain = evidenceFor({
+    experience: [
+      {
+        organization: 'Sample Prairie Esports Club',
+        title: 'Team Captain',
+        type: 'club',
+        startDate: '2025-08',
+        bullets: [],
+        skills: [],
+      },
+    ],
+  } as Partial<ConfirmedProfile>);
+
+  it('measures a tenure claim that names a title and uses only the copula', () => {
+    // WORK_CONTEXT and PRACTICE_CONTEXT are lists of VERBS, and this shape has none. The
+    // duration was extracted, then discarded unread, and the sentence scored well lexically
+    // against the very entry that contradicts it — green, with a twelve-month entry quoted
+    // underneath as its proof.
+    for (const claim of [
+      'I have been the Team Captain of the Sample Prairie Esports Club for six years.',
+      'I was the Team Captain of the Sample Prairie Esports Club for six years.',
+      'I have been at the Sample Prairie Esports Club for six years.',
+    ]) {
+      expect(checkClaimDeterministically(claim, captain).verdict, claim).toBe('overstated');
+    }
+  });
+
+  it('leaves the honest span, and admiration, alone', () => {
+    expect(
+      checkClaimDeterministically(
+        'I have been the Team Captain of the Sample Prairie Esports Club for a year.',
+        captain,
+      ).verdict,
+    ).toBeNull();
+    // Naming an entry and a span while claiming no tenure there at all.
+    expect(
+      checkClaimDeterministically(
+        'I have followed the Sample Prairie Esports Club for six years.',
+        captain,
+      ).verdict,
+    ).toBeNull();
+  });
+
+  /**
+   * Putting the profile's languages into the evidence set closed a real false red — "I am
+   * conversational in Spanish" was blocked at G3 as an invented name — but it also handed the
+   * lexical layer the token "spanish", and that alone was enough to green-tick a sentence
+   * claiming more than the profile records, with the quieter line quoted as its proof. Amber,
+   * never red: the ladder is not precise enough to block, and blocking a true sentence where
+   * there is no override is the worse error.
+   */
+  it('does not green-tick a language claimed above the level the profile records', () => {
+    const speaks = evidenceFor({
+      languages: [{ name: 'Spanish', proficiency: 'Conversational' }],
+    } as Partial<ConfirmedProfile>);
+
+    for (const claim of [
+      'My Spanish is fluent.',
+      'My Spanish is native.',
+      'I am fluent in Spanish.',
+      'I am a native Spanish speaker.',
+      'I tutor Spanish grammar to freshmen.',
+      'I teach Spanish to elementary students.',
+      'I can interpret Spanish for patients.',
+    ]) {
+      const g = guardDraft(claim, speaks);
+      expect(g.claims[0]?.verdict, claim).toBe('inferred');
+      expect(g.blocking, claim).toEqual([]);
+    }
+
+    // At or below the recorded level is a true sentence and stays clean.
+    for (const claim of ['I am conversational in Spanish.', 'I speak some Spanish.']) {
+      expect(guardDraft(claim, speaks).claims[0]?.verdict, claim).toBe('supported');
+    }
+
+    // A language the profile does not hold at all is still a fabrication.
+    expect(guardDraft('I am fluent in Mandarin.', speaks).blocking).toHaveLength(1);
+  });
+
+  it('scopes an office to its entry even when the whole phrase reads as one name', () => {
+    // A masthead whose own name begins with a capital "The" makes "Editor-in-Chief of The
+    // Sample Sentinel" a single capitalised run — longer than the title and longer than the
+    // organisation, so it matched neither, scoped to nothing, and escaped the duration check
+    // entirely. Nine years against an eleven-month post came back green.
+    const paper = evidenceFor({
+      experience: [
+        {
+          organization: 'The Sample Sentinel',
+          title: 'Editor-in-Chief',
+          type: 'club',
+          startDate: '2025-09',
+          bullets: [],
+          skills: [],
+        },
+      ],
+    } as Partial<ConfirmedProfile>);
+
+    expect(
+      checkClaimDeterministically(
+        'I have been Editor-in-Chief of The Sample Sentinel for nine years.',
+        paper,
+      ).verdict,
+    ).toBe('overstated');
+    expect(
+      checkClaimDeterministically(
+        'I have been Editor-in-Chief of The Sample Sentinel since last September.',
+        paper,
+      ).verdict,
+    ).toBeNull();
+  });
+
+  /**
+   * A young applicant's bullets are full of OTHER people's organisations: the newspaper on
+   * the route, the food bank a church group drove donations to, the hospital a Scout troop
+   * served. Each one silently authorised a fabricated job there.
+   */
+  it("a mention inside somebody else's bullet does not vouch for a job", () => {
+    const route = evidenceFor({
+      experience: [
+        {
+          organization: 'Self-employed',
+          title: 'Lawn Care and Paper Route',
+          type: 'freelance',
+          startDate: '2024-06',
+          bullets: [
+            'Mow lawns for fourteen households and deliver the Plano Star Courier on weekends',
+          ],
+          skills: [],
+        },
+      ],
+    } as Partial<ConfirmedProfile>);
+
+    for (const claim of [
+      'I interned at the Plano Star Courier for two years.',
+      'I worked at the Plano Star Courier last summer.',
+      'I did an internship at the Plano Star Courier.',
+      'I was employed by the Plano Star Courier last summer.',
+      'The Plano Star Courier hired me in June.',
+    ]) {
+      expect(checkClaimDeterministically(claim, route).verdict, claim).toBe('unsupported');
+    }
+
+    // Naming the place is still free. Only the claim of a job there is not.
+    for (const claim of [
+      'I delivered the Plano Star Courier every Saturday morning.',
+      'The Plano Star Courier taught me to be somewhere on time.',
+    ]) {
+      expect(checkClaimDeterministically(claim, route).verdict, claim).toBeNull();
+    }
+  });
+
+  /**
+   * Once an employment frame stops free prose from vouching, every word in that frame's
+   * vocabulary has to BE a verb. "study" is a noun as often as one, and it sits right in
+   * front of a preposition belonging to something else — so a true sentence quoting the
+   * student's own bullet came back blocking at G3, where there is no override.
+   */
+  it('reads "study guide for X" as a guide, not as a job at X', () => {
+    const olympiad = evidenceFor({
+      experience: [
+        {
+          organization: 'Ferndale High School Science Olympiad',
+          title: 'Science Olympiad Captain',
+          type: 'club',
+          startDate: '2024-08',
+          bullets: ['Wrote the Ferndale study guide for Disease Detectives'],
+          skills: [],
+        },
+      ],
+    } as Partial<ConfirmedProfile>);
+
+    for (const claim of [
+      'I wrote the Ferndale study guide for Disease Detectives.',
+      'I wrote the study guide for Disease Detectives.',
+      'I competed in Disease Detectives for Science Olympiad.',
+    ]) {
+      expect(checkClaimDeterministically(claim, olympiad).verdict, claim).toBeNull();
+    }
+
+    // The verb still frames employment, and prose still cannot vouch for a job.
+    expect(
+      checkClaimDeterministically('I study at Phillips Exeter Academy.', olympiad).verdict,
+    ).toBe('unsupported');
+    expect(
+      checkClaimDeterministically('I interned at Disease Detectives last summer.', olympiad)
+        .verdict,
+    ).toBe('unsupported');
+  });
+
+  /**
+   * A cadet writes their unit first and the parent body second. Organisation names had no
+   * reordering allowance, and the four-token cap on a capitalised run cut the name in half,
+   * so a string the student never typed was quoted back at them in a blocking verdict.
+   */
+  it("accepts a long organisation name written in the student's own order", () => {
+    const cap = evidenceFor({
+      experience: [
+        {
+          organization: 'Civil Air Patrol, Sample Composite Squadron',
+          title: 'Cadet Commander',
+          type: 'volunteer',
+          startDate: '2024-01',
+          bullets: [],
+          skills: [],
+        },
+      ],
+    } as Partial<ConfirmedProfile>);
+
+    for (const claim of [
+      'I serve as Cadet Commander of the Sample Composite Squadron of Civil Air Patrol.',
+      'I am Cadet Commander of my Civil Air Patrol squadron.',
+      'I serve as Cadet Commander with Civil Air Patrol, Sample Composite Squadron.',
+    ]) {
+      expect(checkClaimDeterministically(claim, cap).verdict, claim).toBeNull();
+    }
+
+    // An invented employer is still invented, and the reordering allowance cannot reach it.
+    for (const claim of [
+      'I interned at the Dallas Morning News last summer.',
+      'I spent last summer at Google working on search infrastructure.',
+    ]) {
+      expect(checkClaimDeterministically(claim, cap).verdict, claim).toBe('unsupported');
+    }
   });
 });
 

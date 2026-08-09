@@ -26,6 +26,11 @@ import { logger } from '../infra/logger';
 import { getProfile } from '../core/profile/repository';
 import { canTransition } from '../core/tracking/status';
 import { isActionable } from '../core/filling/classify';
+import {
+  gatePostingContext,
+  recheckApproval,
+  withdrawnApprovalColumns,
+} from '../core/filling/plan';
 import type { FieldResult } from '../core/filling/fill';
 import {
   continueRun,
@@ -162,6 +167,90 @@ export function load(applicationId: string): LoadResult {
           ? 'One answer has not been approved yet. Review it first (gate G3).'
           : `${unapproved.length} answers have not been approved yet. Review them first (gate G3).`,
       details: { questions: unapproved.map((a) => a.questionText) },
+    };
+  }
+
+  /**
+   * Gate G3 again, and this time against the profile as it stands rather than against the
+   * stamp somebody left on the row.
+   *
+   * `approvedAt` records that a person checked this answer once. It does not record what
+   * they checked it against, and the profile is editable for the whole life of an
+   * application: the G1 wizard stays reachable from the nav after confirmation and its Save
+   * button PUTs the whole profile. So a user could approve "I interned at Kestrel
+   * Analytics", delete that entry from their profile an hour later, and the sentence went on
+   * wearing this tool's green tick all the way into an employer's form, with an evidence
+   * panel citing `experience.0` while `experience` was empty. Every existing trigger that
+   * re-runs verification is a change to the ANSWER; nothing watched the other side.
+   *
+   * The re-check runs the same pass the approve route runs, so an untouched profile can
+   * never turn an approval over: both are deterministic and both are handed the same
+   * evidence and the same context names. Where it does turn one over, the stamp is removed
+   * and the fresh verdicts are written to the row, because a refusal that left the review
+   * screen still showing "approved" would send the user back to a card with nothing wrong
+   * with it.
+   */
+  const stale = answers
+    .map((a) => ({
+      answer: a,
+      recheck: recheckApproval({
+        text: a.finalText || a.draftText,
+        questionText: a.questionText,
+        profile: profile as ConfirmedProfile,
+        contextNames: [row.job_posting.company, row.job_posting.title],
+        // Built the same way the approve route builds it. The description alone is a
+        // different retrieval query and therefore, past retrieval's ceiling, a different
+        // corpus — so this gate could refuse the fill over a fact G3 had in front of it.
+        postingContext: gatePostingContext({
+          title: row.job_posting.title,
+          company: row.job_posting.company,
+          description: row.job_posting.descriptionText,
+        }),
+      }),
+    }))
+    .filter((r) => !r.recheck.ok);
+
+  if (stale.length > 0) {
+    const now = new Date().toISOString();
+    for (const { answer, recheck } of stale) {
+      db.update(schema.applicationAnswer)
+        .set(withdrawnApprovalColumns(answer.flags, recheck))
+        .where(eq(schema.applicationAnswer.id, answer.id))
+        .run();
+
+      db.insert(schema.applicationEvent)
+        .values({
+          id: ulid(),
+          applicationId,
+          type: 'approval_withdrawn',
+          payload: {
+            answerId: answer.id,
+            question: answer.questionText,
+            at: now,
+            claims: recheck.blocking,
+          },
+        })
+        .run();
+
+      logger.info(
+        { applicationId, answerId: answer.id, claims: recheck.blocking.length },
+        'approval withdrawn: the answer no longer passes FactGuard against the current profile',
+      );
+    }
+
+    return {
+      ok: false,
+      code: 'ANSWERS_NOT_APPROVED',
+      message:
+        (stale.length === 1
+          ? 'One answer was approved against an older version of your profile and no longer '
+          : `${stale.length} answers were approved against an older version of your profile and no longer `) +
+        'matches it, so their approval has been withdrawn and nothing was typed. ' +
+        'Review them again at gate G3.',
+      details: {
+        questions: stale.map((s) => s.answer.questionText),
+        claims: stale.flatMap((s) => s.recheck.blocking),
+      },
     };
   }
 

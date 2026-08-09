@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ConfirmedProfile, JobRequirement } from '@ia/shared';
+import { deriveProfile } from '../src/core/ingestion/deriveFields';
 import {
   RULES,
   evaluateEligibility,
@@ -1238,6 +1239,439 @@ describe('overall verdict', () => {
   });
 });
 
+// ─────────────────────────────────────────── the population this tool is for
+
+/**
+ * These build `derived` with the real `deriveProfile` rather than hand-filling it, because
+ * every one of these bugs lived in the seam between what derivation published and what a
+ * rule made of it. A hand-filled fixture cannot see that seam.
+ *
+ * The rule under test is always the one a young applicant is refused by, and the standard
+ * is the one docs/05 sets: `unknown` is a first-class outcome and never rounded to `fail`.
+ * A false `ineligible` has no override at G2 or G3 and is the worst bug this app can have.
+ */
+describe('young applicants are asked, not refused', () => {
+  type Ed = ConfirmedProfile['education'][number];
+  const ed = (o: Partial<Ed> & { institution: string; level: Ed['level'] }): Ed =>
+    ({ coursework: [], honors: [], ...o }) as Ed;
+
+  const HIGH_SCHOOL = (over: Partial<Ed> = {}) =>
+    ed({ institution: 'Lincoln High', level: 'high_school', startDate: '2022-09', ...over });
+
+  /** A profile whose derived block is computed the way the app computes it. */
+  function derivedProfile(education: Ed[], dateOfBirth: string | null = null): ConfirmedProfile {
+    const p = profile({ education, dateOfBirth });
+    return { ...p, derived: deriveProfile(p, NOW) } as ConfirmedProfile;
+  }
+
+  const ENROLMENT = () => req('enrollment', { required: true });
+  const CLASS_OF_2030 = () => req('graduation_window', { from: '2029-05', to: '2030-06' });
+  const BACHELORS = () => req('education_level', { levels: ['bachelor'] });
+
+  const verdicts = (p: ConfirmedProfile) => {
+    const o = evaluateEligibility(
+      input({ profile: p, requirements: [ENROLMENT(), CLASS_OF_2030(), BACHELORS()] }),
+    );
+    return {
+      enrollment: statusOf(o, 'enrollment'),
+      graduation_window: statusOf(o, 'graduation_window'),
+      education_level: statusOf(o, 'education_level'),
+      blockers: o.blockers.map((b) => b.rule),
+    };
+  };
+
+  /**
+   * The dual-enrollment high schooler whose school entry reads "Aug 2023 - Present". He was
+   * handed his community college's May-2026 semester as his own graduation date, banded
+   * new_grad, and hard-failed on both "must be currently enrolled" and a class-of-2030
+   * window. Nothing in needsReview told him anything had degraded.
+   */
+  it('does not tell a high schooler still in school that he has graduated', () => {
+    const p = derivedProfile(
+      [
+        HIGH_SCHOOL({ startDate: '2023-08' }),
+        ed({
+          institution: 'Sinclair CC',
+          level: 'associate',
+          startDate: '2025-08',
+          endDate: '2026-05',
+        }),
+      ],
+      '2009-05-01',
+    );
+    expect(p.derived.expectedGraduation).toBeNull();
+    expect(p.derived.seniorityBand).toBe('pre_college');
+    expect(verdicts(p)).toEqual({
+      enrollment: 'unknown',
+      graduation_window: 'unknown',
+      education_level: 'unknown',
+      blockers: [],
+    });
+  });
+
+  /**
+   * The mirror of the case above, and the reason fixing it could not simply flip the level
+   * to high_school and stop. Deriving him `undergrad` told a 16-year-old junior "Your level
+   * (bachelor) meets the requirement" — a green tick on a gate he had not cleared. Deriving
+   * him `high_school` and failing him would have moved the same error to the other side of
+   * the line. Whether a community-college transcript is what the posting means is his
+   * question to answer.
+   */
+  it('neither passes nor refuses a dual-enrollment student on a degree level', () => {
+    const dual = derivedProfile(
+      [
+        HIGH_SCHOOL({ startDate: '2023-08', endDate: '2027-06' }),
+        ed({
+          institution: 'Valley CC',
+          level: 'associate',
+          startDate: '2025-09',
+          endDate: '2027-06',
+        }),
+      ],
+      '2009-09-02',
+    );
+    expect(dual.derived.academicLevel).toBe('high_school');
+
+    const o = evaluateEligibility(input({ profile: dual, requirements: [BACHELORS()] }));
+    expect(statusOf(o, 'education_level')).toBe('unknown');
+    expect(o.blockers).toEqual([]);
+    // The sentence names what the resume fails to establish, not what the coursework does.
+    // It read "runs alongside high school rather than after it", which is a claim about the
+    // user's own record that the derivation cannot always back: a high-school line with no
+    // dates sets the coursework aside because nothing on the page places it either way.
+    expect(o.rules.find((r) => r.rule === 'education_level')!.because).toMatch(
+      /does not place your college coursework after high school/,
+    );
+  });
+
+  /**
+   * The same student, written the way a 16-year-old actually writes his own school down:
+   * no dates on the high-school line at all. Every entry point into the dual-enrollment
+   * guard used to need one, so this profile switched it off and collected BOTH failures at
+   * once — the green tick on "must be pursuing a Bachelor's degree", and `ineligible` on a
+   * class-of-2030 window measured against the community college's 2027-06 semester.
+   */
+  it('asks the same question when the high-school line carries no dates', () => {
+    const dual = derivedProfile(
+      [
+        ed({ institution: 'Lincoln High School', level: 'high_school' }),
+        ed({
+          institution: 'Valley Community College',
+          level: 'associate',
+          startDate: '2025-09',
+          endDate: '2027-06',
+        }),
+      ],
+      '2009-11-02',
+    );
+    expect(dual.derived.academicLevel).toBe('high_school');
+    expect(verdicts(dual)).toEqual({
+      enrollment: 'unknown',
+      graduation_window: 'unknown',
+      education_level: 'unknown',
+      blockers: [],
+    });
+  });
+
+  /**
+   * A high-school senior who has already written down the university he starts in the
+   * autumn is the ordinary rising-freshman resume, and the guard deleted that university
+   * from the derivation because school was still running. He was published with his
+   * 2027-06 school date, told his college work "runs alongside high school" when it has not
+   * begun, and asked to "add the programme you are going on to" — which he had. A posting
+   * for his real class went from pass to an amber no action of his could clear.
+   */
+  it('passes a senior on the university he has already listed', () => {
+    const senior = derivedProfile(
+      [
+        HIGH_SCHOOL({ startDate: '2023-08', endDate: '2027-06' }),
+        ed({
+          institution: 'Ohio State University',
+          level: 'bachelor',
+          startDate: '2027-08',
+          endDate: '2031-05',
+        }),
+      ],
+      '2009-02-01',
+    );
+    const o = evaluateEligibility(
+      input({
+        profile: senior,
+        requirements: [
+          ENROLMENT(),
+          BACHELORS(),
+          req('graduation_window', { from: '2030-05', to: '2031-06' }),
+        ],
+      }),
+    );
+    expect(statusOf(o, 'education_level')).toBe('pass');
+    expect(statusOf(o, 'graduation_window')).toBe('pass');
+    expect(o.eligibility).toBe('eligible');
+  });
+
+  /**
+   * An in-progress programme that ranks BELOW a finished one was dropped, and the finished
+   * one's past date published as the person's graduation. He is enrolled right now and was
+   * returned `ineligible` on a current-students-only posting, with no override at G2 or G3.
+   */
+  it('does not tell someone in a nursing programme that he graduated two years ago', () => {
+    const p = derivedProfile(
+      [
+        ed({ institution: 'State U', level: 'bachelor', startDate: '2020-09', endDate: '2024-05' }),
+        ed({ institution: 'Valley CC', level: 'associate', startDate: '2025-09' }),
+      ],
+      '2002-06-01',
+    );
+    expect(p.derived.expectedGraduation).toBeNull();
+
+    const o = evaluateEligibility(input({ profile: p, requirements: [ENROLMENT()] }));
+    expect(statusOf(o, 'enrollment')).toBe('unknown');
+    expect(o.blockers).toEqual([]);
+  });
+
+  /**
+   * A rising freshman lists the school he is leaving, or the one he is going to with no
+   * dates on it, or both. Every shape published a past date as his graduation and filtered
+   * him out of the currently-enrolled and class-of-2030 postings written for exactly him.
+   */
+  it('asks rather than refuses across every rising-freshman shape', () => {
+    const shapes: Array<[string, ConfirmedProfile]> = [
+      [
+        'bachelor entry with no dates at all',
+        derivedProfile(
+          [
+            HIGH_SCHOOL({ endDate: '2026-06' }),
+            ed({ institution: 'Ohio State University', level: 'bachelor' }),
+          ],
+          '2008-04-01',
+        ),
+      ],
+      [
+        'bachelor "Aug 2026 - Present"',
+        derivedProfile(
+          [
+            HIGH_SCHOOL({ endDate: '2026-06' }),
+            ed({ institution: 'Ohio State University', level: 'bachelor', startDate: '2026-08' }),
+          ],
+          '2008-04-01',
+        ),
+      ],
+      [
+        'nothing after high school on the resume yet',
+        derivedProfile([HIGH_SCHOOL({ endDate: '2026-06' })], '2008-04-01'),
+      ],
+      [
+        'a gap year between the two',
+        derivedProfile([HIGH_SCHOOL({ endDate: '2025-06' })], '2007-04-01'),
+      ],
+      [
+        'an ordinary undergraduate whose university line reads "Sep 2023 - Present"',
+        derivedProfile(
+          [
+            HIGH_SCHOOL({ startDate: '2019-09', endDate: '2023-06' }),
+            ed({ institution: 'State U', level: 'bachelor', startDate: '2023-09' }),
+          ],
+          '2005-02-01',
+        ),
+      ],
+    ];
+
+    for (const [what, p] of shapes) {
+      const v = verdicts(p);
+      expect(v.blockers, what).toEqual([]);
+      expect(v.enrollment, what).not.toBe('fail');
+      expect(v.graduation_window, what).not.toBe('fail');
+      expect(v.education_level, what).not.toBe('fail');
+    }
+  });
+
+  /**
+   * A student who is still IN high school is a different answer from one who has left it,
+   * and the line between them is drawn deliberately.
+   *
+   * "Must be pursuing a Bachelor's degree" is a requirement a 17-year-old sitting in a
+   * high-school classroom genuinely does not meet, and softening that too would empty the
+   * rule of content for a population that is mostly high schoolers. What he must not be
+   * refused on is a graduation window, because the date on file is when he leaves SCHOOL
+   * and the date the posting is asking about comes years later.
+   */
+  it('keeps the degree-level refusal for a student who is still in high school', () => {
+    const senior = derivedProfile(
+      [HIGH_SCHOOL({ startDate: '2023-08', endDate: '2026-11' })],
+      '2008-12-01',
+    );
+    expect(senior.derived.academicLevel).toBe('high_school');
+    expect(verdicts(senior)).toEqual({
+      enrollment: 'pass',
+      graduation_window: 'unknown',
+      education_level: 'fail',
+      blockers: ['education_level'],
+    });
+  });
+
+  /**
+   * THE OPPOSITE DIRECTION. Softening a refusal into a question is only defensible while
+   * the refusals that were right stay right, or the fix has traded one failure for the
+   * other. Each of these is somebody the posting genuinely rules out, and each must still
+   * come back `fail`.
+   */
+  it('still refuses the people the posting really does rule out', () => {
+    const cases: Array<[string, ConfirmedProfile, string]> = [
+      [
+        'a graduate two years out of a bachelor',
+        derivedProfile(
+          [
+            ed({
+              institution: 'State U',
+              level: 'bachelor',
+              startDate: '2020-09',
+              endDate: '2024-05',
+            }),
+          ],
+          '2002-01-01',
+        ),
+        'enrollment',
+      ],
+      [
+        'a community-college student who finished after high school',
+        derivedProfile(
+          [
+            HIGH_SCHOOL({ startDate: '2020-09', endDate: '2024-06' }),
+            ed({
+              institution: 'Valley CC',
+              level: 'associate',
+              startDate: '2024-09',
+              endDate: '2026-05',
+            }),
+          ],
+          '2007-01-01',
+        ),
+        'enrollment',
+      ],
+      [
+        'an adult who left high school eleven years ago and never enrolled again',
+        derivedProfile([HIGH_SCHOOL({ startDate: '2011-09', endDate: '2015-06' })], '1997-01-01'),
+        'enrollment',
+      ],
+      [
+        'an adult with no degree, on a posting that requires one',
+        derivedProfile([HIGH_SCHOOL({ startDate: '2011-09', endDate: '2015-06' })], '1997-01-01'),
+        'education_level',
+      ],
+    ];
+
+    for (const [what, p, rule] of cases) {
+      const o = evaluateEligibility(
+        input({ profile: p, requirements: [ENROLMENT(), BACHELORS()] }),
+      );
+      expect(statusOf(o, rule), what).toBe('fail');
+      expect(o.eligibility, what).toBe('ineligible');
+    }
+  });
+
+  /**
+   * A graduation window a high schooler is too EARLY for is one his real, later degree
+   * could still land in, so it is a question. A window that closed before he had even left
+   * school is one no later degree can reach backwards into, so that refusal stands. Losing
+   * the second half would badge the whole queue amber and destroy the signal the tri-state
+   * carries.
+   */
+  it('separates a window a high schooler has not reached yet from one already shut', () => {
+    const senior = derivedProfile(
+      [HIGH_SCHOOL({ startDate: '2023-08', endDate: '2026-11' })],
+      '2008-12-01',
+    );
+
+    const ahead = evaluateEligibility(
+      input({
+        profile: senior,
+        requirements: [req('graduation_window', { from: '2029-05', to: '2030-06' })],
+      }),
+    );
+    expect(statusOf(ahead, 'graduation_window')).toBe('unknown');
+
+    const shut = evaluateEligibility(
+      input({
+        profile: senior,
+        requirements: [req('graduation_window', { from: '2023-01', to: '2024-06' })],
+      }),
+    );
+    expect(statusOf(shut, 'graduation_window')).toBe('fail');
+    expect(shut.eligibility).toBe('ineligible');
+
+    // And an undergraduate is measured against his own date exactly as before.
+    const undergrad = evaluateEligibility(
+      input({ requirements: [req('graduation_window', { from: '2029-05', to: '2030-06' })] }),
+    );
+    expect(statusOf(undergrad, 'graduation_window')).toBe('fail');
+  });
+
+  /**
+   * A single mistyped start date derived 16.4 years of professional experience for a
+   * fifteen-year-old and cleared a "3+ years required" posting with a green tick. The
+   * capped figure has to reach the rule through the same path the stale-profile guard uses,
+   * or `Math.max(stored, recomputed)` would carry the impossible number back in.
+   */
+  it('does not clear a senior-experience requirement on an impossible work history', () => {
+    const p = profile({
+      dateOfBirth: '2011-05-01',
+      education: [ed({ institution: 'Lincoln High', level: 'high_school', startDate: '2025-08' })],
+      experience: [
+        {
+          organization: 'Family Store',
+          title: 'Clerk',
+          type: 'job',
+          startDate: '2010-01',
+          endDate: '2026-06',
+          bullets: [],
+        },
+      ],
+    });
+    const young = { ...p, derived: deriveProfile(p, NOW) } as ConfirmedProfile;
+    expect(young.derived.yearsProfessionalExperience).toBe(3);
+
+    const o = evaluateEligibility(
+      input({ profile: young, requirements: [req('experience_years', { min: 8 })] }),
+    );
+    expect(statusOf(o, 'experience_ceiling')).toBe('fail');
+  });
+
+  /**
+   * Derivation withholds a graduation date whenever two education entries of the same rank
+   * have one still open — a transfer, a magnet or governor's-school line beside the home high
+   * school, or the same school read twice. That is an ordinary young resume, and reading the
+   * silence as proof that nothing came after high school flipped the exact student this
+   * escape was built for from `unknown` to a hard `ineligible`. One extra line on the page and
+   * the same person is refused, with no override at G2 or G3.
+   */
+  it('does not refuse a high schooler because a second school line withheld the date', () => {
+    const one = derivedProfile([HIGH_SCHOOL({ endDate: '2026-06' })]);
+    const open = derivedProfile([
+      HIGH_SCHOOL({ endDate: '2026-06' }),
+      HIGH_SCHOOL({ institution: "Governor's School", startDate: '2024-09' }),
+    ]);
+    const undated = derivedProfile([
+      HIGH_SCHOOL({ endDate: '2026-06' }),
+      ed({ institution: "Governor's School", level: 'high_school' }),
+    ]);
+
+    // The control still knows the date; the other two admit they do not.
+    expect(one.derived.expectedGraduation).toBe('2026-06');
+    expect(open.derived.expectedGraduation).toBeNull();
+    expect(undated.derived.expectedGraduation).toBeNull();
+
+    // None of the three may be refused. The app asks instead.
+    for (const [label, p] of [
+      ['one line', one],
+      ['second line open', open],
+      ['second line undated', undated],
+    ] as const) {
+      expect(verdicts(p).blockers, label).toEqual([]);
+      expect(verdicts(p).education_level, label).toBe('unknown');
+    }
+  });
+});
+
 // ────────────────────────────────────────────────────────────── properties
 
 describe('properties that must always hold', () => {
@@ -1359,19 +1793,44 @@ describe('properties that must always hold', () => {
       },
     });
 
+    /**
+     * The three rules answered by the education history need a different person, and the
+     * fixture above cannot be them and sixteen at once.
+     *
+     * A high schooler is now somebody this tool ASKS about on all three rather than
+     * refusing: a rising freshman's resume names the school he walked out of in June and
+     * not the one he starts in September, so "you graduated 2025-05" hid every
+     * currently-enrolled posting written for him, and the class-of-2030 window he is
+     * genuinely in was measured against the date he leaves SCHOOL. The refusals these rows
+     * exist to check are still there; they belong to someone whose education really did
+     * stop, years ago.
+     */
+    const educationFinishedLongAgo = profile({
+      ...qualifiesForNothing,
+      dateOfBirth: '1994-03-15',
+      derived: {
+        ...qualifiesForNothing.derived,
+        age: 32,
+        isMinor: false,
+        academicLevel: 'undergrad',
+        expectedGraduation: '2012-05',
+      },
+    });
+    const answeredByEducation = new Set(['education_level', 'enrollment', 'graduation_window']);
+
     for (const [kind, value] of stated) {
+      const who = answeredByEducation.has(kind) ? educationFinishedLongAgo : qualifiesForNothing;
+
       for (const necessity of ['preferred', 'unclear'] as const) {
         const o = evaluateEligibility(
-          input({ profile: qualifiesForNothing, requirements: [req(kind, value, { necessity })] }),
+          input({ profile: who, requirements: [req(kind, value, { necessity })] }),
         );
         expect(o.blockers, `${kind} stated as ${necessity}`).toEqual([]);
       }
 
       // The same fact stated as a rule must still be able to disqualify, or the check
       // above would pass for the wrong reason.
-      const firm = evaluateEligibility(
-        input({ profile: qualifiesForNothing, requirements: [req(kind, value)] }),
-      );
+      const firm = evaluateEligibility(input({ profile: who, requirements: [req(kind, value)] }));
       expect(firm.blockers.length, `${kind} stated as required`).toBeGreaterThan(0);
     }
   });

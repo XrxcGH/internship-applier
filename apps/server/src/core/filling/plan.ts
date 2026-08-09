@@ -10,7 +10,15 @@
  * A plan that silently omitted them would leave the user to discover the gaps by reading
  * the finished form, which is exactly the review burden this design tries to remove.
  */
-import type { ApplicationAnswer, ConfirmedProfile, FormField } from '@ia/shared';
+import type {
+  AnswerEvidence,
+  AnswerFlag,
+  ApplicationAnswer,
+  ConfirmedProfile,
+  FormField,
+} from '@ia/shared';
+import { guardDraft } from '../writing/factGuard';
+import { retrieveEvidence } from '../writing/retrieve';
 import { isActionable } from './classify';
 import { checkRedline } from './redlines';
 
@@ -41,6 +49,214 @@ export interface PlanInput {
   answers: ApplicationAnswer[];
   resumePath?: string;
 }
+
+// ───────────────────────────────────────── approval measured against the profile of today
+
+/**
+ * The flag types that mean FactGuard rejected a claim, as opposed to the amber ones that
+ * mean the sentence reads like a machine wrote it. Only these two block.
+ */
+const BLOCKING_FLAG_TYPES: ReadonlySet<AnswerFlag['type']> = new Set(['unsupported', 'overstated']);
+
+/** The verdicts that block, from the evidence side. Kept next to the flag list so they cannot drift. */
+const BLOCKING_VERDICTS: ReadonlySet<AnswerEvidence['verdict']> = new Set([
+  'unsupported',
+  'overstated',
+]);
+
+/**
+ * What the G3 card says beside a sentence whose approval was withdrawn.
+ *
+ * The user approved this once, saw a green tick, and is now looking at the same answer
+ * marked not approved. Without a sentence saying why, that reads as the tool losing their
+ * work. The guard's own reason ("Kestrel Analytics" does not appear anywhere on your
+ * profile) is true but answers a question they did not ask, because when they approved it
+ * the entry was there.
+ */
+export const APPROVAL_WITHDRAWN_NOTE =
+  'Your profile changed after you approved this answer, so it was checked again and this ' +
+  'sentence no longer matches what your profile says.';
+
+export interface ApprovalRecheck {
+  /** True when the text still passes FactGuard against the profile as it stands now. */
+  ok: boolean;
+  /** The claims that now block, for a message that names them. */
+  blocking: Array<{ claim: string; reason: string }>;
+  /** Every checked claim, in guard order, ready to replace the stored `evidence` column. */
+  evidence: AnswerEvidence[];
+  /** The blocking claims as flags, in the same order. Style and AI-tell flags are not recomputed here. */
+  factFlags: AnswerFlag[];
+}
+
+/**
+ * The corpus size gate G3 verifies against: everything the profile holds, not a corpus
+ * sized for a prompt.
+ *
+ * `retrieveEvidence` treats `limit` as a floor on the verification corpus, and its default
+ * floor is sized for what a model should read. Taking that default meant a fact the student
+ * typed into their own profile was not a fact the gate could check an answer against: on a
+ * resume of sixteen activities with three bullets each, twenty of those bullets were outside
+ * the corpus, and `I raised the entry fees through the Calloway boosters` came back from
+ * approval as `409 UNVERIFIED_CLAIMS: "Calloway" does not appear anywhere on your profile`.
+ * It appears on their profile. There is no override at G3, and the remedy the message offers
+ * had already been done.
+ *
+ * Truncation was never a fabrication defence, which is why asking for everything is safe:
+ * every item in the corpus is a fact the profile already holds, and the checks that catch
+ * invention — names, dates, GPAs, durations, offices — are exact rather than lexical.
+ *
+ * This asks for everything and now GETS everything, which it did not always. `retrieveEvidence`
+ * used to clamp whatever it was handed to its own `MAX_EVIDENCE_ITEMS` of 60, so the value
+ * below bought sixty facts however large the ask and the false red above simply moved from
+ * forty facts to sixty. That ceiling now bounds only a caller that states no preference, and
+ * an explicit limit is honoured: on the sixteen-activity fixture in filling.route.test.ts,
+ * limit=80, limit=200 and MAX_SAFE_INTEGER each returned 60 items of 66 before that change and
+ * return all 66 after it. If a later edit puts a ceiling back over an explicit limit, the
+ * approval on `Ran the Pemberton fundraiser for Art Club.` in that suite is what goes red.
+ *
+ * One constant rather than a number written twice, because the two gates have to ask for the
+ * same thing: every gate that re-checks an approval asks for exactly what the approve route
+ * asked for, so a sentence cannot pass one gate and fail the other over corpus size alone.
+ */
+export const WHOLE_PROFILE = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The posting's words in the one shape every gate must use.
+ *
+ * Retrieval ranks by keyword overlap, so the query decides which facts are in the corpus and
+ * which fall off the end of it. The approve route ranked against `<title> at <company>` plus
+ * the description and the two re-check call sites ranked against the description alone —
+ * different query, different ordering, and on a profile bigger than the ceiling a different
+ * set of facts. A claim built from an item only one side holds is a fabrication to the other,
+ * and the re-check is the side that withdraws a tick the user already earned.
+ *
+ * One function, so a call site cannot supply half of it again.
+ */
+export function gatePostingContext(posting: {
+  title: string;
+  company: string;
+  description: string;
+}): string {
+  return `${posting.title} at ${posting.company}\n\n${posting.description}`;
+}
+
+export interface RecheckInput {
+  /** The text as it would be typed: `finalText || draftText`. */
+  text: string;
+  questionText: string;
+  profile: ConfirmedProfile;
+  /**
+   * The employer's name and the role title from the posting.
+   *
+   * Load-bearing, and the reason this takes the posting at all. FactGuard reads a proper
+   * noun with nothing behind it as an invention, and the company's own name is nowhere on
+   * the candidate's profile — so a re-check run without these turns "What draws me to
+   * Northwind Systems is the documentation" red at the last gate before the form, over a
+   * sentence G3 approved and would approve again. That is a false red on a true sentence
+   * with no override anywhere, which this repo treats as the worst thing it can do.
+   */
+  contextNames?: string[];
+  /**
+   * The posting's words, built by `gatePostingContext` so retrieval ranks the same way it
+   * did at G3. Handing the description alone is what the two call sites used to do, and it
+   * is not the same query.
+   */
+  postingContext?: string;
+}
+
+/**
+ * Re-runs gate G3's own check against the profile as it stands right now.
+ *
+ * Deliberately identical to the pass `routes/answers.ts` runs at approval time — same
+ * retrieval options, same context names, same guard. Anything more permissive would mean
+ * the tool typing a sentence it would refuse to approve; anything stricter would mean
+ * refusing a sentence it would approve. Either way the two gates would be answering the
+ * same question differently, and the user would be told one thing on the review screen and
+ * another at the form.
+ *
+ * Pure, and no model call: `retrieveEvidence` and `guardDraft` are both deterministic, so
+ * a re-check on an unchanged profile always agrees with the approval it is re-checking.
+ *
+ * "Deliberately identical" has to include `limit`, and once did not. This call took the
+ * default floor while the approve route passed `WHOLE_PROFILE`, so the re-check verified
+ * against a corpus twenty items smaller than the one that granted the tick — and the twenty
+ * it lost were the second and third bullets of the lower-ranked entries, which is where the
+ * tool names and award names FactGuard treats as distinctive proper nouns live. On a busy
+ * sixteen-activity profile that withdrew approvals on a profile save that changed nothing at
+ * all, and refused the fill outright with no profile edit anywhere in between: `Ran the
+ * Larkspur fundraiser for Math League.` was approved at G3 and then came back
+ * `"Larkspur" does not appear anywhere on your profile.` at the last gate before the form.
+ */
+export function recheckApproval(input: RecheckInput): ApprovalRecheck {
+  const evidence = retrieveEvidence(input.profile, input.questionText, {
+    postingContext: input.postingContext ?? '',
+    limit: WHOLE_PROFILE,
+  });
+  const guard = guardDraft(input.text, evidence, input.contextNames ?? []);
+
+  return {
+    ok: guard.blocking.length === 0,
+    blocking: guard.blocking.map((c) => ({
+      claim: c.claim,
+      reason: c.reason ?? 'Not supported by your profile.',
+    })),
+    evidence: guard.claims.map((c) => ({
+      claim: c.claim,
+      verdict: c.verdict,
+      profileRef: c.profileRef,
+      quote: c.quote,
+    })),
+    factFlags: guard.blocking.map((c) => ({
+      type: c.verdict === 'overstated' ? ('overstated' as const) : ('unsupported' as const),
+      span: c.span,
+      note: c.reason ?? 'Not supported by your profile.',
+    })),
+  };
+}
+
+/**
+ * The columns to write when a re-check withdraws an approval.
+ *
+ * Shared so the two callers that can discover a stale approval — the profile write, which
+ * causes it, and the fill loader, which is the last place to catch one caused elsewhere —
+ * cannot leave the row in two different shapes.
+ *
+ * The style and AI-tell flags already on the row are kept. They were computed against the
+ * user's writing, which a profile edit does not touch, and dropping them would quietly
+ * empty the amber half of the review screen every time a fact changed.
+ */
+export function withdrawnApprovalColumns(
+  existingFlags: AnswerFlag[] | null | undefined,
+  recheck: ApprovalRecheck,
+): { approvedAt: null; evidence: AnswerEvidence[]; flags: AnswerFlag[] } {
+  const kept = (existingFlags ?? []).filter((f) => !BLOCKING_FLAG_TYPES.has(f.type));
+  return {
+    approvedAt: null,
+    evidence: recheck.evidence,
+    flags: [
+      ...recheck.factFlags.map((f) => ({ ...f, note: `${f.note} ${APPROVAL_WITHDRAWN_NOTE}` })),
+      ...kept,
+    ],
+  };
+}
+
+/**
+ * An approved answer that is carrying a rejection, which is a state nothing legitimate
+ * produces: approval writes `guard.blocking` empty by definition, so blocking flags beside
+ * an approval stamp mean the flags were recomputed after the stamp was granted.
+ *
+ * Checked on both columns rather than one. They are written together today, and a writer
+ * that updated the evidence and forgot the flags would otherwise hand this the one field
+ * it was not reading and get a green tick for it.
+ */
+export function carriesBlockingVerdict(answer: ApplicationAnswer): boolean {
+  return (
+    (answer.flags ?? []).some((f) => BLOCKING_FLAG_TYPES.has(f.type)) ||
+    (answer.evidence ?? []).some((e) => BLOCKING_VERDICTS.has(e.verdict))
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────── profile values
 
 const firstName = (full: string): string => full.trim().split(/\s+/)[0] ?? '';
 const lastName = (full: string): string => {
@@ -309,6 +525,26 @@ export function buildFillPlan(input: PlanInput): FillPlan {
           field,
           reason: 'needs_answer',
           note: 'You have not approved this answer yet.',
+        });
+      } else if (carriesBlockingVerdict(answer)) {
+        // Approval is a point in time, and this is the check that notices when it has been
+        // outlived. An answer approved with the profile as it was, then re-checked against
+        // the profile as it is, comes back here still stamped approved but carrying a
+        // rejection — that is the only way those two states meet. Reading the stamp alone
+        // let a sentence quoting a job the user had since deleted go into an employer's
+        // form with this tool's tick beside it.
+        //
+        // Read off the stored verdicts rather than re-running the guard here, on purpose.
+        // This function has the profile but not the posting, and FactGuard without the
+        // employer's name turns "What draws me to Northwind Systems" red — a false block
+        // on a true sentence, at the last gate, where there is nothing to override it.
+        // The verdicts below were produced by a check that did have the name.
+        skips.push({
+          field,
+          reason: 'needs_answer',
+          note:
+            'This answer was approved against an older version of your profile and no longer ' +
+            'matches it. Review it again before this goes anywhere.',
         });
       } else {
         const text = answer.finalText || answer.draftText;

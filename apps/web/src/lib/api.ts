@@ -85,19 +85,55 @@ export const getProfile = () =>
       throw err;
     });
 
+/** One G3 approval a profile write took away, and the claims that cost it. */
+export interface WithdrawnApproval {
+  answerId: string;
+  applicationId: string;
+  question: string;
+  claims: Array<{ claim: string; reason: string }>;
+}
+
+/** A profile write, and what it cost. */
+export interface ProfileWrite {
+  profile: CandidateProfile;
+  withdrawnApprovals: WithdrawnApproval[];
+}
+
+/**
+ * Reads a profile-write response without throwing away the half of it that is not a profile.
+ *
+ * Both writing endpoints answer with the saved profile PLUS `withdrawnApprovals` — the
+ * answers whose G3 approval that write invalidated (routes/profile.ts). This function used
+ * to be `.then(CandidateProfile.parse)` at each call site, and a Zod object parse drops
+ * unknown keys, so the list was read off the wire and discarded one line later. The student
+ * then went on believing an answer was still approved after the app had un-approved it, and
+ * found out at G4 when the fill refused. Whatever the caller does with it, the client is not
+ * the place that loses it.
+ *
+ * The list defaults to empty rather than being required, because an unconfirmed profile
+ * cannot have produced an approval and the server answers those writes without the field.
+ */
+function readProfileWrite(body: unknown): ProfileWrite {
+  const withdrawn = (body as { withdrawnApprovals?: unknown } | null)?.withdrawnApprovals;
+  return {
+    profile: CandidateProfile.parse(body),
+    withdrawnApprovals: Array.isArray(withdrawn) ? (withdrawn as WithdrawnApproval[]) : [],
+  };
+}
+
 export const saveProfile = (p: CandidateProfile) =>
   request<unknown>('/api/profile', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(p),
-  }).then(CandidateProfile.parse);
+  }).then(readProfileWrite);
 
 export const confirmProfile = () =>
   request<unknown>('/api/profile/confirm', { method: 'POST' }).then(CandidateProfile.parse);
 
 export const clearReviewFlag = (path: string) =>
   request<unknown>(`/api/profile/reviewed/${encodeURIComponent(path)}`, { method: 'POST' }).then(
-    CandidateProfile.parse,
+    readProfileWrite,
   );
 
 // ─────────────────────────────────────────────────────── writing samples & voice

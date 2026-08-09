@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CandidateProfile } from '@ia/shared';
+import { EducationLevel } from '@ia/shared';
+import type { CandidateProfile, EducationEntry } from '@ia/shared';
 import * as api from '../lib/api';
 import {
   ANSWERED_IN_WIZARD,
@@ -12,11 +13,287 @@ import { Button, Notice, SelectField, TextField } from '../components/Controls';
 
 type Step = 'upload' | 'confirm' | 'facts' | 'done';
 
+/** The three numbers a school row can hold, in the order the boxes are laid out. */
+const GPA_PARTS = ['value', 'scale', 'weighted'] as const;
+type GpaPart = (typeof GPA_PARTS)[number];
+
+const GPA_LABELS: Record<GpaPart, string> = {
+  value: 'Unweighted GPA',
+  scale: 'Scale',
+  weighted: 'Weighted GPA',
+};
+
+const LEVEL_LABELS: Record<EducationEntry['level'], string> = {
+  high_school: 'High school',
+  associate: 'Associate',
+  bachelor: 'Bachelor',
+  master: 'Master',
+  doctorate: 'Doctorate',
+  other: 'Something else',
+};
+
+/**
+ * What one edit does to the review list. The whole of G1's clearing rule lives here.
+ *
+ * A flag clears only when the field now holds an answer. Any onChange used to clear it,
+ * including a change BACK to the unanswered value. The work-authorization select exposes its
+ * "Select…" placeholder as a real option, and home city and state accept an empty string, so
+ * a user could satisfy three of the six facts G1 exists to collect by touching a control and
+ * undoing it, then confirm a profile whose location and work authorization were still blank.
+ * G1 only means something if it checks the value rather than the interaction.
+ *
+ * An optional wizard field is the exception: its blank is a real answer, so re-flagging one
+ * left empty would trap a person who has nothing to put there.
+ *
+ * `raise: false` is the education editor, where re-flagging is the wrong half of the rule
+ * rather than the whole rule being wrong. The six facts are flagged from the moment the
+ * profile is built, so raising one back always restores a flag that was there. An education
+ * field is not: most are never flagged at all, and coursework, a field of study and a
+ * graduation date are all optional on the profile shape, so putting a flag on a school the
+ * extractor was happy with because someone cleared a date they never had invents work at a
+ * gate that blocks on its list being empty. The opposite must not happen, and does not: a
+ * GPA flag the extractor DID raise stays raised until a real number is behind it, whatever
+ * gets typed into the boxes in between.
+ *
+ * That is the whole of the rule for a field that is EMPTY on both sides of the edit. It said
+ * nothing about a field going from full to empty, and that gap was a false red one keystroke
+ * wide: a student who filled the GPA in, cleared the flag, and then typed "4.32 weighted"
+ * into the box beside it lost the number with no flag to show for it. So a caller may pass
+ * `raise` per edit, and the GPA boxes do exactly that on the keystroke that empties them —
+ * see `editGpaBox`.
+ */
+export function nextReviewFlags(
+  needsReview: string[],
+  path: string,
+  value: unknown,
+  options?: { raise?: boolean },
+): string[] {
+  if (OPTIONAL_WIZARD_FIELDS.has(path) || isAnswered(value)) {
+    return needsReview.filter((f) => f !== path);
+  }
+  return (options?.raise ?? true) ? [...new Set([...needsReview, path])] : needsReview;
+}
+
+export interface GpaBoxes {
+  value: string;
+  scale: string;
+  weighted: string;
+}
+
+/**
+ * A GPA box read as a number, or undefined when it holds nothing usable.
+ *
+ * `Number('')` is 0, so a check that skipped the blank test would store a GPA of zero for
+ * every box the student left alone, and a zero on the profile is a number FactGuard is
+ * happy to contradict a true sentence with. Blank has to mean absent.
+ *
+ * A figure above the scale is allowed through on purpose. 4.32 on a 4.0 scale is the
+ * ordinary shape of an American high-school transcript, and rejecting it here would throw
+ * away the exact number this editor was built to capture.
+ *
+ * Digits and a decimal point, and nothing else. `Number` understands more spellings than a
+ * transcript does: "0x4" came back as 4 and "1e2" as 100, so a box the student can see
+ * holding one thing was stored as another, silently and with the note that names an
+ * unreadable box staying quiet. A half-typed "3." and a leading ".9" both still read, because
+ * both are things a person types on the way to a real number.
+ */
+function readGpaNumber(text: string): number | undefined {
+  const trimmed = text.trim();
+  if (trimmed === '' || /[^0-9.]/.test(trimmed)) return undefined;
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+/**
+ * What the three GPA boxes on a school row add up to, and what to say when they add up to
+ * nothing the profile can hold.
+ *
+ * A weighted-only transcript is the case this exists for. A high school that prints
+ * "4.32 weighted GPA" and no unweighted figure had its number dropped during ingestion and
+ * `education.0.gpa` raised for the user to fix, and then there was no control anywhere on
+ * G1 to fix it with: the true sentence "I carry a 4.32 weighted GPA at Sample High School"
+ * came back `unsupported`, which blocks at G3 with no override, and the only affordance on
+ * the gate was a button that deleted the flag and left the number gone for good.
+ *
+ * Nothing here is inferred. A weighted figure is never copied into the unweighted slot to
+ * complete the pair: that would put a number the student never earned onto the profile and
+ * hand a fabricated unweighted GPA a green tick at the gate that is supposed to catch one.
+ * Where the pair is still incomplete the note says so out loud instead.
+ */
+export function readGpaBoxes(boxes: GpaBoxes): {
+  gpa: EducationEntry['gpa'];
+  note: string | null;
+} {
+  const filled = GPA_PARTS.filter((part) => boxes[part].trim() !== '');
+  const unreadable = filled.find((part) => readGpaNumber(boxes[part]) === undefined);
+  if (unreadable !== undefined) {
+    // Not "not being stored YET". A row that already held a GPA loses it on this keystroke —
+    // one "4.32 weighted" typed into the weighted box took a correct 3.968/4 off the profile
+    // and the note told the student nothing had gone. What re-raises the flag is
+    // `editGpaBox`; this says the same thing in words.
+    return {
+      gpa: undefined,
+      note:
+        `${GPA_LABELS[unreadable]} reads "${boxes[unreadable].trim()}", which is not a number. ` +
+        "Nothing in this row's GPA is stored while that is true, and any figure that was " +
+        'already there has come off your profile with it.',
+    };
+  }
+
+  const value = readGpaNumber(boxes.value);
+  const scale = readGpaNumber(boxes.scale);
+  const weighted = readGpaNumber(boxes.weighted);
+
+  // A GPA of 0 is a fact; a GPA out of 0 is not. The same "any number at or above zero"
+  // predicate reads both boxes, and a scale of 0 slipped through it onto the profile, where
+  // the shared schema takes a plain number and the evidence line quoted "GPA 3.9/0" back to
+  // the student at G3 as the proof that their own sentence was real.
+  if (scale === 0) {
+    return {
+      gpa: undefined,
+      note:
+        `Scale reads "${boxes.scale.trim()}", and a GPA is out of something. Put the number ` +
+        'your school grades out of there — usually 4, sometimes 5 or 100 — and this row ' +
+        'stores again.',
+    };
+  }
+
+  if (value !== undefined && scale !== undefined) {
+    return {
+      gpa: weighted === undefined ? { value, scale } : { value, scale, weighted },
+      note: null,
+    };
+  }
+  if (filled.length === 0) return { gpa: undefined, note: null };
+  return {
+    gpa: undefined,
+    note:
+      'A GPA is stored as an unweighted number together with its scale, so those two boxes ' +
+      'both need a number before anything is kept. Your weighted figure is stored beside ' +
+      'them once they are filled in.',
+  };
+}
+
+/** Where one GPA box keeps the text the user typed into it. */
+export function gpaBoxKey(index: number, part: GpaPart): string {
+  return `education.${index}.gpa.${part}`;
+}
+
+/**
+ * What the three boxes should show: what the user typed if they have typed, and otherwise
+ * whatever the profile holds.
+ *
+ * Held as text rather than read straight off the profile because a box bound to a parsed
+ * number cannot be typed into. "3." parses to 3, the box re-renders as "3", and the decimal
+ * point that was just pressed is gone before the next digit lands.
+ *
+ * Touching any one box records all three, which is what stops a half-typed unweighted
+ * figure from blanking a scale the profile already held: an incomplete pair stores no GPA
+ * at all, and without this the scale box would fall back to a `gpa` that had just gone
+ * undefined and empty itself while the user was mid-keystroke.
+ */
+export function gpaBoxesFor(
+  entry: EducationEntry,
+  index: number,
+  typed: Record<string, string>,
+): GpaBoxes {
+  const stored: Record<GpaPart, number | undefined> = {
+    value: entry.gpa?.value,
+    scale: entry.gpa?.scale,
+    weighted: entry.gpa?.weighted,
+  };
+  const read = (part: GpaPart): string => {
+    const held = stored[part];
+    return typed[gpaBoxKey(index, part)] ?? (held === undefined ? '' : String(held));
+  };
+  return { value: read('value'), scale: read('scale'), weighted: read('weighted') };
+}
+
+/**
+ * Moves one item in a list, returning a new array.
+ *
+ * An out-of-range move returns the list untouched rather than splicing `undefined` into it,
+ * which is what "move up" on the first row would otherwise do to a student's honors section.
+ */
+export function moveListItem<T>(items: readonly T[], from: number, to: number): T[] {
+  const next = [...items];
+  if (from === to || from < 0 || to < 0 || from >= next.length || to >= next.length) return next;
+  const [moved] = next.splice(from, 1);
+  if (moved === undefined) return next;
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/**
+ * Drops the blank coursework and honors rows on the way to the server.
+ *
+ * "Add" starts a row empty, and a row left empty would otherwise be stored. The education
+ * evidence line joins these with commas, so three abandoned rows put ", , ," into the text
+ * FactGuard quotes back to the user as proof that their own award is real. Surrounding
+ * whitespace goes with them, because " National Honor Society" and "National Honor Society"
+ * are one award and only one of the two matches what a draft says.
+ */
+export function tidyProfileLists(profile: CandidateProfile): CandidateProfile {
+  const clean = (xs: string[] | undefined): string[] | undefined =>
+    xs === undefined ? undefined : xs.map((x) => x.trim()).filter((x) => x !== '');
+  return {
+    ...profile,
+    education: profile.education.map((e) => ({
+      ...e,
+      institution: e.institution.trim(),
+      coursework: clean(e.coursework),
+      honors: clean(e.honors),
+    })),
+  };
+}
+
+/**
+ * School rows whose name has been emptied.
+ *
+ * `institution` is the one field on an education entry the profile schema insists on, so a
+ * name deleted by hand made the next Save answer "Profile did not match the expected shape"
+ * with nothing on screen saying which row meant it. Same accident the availability dates
+ * below already carry a comment about, one level further into the profile.
+ */
+export function blankInstitutions(profile: CandidateProfile): number[] {
+  return profile.education.flatMap((e, i) => (e.institution.trim() === '' ? [i] : []));
+}
+
+/**
+ * The withdrawals from two writes in a row, listed once each.
+ *
+ * "I have checked this" saves and then clears a flag, which is two writes, and each answers
+ * with its own sweep. An answer can only lose its approval once, so a name appearing in both
+ * lists would be the same withdrawal counted twice — and "2 answers lost their approval"
+ * when one did is the app being wrong about the thing it is apologising for.
+ */
+export function mergeWithdrawn(
+  first: api.WithdrawnApproval[],
+  second: api.WithdrawnApproval[],
+): api.WithdrawnApproval[] {
+  const seen = new Set(first.map((w) => w.answerId));
+  return [...first, ...second.filter((w) => !seen.has(w.answerId))];
+}
+
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState<Step>('upload');
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The raw text sitting in the GPA boxes, keyed by `gpaBoxKey`.
+   *
+   * Beside the profile rather than in it, because the profile stores GPAs as numbers and a
+   * number cannot be typed one character at a time. See `gpaBoxesFor`.
+   */
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  /**
+   * What the last save cost at G3, if it cost anything.
+   *
+   * Set from the save response on every path that writes, and reset by the same assignment
+   * when a save costs nothing, so this never describes a write two writes ago.
+   */
+  const [withdrawn, setWithdrawn] = useState<api.WithdrawnApproval[]>([]);
 
   /**
    * Picks up the profile that already exists, if there is one.
@@ -54,39 +331,55 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     return path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], obj);
   }
 
-  const patch = useCallback((fn: (p: CandidateProfile) => CandidateProfile, clears?: string) => {
-    setProfile((prev) => {
-      if (!prev) return prev;
-      const next = fn(prev);
-      if (!clears) return next;
+  const patch = useCallback(
+    (
+      fn: (p: CandidateProfile) => CandidateProfile,
+      clears?: string,
+      options?: { raise?: boolean },
+    ) => {
+      setProfile((prev) => {
+        if (!prev) return prev;
+        const next = fn(prev);
+        if (!clears) return next;
 
-      /**
-       * A flag clears only when the field now holds an answer.
-       *
-       * Any onChange used to clear it, including a change BACK to the unanswered value.
-       * The work-authorization select exposes its "Select…" placeholder as a real option,
-       * and home city and state accept an empty string, so a user could satisfy three of
-       * the six facts G1 exists to collect by touching a control and undoing it — and
-       * confirm a profile whose location and work authorization are still blank. G1 only
-       * means something if it checks the value rather than the interaction.
-       *
-       * An optional field is the exception: its blank is a real answer, so re-flagging one
-       * left empty would trap a person who has nothing to put there. Touching the control
-       * clears its flag whatever it holds.
-       */
-      const answered = OPTIONAL_WIZARD_FIELDS.has(clears) || isAnswered(at(next, clears));
-      return answered
-        ? { ...next, needsReview: next.needsReview.filter((f) => f !== clears) }
-        : { ...next, needsReview: [...new Set([...next.needsReview, clears])] };
-    });
-  }, []);
+        // The rule itself is `nextReviewFlags`, at the top of this file, so that the gate's
+        // one contract is a function the tests can hold rather than an expression inside a
+        // state updater no test can reach.
+        return {
+          ...next,
+          needsReview: nextReviewFlags(next.needsReview, clears, at(next, clears), options),
+        };
+      });
+    },
+    [],
+  );
+
+  /**
+   * Replaces one school row, naming the flag the edit answers.
+   *
+   * `raise: false` by default, for the reason `nextReviewFlags` gives. A row may override it
+   * per edit: the GPA boxes do, on the one keystroke that takes a number the profile already
+   * held back off it. See `editGpaBox`.
+   */
+  const editEducation = useCallback(
+    (index: number, next: EducationEntry, clears?: string, options?: { raise?: boolean }) => {
+      patch(
+        (p) => ({ ...p, education: p.education.map((e, i) => (i === index ? next : e)) }),
+        clears,
+        { raise: false, ...options },
+      );
+    },
+    [patch],
+  );
 
   async function persist() {
     if (!profile) return;
     setBusy('Saving…');
     setError(null);
     try {
-      setProfile(await api.saveProfile(profile));
+      const saved = await api.saveProfile(tidyProfileLists(profile));
+      setProfile(saved.profile);
+      setWithdrawn(saved.withdrawnApprovals);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -109,8 +402,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     setBusy('Saving…');
     setError(null);
     try {
-      await api.saveProfile(profile);
-      setProfile(await api.clearReviewFlag(path));
+      const saved = await api.saveProfile(tidyProfileLists(profile));
+      const cleared = await api.clearReviewFlag(path);
+      setProfile(cleared.profile);
+      // Both calls write, so both sweep. The second one finds nothing the first already took
+      // — an answer only loses its approval once — but merging is what keeps that a fact
+      // about the server rather than an assumption made here.
+      setWithdrawn(mergeWithdrawn(saved.withdrawnApprovals, cleared.withdrawnApprovals));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -122,7 +420,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     setBusy('Confirming…');
     setError(null);
     try {
-      await api.saveProfile(profile!);
+      const saved = await api.saveProfile(tidyProfileLists(profile!));
+      setWithdrawn(saved.withdrawnApprovals);
       await api.confirmProfile();
       setStep('done');
     } catch (e) {
@@ -133,6 +432,31 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   }
 
   const remaining = profile?.needsReview.length ?? 0;
+
+  /**
+   * A school with no name is the one shape this editor can produce that the profile schema
+   * will not take, and the server answers it with a shape error naming no row. Saying which
+   * row, and holding every button that saves, is cheaper than a wall nobody can read. It is
+   * shown on both steps because Confirm saves too, and a Confirm greyed out with the reason
+   * on the previous screen is the same wall with an extra click in front of it.
+   *
+   * Four buttons save, not three: Save, Continue, Confirm, and "I have checked this" beside a
+   * flag on the facts step — which saves the profile first so that the flag it clears is not
+   * clearing it on stale facts. That fourth one was left off this hold, and it is reachable
+   * in precisely the state the hold is for (a flag still open is why the button is rendered
+   * at all), so clicking it put the shape error back on screen under the notice that exists
+   * to replace it. Any new button that calls the server with this profile belongs here too.
+   */
+  const nameless = profile ? blankInstitutions(profile) : [];
+  const namelessNotice = nameless.length > 0 && (
+    <Notice tone="caution">
+      {nameless.length === 1
+        ? `School ${nameless[0]! + 1} has no name.`
+        : `Schools ${nameless.map((i) => i + 1).join(', ')} have no name.`}{' '}
+      A school row cannot be saved without one. Type the name back in, or put a dash there if you
+      would rather not say.
+    </Notice>
+  );
 
   return (
     <Page>
@@ -145,12 +469,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       />
 
       {error && <Notice tone="redline">{error}</Notice>}
+      {/* Above the step, not inside one, so that the withdrawal a Confirm caused is still on
+          screen on the step Confirm moves to. */}
+      <WithdrawnNotice items={withdrawn} />
       {busy && <p className="u-data text-accent mb-6">{busy}</p>}
 
       {step === 'upload' && (
         <UploadStep
           onExtracted={(p) => {
             setProfile(p);
+            // Whatever was typed into the old profile's GPA boxes belongs to the old
+            // profile. Left in place, a second resume would show the first one's numbers
+            // beside a school it never mentioned.
+            setTyped({});
             setStep('confirm');
           }}
           onError={setError}
@@ -193,22 +524,35 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             </div>
 
             <dl className="mt-8 space-y-1">
-              <Summary label="Education" n={profile.education.length} />
               <Summary label="Experience" n={profile.experience.length} />
               <Summary label="Projects" n={profile.projects.length} />
               <Summary label="Skills" n={profile.skills.length} />
             </dl>
             <p className="text-faint mt-4 text-[0.9375rem] italic">
-              Editing individual jobs, projects and courses is not built yet. Correct the identity
-              fields here and the eligibility facts below; those are the ones matching depends on.
+              Editing individual jobs and projects is not built yet. Correct the identity fields
+              above, your schooling below, and the eligibility facts on the next step.
             </p>
+
+            <EducationEditor
+              entries={profile.education}
+              flagged={flagged}
+              typed={typed}
+              onEntry={editEducation}
+              onTyped={(boxes) => setTyped((prev) => ({ ...prev, ...boxes }))}
+            />
           </Section>
 
+          {namelessNotice}
+
           <div className="flex flex-wrap gap-3">
-            <Button disabled={busy !== null} onClick={() => void persist()}>
+            <Button disabled={busy !== null || nameless.length > 0} onClick={() => void persist()}>
               Save
             </Button>
-            <Button variant="primary" disabled={busy !== null} onClick={() => setStep('facts')}>
+            <Button
+              variant="primary"
+              disabled={busy !== null || nameless.length > 0}
+              onClick={() => setStep('facts')}
+            >
               Continue
             </Button>
             {/* The way back to the dropzone. This screen is where anyone who already has a
@@ -376,7 +720,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                       {isDismissible(f) ? (
                         <Button
                           size="sm"
-                          disabled={busy !== null}
+                          disabled={busy !== null || nameless.length > 0}
                           onClick={() => void checkedOff(f)}
                         >
                           I have checked this
@@ -399,11 +743,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               </Notice>
             )}
 
+            {namelessNotice}
+
             <div className="mt-4 flex gap-3">
               <Button disabled={busy !== null} onClick={() => setStep('confirm')}>
                 Back
               </Button>
-              <Button variant="primary" disabled={remaining > 0} onClick={() => void confirm()}>
+              <Button
+                variant="primary"
+                disabled={remaining > 0 || nameless.length > 0}
+                onClick={() => void confirm()}
+              >
                 Confirm profile
               </Button>
             </div>
@@ -510,6 +860,347 @@ function UploadStep({
         its extracted text sent instead. <em>The copy that is kept lives on this machine.</em>
       </p>
     </Section>
+  );
+}
+
+/**
+ * The G1 control for everything the reader read out of the education section.
+ *
+ * G1 is the gate where an extraction error is corrected, and until this existed there was no
+ * input for any nested education field anywhere in the app: the screen showed a count
+ * ("Education: 2") and a note saying entries were not editable yet. Every flag the extractor
+ * raised in here — an unreadable start or end date, a level it could only call "other", and
+ * a GPA the profile shape could not hold — had exactly one way off the list, the button that
+ * deletes the flag, which left the fact itself missing for good. For the GPA that ended in a
+ * true sentence blocked at G3 with no override.
+ */
+export function EducationEditor({
+  entries,
+  flagged,
+  typed,
+  onEntry,
+  onTyped,
+}: {
+  entries: EducationEntry[];
+  flagged: (path: string) => boolean;
+  typed: Record<string, string>;
+  onEntry: (
+    index: number,
+    next: EducationEntry,
+    clears?: string,
+    options?: { raise?: boolean },
+  ) => void;
+  onTyped: (boxes: Record<string, string>) => void;
+}) {
+  return (
+    <div className="mt-10">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <h3 className="u-eyebrow">Education</h3>
+        <span className="u-data text-faint">
+          {entries.length === 0
+            ? 'none found'
+            : `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`}
+        </span>
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="text-faint u-prose text-[0.9375rem]">
+          No school was read off your resume. Upload a different file if that is wrong.
+        </p>
+      ) : (
+        /* Never sliced or capped. A resume can carry three schools and a school can carry
+           twenty-six honors, and a list that quietly stops at some round number is an
+           extraction error the user cannot see, let alone correct. */
+        <ul className="space-y-6">
+          {entries.map((entry, index) => (
+            <li key={index} className="u-card-flat px-5 py-4">
+              <EducationRow
+                entry={entry}
+                index={index}
+                flagged={flagged}
+                typed={typed}
+                onEntry={onEntry}
+                onTyped={onTyped}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function EducationRow({
+  entry,
+  index,
+  flagged,
+  typed,
+  onEntry,
+  onTyped,
+}: {
+  entry: EducationEntry;
+  index: number;
+  flagged: (path: string) => boolean;
+  typed: Record<string, string>;
+  onEntry: (
+    index: number,
+    next: EducationEntry,
+    clears?: string,
+    options?: { raise?: boolean },
+  ) => void;
+  onTyped: (boxes: Record<string, string>) => void;
+}) {
+  const path = (field: string) => `education.${index}.${field}`;
+  const boxes = gpaBoxesFor(entry, index, typed);
+  const { note } = readGpaBoxes(boxes);
+  const gpaFlagged = flagged(path('gpa'));
+
+  /**
+   * Every box records all three, so an incomplete pair cannot blank a number the profile
+   * already held while the user is still typing the one beside it.
+   */
+  const editGpaBox = (part: GpaPart, text: string) => {
+    const next: GpaBoxes = { ...boxes, [part]: text };
+    onTyped({
+      [gpaBoxKey(index, 'value')]: next.value,
+      [gpaBoxKey(index, 'scale')]: next.scale,
+      [gpaBoxKey(index, 'weighted')]: next.weighted,
+    });
+    const { gpa } = readGpaBoxes(next);
+    // The keystroke that takes a stored GPA back off the profile raises the flag again, and
+    // it is the only edit in this editor that raises anything. A profile arriving with a
+    // correct 3.9/4 lost it to one "4.0 scale" typed into the scale box: nothing was flagged,
+    // so `remaining` stayed 0 and Confirm was live, the server takes a profile with no GPA
+    // happily, and the student's own true sentence about that GPA then came back
+    // `unsupported` at G3, where there is no override. Raising here is safe in the direction
+    // the blanket `raise: false` protects — a row that never held a GPA raises nothing, so
+    // the student whose school publishes none is not sent to a gate to explain it.
+    const lost = gpa === undefined && entry.gpa !== undefined;
+    onEntry(index, { ...entry, gpa }, path('gpa'), { raise: lost });
+  };
+
+  return (
+    <>
+      <div className="grid gap-x-8 sm:grid-cols-2">
+        <TextField
+          label="School"
+          value={entry.institution}
+          flagged={flagged(path('institution'))}
+          onChange={(e) =>
+            onEntry(index, { ...entry, institution: e.target.value }, path('institution'))
+          }
+        />
+        <SelectField
+          label="Level"
+          hint="Decides whether a posting counts you as a student, so an entry the reader could not place is flagged for you."
+          value={entry.level}
+          flagged={flagged(path('level'))}
+          onChange={(e) =>
+            onEntry(
+              index,
+              { ...entry, level: e.target.value as EducationEntry['level'] },
+              path('level'),
+            )
+          }
+        >
+          {EducationLevel.options.map((level) => (
+            <option key={level} value={level}>
+              {LEVEL_LABELS[level]}
+            </option>
+          ))}
+        </SelectField>
+        <TextField
+          label="Field of study"
+          hint="Leave it empty for a high school."
+          value={entry.fieldOfStudy ?? ''}
+          flagged={flagged(path('fieldOfStudy'))}
+          onChange={(e) =>
+            onEntry(
+              index,
+              { ...entry, fieldOfStudy: e.target.value || undefined },
+              path('fieldOfStudy'),
+            )
+          }
+        />
+        {/* Month rather than day. The profile stores YYYY-MM, and a full date picker would
+            hand it a day it cannot store and fail the save on a field nobody typed a day
+            into on purpose. Emptying one has to read as absent, the same way the
+            availability dates below do. */}
+        <TextField
+          label="Started"
+          type="month"
+          value={entry.startDate ?? ''}
+          flagged={flagged(path('startDate'))}
+          onChange={(e) =>
+            onEntry(index, { ...entry, startDate: e.target.value || undefined }, path('startDate'))
+          }
+        />
+        <TextField
+          label="Finishes"
+          type="month"
+          hint="An expected graduation date is fine here."
+          value={entry.endDate ?? ''}
+          flagged={flagged(path('endDate'))}
+          onChange={(e) =>
+            onEntry(index, { ...entry, endDate: e.target.value || undefined }, path('endDate'))
+          }
+        />
+      </div>
+
+      {/* All three boxes carry the same flag, because the extractor raises one flag for the
+          whole GPA: a transcript printing only "4.32 weighted" is missing the unweighted
+          number and the scale, and pointing the amber at one box would say the other two
+          were fine. `inputMode` rather than a number input, so a decimal point survives
+          being typed and nothing rounds a true 3.968 to something the student never had. */}
+      <div className="mt-4 grid gap-x-8 sm:grid-cols-3">
+        {GPA_PARTS.map((part) => (
+          <TextField
+            key={part}
+            label={GPA_LABELS[part]}
+            inputMode="decimal"
+            value={boxes[part]}
+            flagged={gpaFlagged}
+            onChange={(e) => editGpaBox(part, e.target.value)}
+          />
+        ))}
+      </div>
+      {note && <p className="text-faint u-prose mt-2 text-[0.9375rem]">{note}</p>}
+
+      <ListEditor
+        label="Coursework"
+        singular="Course"
+        items={entry.coursework ?? []}
+        onChange={(next) => onEntry(index, { ...entry, coursework: next }, path('coursework'))}
+      />
+      <ListEditor
+        label="Honors"
+        singular="Honor"
+        hint="Awards, placements and honor societies. For a young applicant these are most of the evidence a claim can be checked against, so spell each one out the way it is written on the certificate."
+        items={entry.honors ?? []}
+        onChange={(next) => onEntry(index, { ...entry, honors: next }, path('honors'))}
+      />
+    </>
+  );
+}
+
+/**
+ * A list of arbitrary length that can be added to, edited, reordered and cut down.
+ *
+ * Honors and coursework are both unbounded, and a rising freshman applying with a resume
+ * that is mostly awards can have twenty-six of them. Each row wraps rather than truncating,
+ * so a long award name pushes the buttons onto the next line instead of clipping the name
+ * the student needs to be able to read before they can correct it.
+ */
+function ListEditor({
+  label,
+  singular,
+  hint,
+  items,
+  onChange,
+}: {
+  label: string;
+  singular: string;
+  hint?: string;
+  items: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <div className="mt-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-[1rem]">{label}</span>
+        <span className="u-data text-faint text-[0.8125rem]">{items.length}</span>
+      </div>
+      {hint && <p className="text-faint u-prose mt-1 text-[0.9375rem] leading-snug">{hint}</p>}
+
+      {items.length > 0 && (
+        <ul className="mt-2 space-y-2">
+          {items.map((item, i) => (
+            <li key={i} className="flex flex-wrap items-center gap-2">
+              <span className="u-data text-faint w-6 shrink-0 text-right">{i + 1}</span>
+              <input
+                value={item}
+                aria-label={`${singular} ${i + 1}`}
+                onChange={(e) => onChange(items.map((x, k) => (k === i ? e.target.value : x)))}
+                className="u-data border-rule focus:border-accent min-w-[12rem] flex-1 rounded-t border-b bg-transparent px-1 py-1.5 outline-none transition-colors"
+              />
+              <span className="flex shrink-0 items-center gap-1">
+                <Button
+                  size="sm"
+                  aria-label={`Move ${singular.toLowerCase()} ${i + 1} up`}
+                  disabled={i === 0}
+                  onClick={() => onChange(moveListItem(items, i, i - 1))}
+                >
+                  Up
+                </Button>
+                <Button
+                  size="sm"
+                  aria-label={`Move ${singular.toLowerCase()} ${i + 1} down`}
+                  disabled={i === items.length - 1}
+                  onClick={() => onChange(moveListItem(items, i, i + 1))}
+                >
+                  Down
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  aria-label={`Remove ${singular.toLowerCase()} ${i + 1}`}
+                  onClick={() => onChange(items.filter((_, k) => k !== i))}
+                >
+                  Remove
+                </Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-2">
+        <Button size="sm" onClick={() => onChange([...items, ''])}>
+          Add {singular.toLowerCase()}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What the last save cost at G3, said out loud on the screen that cost it.
+ *
+ * The server re-checks every approved answer against the profile a write just stored and
+ * takes the approval off the ones it no longer supports. The client used to throw that list
+ * away — `saveProfile` was `.then(CandidateProfile.parse)`, and a Zod object parse drops the
+ * key — so correcting a school name here silently un-approved an answer and said nothing.
+ * The student went on believing a sentence was approved that the app had un-approved, and
+ * the first news of it was the fill refusing at G4, by which time the reason was three
+ * screens away. G3 means a human checked this text against the profile; when the profile
+ * moves under it, the person who moved it is the one who has to be told.
+ *
+ * Every claim is printed, with the server's own reason beside it, because "an answer needs
+ * reviewing" without the sentence that lost it sends the student back to hunt for a
+ * difference they cannot see.
+ */
+export function WithdrawnNotice({ items }: { items: api.WithdrawnApproval[] }) {
+  if (items.length === 0) return null;
+  const one = items.length === 1;
+  return (
+    <Notice tone="caution">
+      That save took the approval off {one ? 'one answer' : `${items.length} answers`}. Your profile
+      no longer supports something {one ? 'it says' : 'they say'}, so {one ? 'it is' : 'they are'}{' '}
+      back to unapproved and {one ? 'has' : 'have'} to be reviewed again at G3 before anything can
+      be filled in with {one ? 'it' : 'them'}. Nothing was sent anywhere.
+      <ul className="mt-3 space-y-3">
+        {items.map((w) => (
+          <li key={w.answerId}>
+            <span className="u-data">{w.question}</span>
+            {w.claims.map((c, i) => (
+              <p key={i} className="text-faint mt-1 text-[0.9375rem]">
+                "{c.claim}" — {c.reason}
+              </p>
+            ))}
+          </li>
+        ))}
+      </ul>
+    </Notice>
   );
 }
 

@@ -56,11 +56,21 @@ probes known ATS endpoints for a company slug:
 acme → try boards-api.greenhouse.io/v1/boards/acme/jobs
      → try api.lever.co/v0/postings/acme
      → try api.ashbyhq.com/posting-api/job-board/acme
-     → else: fetch acme.com, look for a careers link + ATS fingerprint in the HTML
 ```
 
-Resolved company → ATS mappings are cached in `source.config` so subsequent runs are one
-request.
+All three vendors are tried for one slug candidate before the next candidate is tried, and
+the first candidate that answers anywhere ends the search; whichever boards answered come
+back sorted by how many jobs they hold. A board that answered with nothing posted today is still
+returned, with a count of zero, because it answers the question that was asked — which
+vendor this company uses. A 404 is the ordinary "no board here" and passes without comment;
+anything else is logged, because a timeout or a 503 means that vendor was never actually
+checked and an empty answer would read as "this company has no board there".
+
+**Not built:** the domain fallback — fetching `acme.com` when none of the three answers and
+looking for a careers link and an ATS fingerprint in the HTML — and the mapping cache.
+Nothing in `resolveCompany` writes to the database, so resolving the same company twice
+re-probes every vendor, and the `source` row labelled `greenhouse:acme` appears only once a
+discovery run has actually pulled that board.
 
 ## Query planning
 
@@ -84,18 +94,44 @@ the pinned list alone exceeded 40 — losing exactly the boards that had been as
 name. A pinned company with no resolved board is guessed on all three keyless vendors, with
 a note saying the guess is unverified so it can be pointed at the resolve endpoint.
 
-Role families are derived deterministically — no model call. `inferRoleFamilies` builds a
-corpus out of the profile's skills, experience titles and bullets, project names and
-descriptions, and fields of study, then counts how many terms of each entry in a curated
-16-family taxonomy appear in it. Families with at least one hit are ranked by hit count and
-the top four are kept.
+Role families are derived deterministically — no model call. `inferRoleFamilies` counts how
+many terms of each entry in a curated 21-family taxonomy appear in the profile, ranks the
+families with at least one hit by hit count, and keeps the top four.
+
+It reads the profile as two separate corpora, because they can afford different amounts of
+reach:
+
+- the **stem corpus** — skills, experience titles and bullets, project names and
+  descriptions, fields of study, coursework and honors — where a term may match as a
+  prefix, so `biolog` reaches "biological";
+- the **organization corpus** — the organization named on each experience — where every
+  term must be a whole word. A young applicant's field is often stated only there ("Sample
+  Robotics" with nothing in the bullets), so the line has to count; but under a prefix stem
+  "Brandeis University" scored the `brand` term and a campus dining job came back wanting
+  marketing roles.
+
+A school's own name is identity, not role evidence, so each education institution is
+subtracted from the organization corpus before anything is counted: "Student Ambassador,
+Design and Architecture Senior High" was minting a design family for a student with no
+design work behind it, while the rest of that line — "Speech & Debate Team", written after
+the school name — still counts.
+
+Both corpora then pass through `scrubFalseSignals`, which removes the phrases that borrow a
+taxonomy stem without being evidence of it. "robots.txt" is an SEO artifact and "robotic
+process automation" an ops one, and both handed a marketing resume robotics queries;
+"tutorial" starts with the `tutor` stem, so following a React tutorial read as teaching;
+"self-taught" and "mentored by" describe learning rather than teaching; and a clock time is
+not a job title, so "Worked 4 to 9 PM shifts on weekends" no longer hands a cashier a
+product-management search plan. Scrubbing the phrase is deliberate — narrowing the stem
+instead would cost the genuine uses.
 
 Matching is word-boundary anchored rather than a bare substring test, and that distinction
 is the whole point of curating the taxonomy: `includes('ml')` is true of "html",
 `includes('ai')` of "email", `includes('ui')` of "building", so a resume mentioning HTML and
-email used to come back wanting machine-learning roles. Terms of three characters or fewer
-must be whole words; longer ones need only start at a boundary, because entries like
-`biolog` and `prototyp` are deliberate stems.
+email used to come back wanting machine-learning roles. In the stem corpus, terms of three
+characters or fewer must be whole words and longer ones need only start at a boundary,
+because entries like `biolog` and `prototyp` are deliberate stems; in the organization
+corpus every term is whole-word regardless of length.
 
 The user sees and can edit the query list before a run — discovery is not a black box
 either.
@@ -146,15 +182,25 @@ interface JobSource {
 }
 ```
 
-`fetch` returns `{ postings: NormalizedPosting[]; notes: string[] }` — one call, one array,
-already normalized. Normalization is not a separate method: each adapter maps its own
-vendor payload inline, because the mapping is the only part that differs between sources
-and a second method would only be a place to forget to call.
+`fetch` returns `{ postings: NormalizedPosting[]; notes: string[]; gaps?: string[] }` — one
+call, one array, already normalized. Normalization is not a separate method: each adapter
+maps its own vendor payload inline, because the mapping is the only part that differs
+between sources and a second method would only be a place to forget to call.
 
 `notes` is how a source says it did less than it looks like it did. A source that needs an
 API key the user hasn't supplied is still called, and answers with an empty list and a note
 saying exactly that — which is why the run summary can report a coverage gap instead of
 showing zero postings and no reason.
+
+`gaps` is a second, separate list carrying the coverage we did not get: a page of results
+we stopped at, rows that could not be read. It is **not a subset of `notes`** — the runner
+concatenates the two into the source report, so a line written into both is printed to the
+user twice. Adzuna and USAJOBS return an empty `notes` beside a populated `gaps`;
+`github_list` returns a status line in one and a different coverage-loss line in the other.
+The runner also marks a source degraded for a gap and repeats it in the run summary's
+`skipped` list, which is where the UI gets "the search was incomplete" from. A plain note
+does neither, so a source that quietly returned its first fifty of eight hundred matches
+used to read as complete coverage.
 
 Normalization is deterministic parsing, not an LLM call: title/company/location/dates come
 straight from structured source fields. Discovery makes no model calls at all — requirement
@@ -172,11 +218,17 @@ Three stages, cheapest first:
    `source`, `src`, `trk`), force https, lowercase the host, drop `www.` and the fragment,
    sort the remaining query and trim a trailing slash. A unique index does the work.
 2. **Fingerprint.** The plain joined string
-   `normalizeCompany(company) + '|' + normalizeTitle(title) + '|' + primary city`. Not
+   `normalizeCompany(company) + '|' + fingerprintTitle(title) + '|' + primary city`. Not
    hashed — there is nothing to hide and the raw key is readable in the database when you
-   are working out why two rows did or didn't merge. `normalizeTitle` strips parentheticals,
-   requisition numbers, roman numerals, season words and years; it does **not** strip
-   location suffixes, which is stage 3's problem.
+   are working out why two rows did or didn't merge. This stage merges on that key alone,
+   with no different-source guard, so every token the title normalizer throws away costs a
+   posting outright. `fingerprintTitle` is therefore the cautious form: it strips a
+   *labelled* requisition id ("Req #9931", "Job ID 4471") and a bracketed aside that holds
+   nothing else, and it keeps roman numerals, season words and years. Under the aggressive
+   form, "Machine Learning Intern I" and "Machine Learning Intern II" collapsed onto one row
+   and one of two real openings never appeared in the queue, and a "(Summer 2026)" and a
+   "(Fall 2026)" requisition became one. That aggressive form, `normalizeTitle`, belongs to
+   stage 3, which can afford it because it only ever merges across different sources.
 3. **Same title, different source.** Merge when the stemmed, stopword-stripped token *sets*
    of the two titles are equal, the company matches, and the posting comes from a source
    the surviving row hasn't already been seen on.

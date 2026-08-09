@@ -12,6 +12,7 @@ import { extractText, mimeFromFilename, SUPPORTED_MIME } from '../core/ingestion
 import { extractResume } from '../core/ingestion/extractProfile';
 import { toDraftProfile } from '../core/ingestion/toProfile';
 import { getProfileHeader, saveProfile } from '../core/profile/repository';
+import { sweepApprovals } from './profile';
 import { logger } from '../infra/logger';
 
 const MAX_BYTES = 12 * 1024 * 1024;
@@ -158,7 +159,24 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
       const draft = toDraftProfile(extraction);
       // Re-extraction keeps the existing id so history and foreign keys survive.
       const saved = saveProfile(existing ? { ...draft, id: existing.id } : draft);
-      return { profile: saved, needsReview: saved.needsReview };
+      /**
+       * The same approval sweep PUT /api/profile runs, because this is the same event by a
+       * different door — and the more violent version of it, since a re-extraction replaces
+       * every fact at once rather than editing one.
+       *
+       * Without it, an answer approved at G3 against the old profile kept its green tick and
+       * an evidence panel quoting entries the new extraction had not produced. Nothing
+       * false-green reached an employer: `load()` in routes/filling.ts re-checks before a key
+       * is pressed and refuses. But it refused at the form, minutes later, on a card that had
+       * been telling the user all along that the answer was fine — so the tool looked like it
+       * had lost their approvals rather than like it had noticed something.
+       *
+       * The key is spelled the same way PUT /api/profile spells it, on purpose: the wizard
+       * and the upload screen both need to say the same sentence to the user, and a client
+       * reading two different shapes for one fact would end up saying it in only one place.
+       */
+      const withdrawnApprovals = sweepApprovals(saved, 'resume_reextracted');
+      return { profile: saved, needsReview: saved.needsReview, withdrawnApprovals };
     } catch (err) {
       logger.error({ err }, 'resume extraction failed');
       // A no-model failure carries a message written for the user (sign in, set a key) and

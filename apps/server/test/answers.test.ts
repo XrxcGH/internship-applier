@@ -5,10 +5,11 @@
  * refuses to approve an answer that holds one — the check has to be enforced where a
  * modified client cannot route around it.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { CandidateProfile } from '@ia/shared';
 import { ulid } from 'ulid';
+import type * as llm from '../src/infra/llm';
 import { buildApp } from '../src/app';
 import { db, schema } from '../src/infra/db/client';
 import { runMigrations } from '../src/infra/db/migrate';
@@ -21,6 +22,45 @@ import {
   saveApproved,
   wordEditDistance,
 } from '../src/core/writing/answerLibrary';
+
+/**
+ * A model that answers with whatever the test hands it.
+ *
+ * The suite pins LLM_PROVIDER=none, which is right for every other file but meant the
+ * drafting loop — the retrieve, guard, revise-once sequence in `draft.ts` — never ran under
+ * test at all. That is where the defect below lived: the drafting guard was never told the
+ * employer's name, so it read "Northwind Systems" as an invented organisation and spent the
+ * single revision round telling the model to delete the one sentence that answered "why do
+ * you want to work here". Nothing caught it, because nothing exercised it.
+ *
+ * The stub stays off unless a test switches it on, so the "no model access" cases below
+ * still see the real resolution and still get their 400.
+ */
+const modelStub = vi.hoisted(() => ({
+  enabled: false,
+  replies: [] as string[],
+  calls: [] as Array<{ system: string; user: string }>,
+}));
+
+vi.mock('../src/infra/llm', async (importOriginal) => {
+  const actual = await importOriginal<typeof llm>();
+  return {
+    ...actual,
+    resolveBackend: async () =>
+      modelStub.enabled
+        ? {
+            kind: 'api',
+            available: async () => true,
+            generate: async () => ({}),
+            describe: () => 'stub',
+          }
+        : actual.resolveBackend(),
+    generate: async (req: { system: string; user: string }) => {
+      modelStub.calls.push({ system: req.system, user: req.user });
+      return { text: modelStub.replies.shift() ?? '', stopReason: null, provider: 'api' as const };
+    },
+  };
+});
 
 let app: FastifyInstance;
 let applicationId: string;
@@ -518,5 +558,401 @@ describe('edit distance', () => {
     expect(editFraction('a b c d', 'w x y z')).toBe(1);
     expect(describeEditing(0)).toContain('unchanged');
     expect(describeEditing(0.9)).toContain('writing sample');
+  });
+});
+
+/**
+ * The resume this tool actually gets: sixteen activities, one school, and bullets stacked on
+ * the two or three things the student really did.
+ *
+ * Retrieval builds a corpus sized for a drafting prompt, and the gate was taking that size as
+ * its own. It also took a different query — drafting scores the profile against "<title> at
+ * <company>\n\n<description>" and the gate scored it against the description alone — so the
+ * two ends of one request ranked the same resume differently and kept different tails of it.
+ * This fixture holds fifty-one facts against a corpus of forty; the twelve outside it were
+ * facts no answer could be checked against, and quoting one came back from approval as
+ * `"Orchard Street" does not appear anywhere on your profile`, at a gate with no override,
+ * about a line the student typed into their own profile.
+ *
+ * Both halves are covered below, in both directions: every entry and several of the late
+ * bullets have to approve, and an invented organisation, an invented bullet, an inflated
+ * duration, a wrong GPA and a claim of having worked at the company being applied to all have
+ * to keep coming back 409.
+ */
+/**
+ * The busy entries, with the bullets the student typed under them.
+ *
+ * Enough of them that the profile carries more facts than the retrieval floor: fifty-one
+ * facts against a corpus of forty. The gate was taking that cut, so twelve of this student's
+ * own bullets were facts their answer could not be checked against, and quoting one of them
+ * came back `"Orchard Street" does not appear anywhere on your profile`.
+ */
+const BULLETS: Record<string, string[]> = {
+  'The Sample Sentinel (Student Newspaper)': [
+    'Ran the weekly budget meeting for a staff of twenty-two',
+    'Filed public records requests to the Maplewood school board',
+    'Rebuilt the paper site on Eleventy after the old host shut down',
+    'Started the Ledger column tracking district spending',
+    'Trained six freshman reporters on interviewing',
+    'Covered the Fairhaven levy campaign from filing to certification',
+    'Set the Orchard Street photo essay in print for the spring issue',
+    'Wrote the Founders Day retrospective from the 1974 archive',
+  ],
+  'Model United Nations, St. Sample High School': [
+    'Chaired the Kellerman crisis committee for eighty delegates',
+    'Wrote the position paper on the Tanzania delegation',
+    'Ran novice training every Thursday in the Bellweather room',
+    'Booked the Harrowgate hotel block for the spring conference',
+    'Kept the gavel roster for four regional conferences',
+    'Raised the delegation fee waiver with the Whitmore fund',
+    'Drafted the Sandpiper resolution adopted in committee',
+    'Recruited eleven freshmen at the Larkspur activities fair',
+  ],
+  'DECA, St. Sample Chapter': [
+    'Built the Pemberton marketing plan for the state series',
+    'Ran the Coldbrook fundraiser for chapter travel',
+    'Kept the Ashfield sponsor list current all season',
+    'Led role-play practice in the Thornbury lab twice a week',
+    'Organised the Winterset chapter banquet for ninety guests',
+    'Wrote the Marchmont chapter newsletter each month',
+    'Trained the Ellery novice team before districts',
+    'Tracked the Ravenswood budget through two audits',
+  ],
+  'Science Olympiad': [
+    'Built the Halloway mousetrap vehicle for regionals',
+    'Studied the Ardsley anatomy set with a partner weekly',
+    'Ran the Fernhill build night in the machine shop',
+    'Kept the Grimsby event roster for twenty-three members',
+    'Wrote the Ferndale study guide for Disease Detectives',
+    'Repaired the Kingsbury tower after the state tournament',
+    'Scheduled the Merribell practice tests each January',
+    'Coached the Northgate freshmen on Anatomy and Physiology',
+  ],
+  'Northside Robotics Boosters': [
+    'Ran the Founders Day fundraiser that paid for competition travel',
+    'Kept the parts ledger for the Vex team',
+  ],
+};
+
+const ACTIVITIES: Array<[org: string, title: string, type: 'club' | 'volunteer' | 'job']> = [
+  ['St. Sample High School Speech & Debate Team', 'Captain', 'club'],
+  ['Model United Nations, St. Sample High School', 'Secretary-General', 'club'],
+  ['The Sample Sentinel (Student Newspaper)', 'Editor-in-Chief', 'club'],
+  ['DECA, St. Sample Chapter', 'Chapter President', 'club'],
+  ['FBLA', 'Vice President of Finance', 'club'],
+  ['Science Olympiad', 'Team Captain', 'club'],
+  ['St. Sample Players (Theatre)', 'Stage Manager', 'club'],
+  ['St. Sample Players (Theatre)', 'Lighting Designer', 'club'],
+  ['St. Sample High School Concert and Jazz Band', 'Section Leader, Trumpet', 'club'],
+  ['Sample Valley Medical Center', 'Volunteer, Emergency Department', 'volunteer'],
+  ['Riverbend Youth Soccer League', 'Assistant Coach', 'volunteer'],
+  ['St. Sample High School Varsity Soccer', 'Team Captain', 'club'],
+  ['Bright Minds Tutoring Center', 'Math Tutor', 'job'],
+  ['Oakwood Community Pool', 'Lifeguard', 'job'],
+  ['Key Club International', 'Chapter Treasurer', 'volunteer'],
+  ['Northside Robotics Boosters', 'Fundraising Chair', 'club'],
+];
+
+const CLUBS_PROFILE: CandidateProfile = {
+  ...PROFILE,
+  fullName: 'Priya Ramanathan-Cole',
+  email: 'priya.rc@example.edu',
+  dateOfBirth: '2009-04-02',
+  education: [
+    {
+      institution: 'St. Sample High School',
+      level: 'high_school',
+      startDate: '2022-08',
+      endDate: '2026-05',
+      gpa: { value: 3.972, scale: 4 },
+      coursework: ['AP Calculus BC', 'AP Biology'],
+      honors: ['National Merit Semifinalist (2025)'],
+    },
+  ],
+  experience: ACTIVITIES.map(([organization, title, type]) => ({
+    organization,
+    title,
+    type,
+    // The Lifeguard job is a real summer, deliberately short: it is what the inflated
+    // duration below is measured against.
+    startDate: title === 'Lifeguard' ? '2025-05' : '2023-09',
+    endDate: title === 'Lifeguard' ? '2025-08' : '2026-05',
+    bullets: BULLETS[organization] ?? [],
+    skills: [],
+  })),
+  projects: [],
+  skills: [],
+} as CandidateProfile;
+
+describe('G3 — a resume that is mostly clubs, and the ranking that hid half of it', () => {
+  let clubsApplicationId: string;
+
+  beforeAll(() => {
+    saveProfile(CLUBS_PROFILE);
+    confirmProfile();
+
+    const postingId = ulid();
+    db.insert(schema.jobPosting)
+      .values({
+        id: postingId,
+        canonicalUrl: `https://example.com/jobs/${postingId}`,
+        applyUrl: `https://example.com/jobs/${postingId}/apply`,
+        company: 'Nova Robotics',
+        title: 'Summer Communications Intern',
+        descriptionText:
+          'A summer programme for high school students in Ohio. The intern helps with ' +
+          'outreach writing and event logistics.',
+        fingerprint: postingId,
+      })
+      .run();
+
+    const matchId = ulid();
+    db.insert(schema.match)
+      .values({
+        id: matchId,
+        postingId,
+        profileId: PROFILE.id,
+        eligibility: 'eligible',
+        rules: [],
+        blockers: [],
+        score: 80,
+        breakdown: {},
+        rationale: 'test',
+      })
+      .run();
+
+    clubsApplicationId = ulid();
+    db.insert(schema.application)
+      .values({
+        id: clubsApplicationId,
+        matchId,
+        status: 'draft',
+        applyUrl: `https://example.com/jobs/${postingId}/apply`,
+      })
+      .run();
+  });
+
+  afterAll(() => {
+    saveProfile(PROFILE);
+    confirmProfile();
+  });
+
+  async function ask(questionText: string, text: string): Promise<string> {
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/applications/${clubsApplicationId}/questions`,
+      payload: { questionText },
+    });
+    const id = created.json().id as string;
+    const patched = await app.inject({
+      method: 'PATCH',
+      url: `/api/answers/${id}`,
+      payload: { text },
+    });
+    expect(patched.statusCode).toBe(200);
+    return id;
+  }
+
+  const approve = (id: string) => app.inject({ method: 'POST', url: `/api/answers/${id}/approve` });
+
+  // Every entry, not the one from the bug report. The ranking dropped a different pair for
+  // every question, so a fix proved on one activity says nothing about the other fifteen.
+  it.each(ACTIVITIES)('approves a true sentence about %s', async (organization, title) => {
+    const id = await ask(
+      'Tell us about a time you took responsibility for something.',
+      `I was ${title} at ${organization}.`,
+    );
+    const res = await approve(id);
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200);
+  });
+
+  it('approves the club that only the employer name ranks into view', async () => {
+    // The reported case, verbatim. "robotics" appears in Nova Robotics and in Northside
+    // Robotics Boosters, which is exactly why the drafting query kept this entry and the
+    // description-only query did not.
+    const id = await ask(
+      'Tell us about a time you took responsibility for something.',
+      'I am the Fundraising Chair of the Northside Robotics Boosters.',
+    );
+    const res = await approve(id);
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200);
+  });
+
+  // Retrieval keeps one fact from every entry before any entry gets a second, so the entry
+  // headlines above survive any cut. The bullets do not: this profile holds fifty-one facts
+  // and the corpus floor is forty, and the twelve that fall past it were the gate's blind
+  // spot. A student quoting their own resume line got `"Orchard Street" does not appear
+  // anywhere on your profile`.
+  it.each([
+    'I set the Orchard Street photo essay in print for the spring issue.',
+    'I drafted the Sandpiper resolution that was adopted in committee.',
+    'I tracked the Ravenswood budget through two audits.',
+    'I coached the Northgate freshmen on Anatomy and Physiology.',
+  ])('approves a bullet that falls past the corpus floor: %s', async (text) => {
+    const id = await ask('What are you most proud of?', text);
+    const res = await approve(id);
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200);
+  });
+
+  it('approves a sentence that names the company being applied to', async () => {
+    const id = await ask(
+      'Why do you want to intern at Nova Robotics?',
+      'What draws me to Nova Robotics is the outreach programme you run with public high schools.',
+    );
+    expect((await approve(id)).statusCode).toBe(200);
+  });
+
+  it('stores no blocking flag against any of it', async () => {
+    const id = await ask(
+      'Tell us about a time you took responsibility for something.',
+      'I am the Fundraising Chair of the Northside Robotics Boosters, and I was Assistant ' +
+        'Coach at Riverbend Youth Soccer League.',
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/applications/${clubsApplicationId}` });
+    const row = (res.json().answers as Array<{ id: string; flags: Array<{ type: string }> }>).find(
+      (a) => a.id === id,
+    )!;
+    expect(row.flags.filter((f) => f.type === 'unsupported' || f.type === 'overstated')).toEqual(
+      [],
+    );
+  });
+
+  /**
+   * The other direction, on the same profile and the same posting. A wider evidence set at
+   * the gate must not become a wider gate: an organisation the profile has never heard of is
+   * still refused, and so is a real one stretched past what its dates say.
+   */
+  it.each([
+    [
+      'an employer nowhere on the profile',
+      'I spent last summer at Google building search infrastructure.',
+    ],
+    [
+      'a club that sounds like one of theirs but is not',
+      'I was the Fundraising Chair of the Westside Robotics Boosters.',
+    ],
+    [
+      'a claim of having worked at the company applied to',
+      'I interned at Nova Robotics last summer and ran their outreach programme.',
+    ],
+    [
+      'a summer job stretched into six years',
+      'I have worked as a lifeguard at Oakwood Community Pool for six years.',
+    ],
+    ['a GPA that is not theirs', 'I kept a 3.5 GPA through high school.'],
+    // The two written to sit beside a real bullet, since the corpus the gate now holds is a
+    // bigger token union and lexical coverage is the one check a bigger union can soften.
+    [
+      'a photo essay they never set',
+      'I set the Bellingham photo essay in print for the spring issue.',
+    ],
+    ['a resolution they never drafted', 'I drafted the Kittiwake resolution in committee.'],
+  ])('still refuses %s', async (_label, text) => {
+    const id = await ask('Tell us about a time you took responsibility for something.', text);
+    const res = await approve(id);
+    expect(res.statusCode, text).toBe(409);
+    expect(res.json().error.code).toBe('UNVERIFIED_CLAIMS');
+  });
+});
+
+/**
+ * The drafting loop, with a stub model.
+ *
+ * `draftAnswer` guards its own first draft and gets one revision to fix what it finds. That
+ * guard was never handed the company and the role title, so it reported the employer's own
+ * name as an invention, the revision message quoted the sentence back and told the model to
+ * drop it, and the shortened draft passed the better-than check because it had one fewer
+ * blocking claim. The user opened G3 and read an answer to "why do you want to work here"
+ * with the employer taken out of it. Nothing was red, so nothing said why.
+ */
+describe('drafting — the two names the profile cannot supply', () => {
+  beforeEach(() => {
+    modelStub.enabled = true;
+    modelStub.replies = [];
+    modelStub.calls = [];
+  });
+  afterEach(() => {
+    modelStub.enabled = false;
+  });
+
+  const draft = (id: string) => app.inject({ method: 'POST', url: `/api/answers/${id}/draft` });
+
+  it('keeps the sentence naming the company, and spends no revision on it', async () => {
+    modelStub.replies = [
+      'What draws me to Northwind Systems is the developer tooling. Last summer I built ' +
+        'internal tooling at Kestrel Analytics that let the support team resolve billing ' +
+        'tickets without an engineer, and that is the work I want more of.',
+    ];
+    const id = await addQuestion('Why do you want to intern at Northwind Systems?');
+    const res = await draft(id);
+
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200);
+    expect(modelStub.calls, 'a second call means the revision round was spent').toHaveLength(1);
+    expect(res.json().text).toContain('Northwind Systems');
+    expect(res.json().revised).toBe(false);
+    expect(res.json().unresolved).toBe(false);
+    expect(
+      (await app.inject({ method: 'POST', url: `/api/answers/${id}/approve` })).statusCode,
+    ).toBe(200);
+  });
+
+  it('still sends a fabricated employer back, and names it rather than the company', async () => {
+    modelStub.replies = [
+      'What draws me to Northwind Systems is the developer tooling they build. I spent last ' +
+        'summer at Google building search infrastructure.',
+      'What draws me to Northwind Systems is the developer tooling they build. Last summer I ' +
+        'built internal tooling at Kestrel Analytics so the support team could close billing ' +
+        'tickets without an engineer.',
+    ];
+    const id = await addQuestion('Why do you want to intern at Northwind Systems?');
+    const res = await draft(id);
+
+    expect(modelStub.calls).toHaveLength(2);
+    const revision = modelStub.calls[1]!.user;
+    expect(revision).toContain('Google');
+    expect(revision).not.toContain('"Northwind Systems" does not appear');
+    expect(res.json().text).toContain('Kestrel Analytics');
+    expect(res.json().text).toContain('Northwind Systems');
+    expect(res.json().revised).toBe(true);
+    expect(res.json().unresolved).toBe(false);
+  });
+
+  it('reports unresolved only when the flags stored beside it block', async () => {
+    // Both attempts invent the same employer, so the revision is no better and the first
+    // draft stands. The response said `unresolved` from the drafting loop's own guard while
+    // the flags on the row came from the gate's, and the two ran against different evidence
+    // and different names: the client could be told an answer still had unverified claims
+    // while the row beside it was clean and the approve endpoint would have taken it.
+    modelStub.replies = [
+      'I spent last summer at Google building search infrastructure for a team of thirty.',
+      'I spent two years at Google, mostly on search.',
+    ];
+    const id = await addQuestion('Tell us about a project you are proud of.');
+    const res = await draft(id);
+    const body = res.json();
+
+    expect(body.unresolved).toBe(true);
+    const blocking = (body.flags as Array<{ type: string }>).filter(
+      (f) => f.type === 'unsupported' || f.type === 'overstated',
+    );
+    expect(blocking.length).toBeGreaterThan(0);
+    expect(
+      (await app.inject({ method: 'POST', url: `/api/answers/${id}/approve` })).statusCode,
+    ).toBe(409);
+  });
+
+  it('drafts the evidence the gate will check it against', async () => {
+    // The drafting prompt carries the evidence block verbatim, so the refs in it are the set
+    // the model was told it may write from. Every one of them has to still be a fact about
+    // this person when the same text comes back to the gate; that is the whole invariant.
+    modelStub.replies = ['I built internal tooling at Kestrel Analytics.'];
+    const id = await addQuestion('Tell us about a project you are proud of.');
+    await draft(id);
+
+    const evidenceBlock = modelStub.calls[0]!.system;
+    expect(evidenceBlock).toContain('[experience.0]');
+    expect(evidenceBlock).toContain('Kestrel Analytics');
+    // The posting's words reach retrieval, which is what made the two sets disagree.
+    expect(modelStub.calls[0]!.user).toContain('Northwind Systems');
   });
 });

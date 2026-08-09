@@ -79,20 +79,26 @@ const MONTHS: Record<string, number> = {
 };
 
 /**
- * Widens a match to its surrounding sentence so the stored quote reads naturally.
+ * Where the sentence containing a match starts and ends.
  *
- * A line break ends the quote as firmly as a full stop does. Postings reach us from the
+ * A line break ends a sentence as firmly as a full stop does. Postings reach us from the
  * ATS with their `<li>` markers already stripped, so a whole requirements section arrives
  * as a run of short lines carrying no punctuation at all; reading to the nearest full stop
  * then quoted the entire section, and the "evidence" printed beside a rejection was several
  * paragraphs long and led with a heading from a different part of the posting.
  */
-function sentenceAround(text: string, index: number, length: number): string {
+function sentenceSpan(text: string, index: number, length: number): [number, number] {
   const start = Math.max(0, text.lastIndexOf('.', index) + 1, text.lastIndexOf('\n', index) + 1);
   const afterDot = text.indexOf('.', index + length);
   const afterLine = text.indexOf('\n', index + length);
   let end = afterDot === -1 ? Math.min(text.length, index + length + 120) : afterDot + 1;
   if (afterLine !== -1 && afterLine < end) end = afterLine;
+  return [start, end];
+}
+
+/** Widens a match to that sentence, so the stored quote reads naturally. */
+function sentenceAround(text: string, index: number, length: number): string {
+  const [start, end] = sentenceSpan(text, index, length);
   return text.slice(start, end).trim().slice(0, 400);
 }
 
@@ -283,26 +289,509 @@ function statedAsPreferred(text: string, index: number, length: number): boolean
 const ACCEPTS_SETTLED_NON_CITIZENS =
   /\bpermanent\s+residen(?:t|ts|cy|ce)\b|\bgreen[\s-]?card\b|\bU\.?S\.?\s+nationals?\b|\bU\.?S\.?\s+persons?\b|\b(?:authoriz|authoris)(?:ed|ation)\s+to\s+work\b|\bwork\s+(?:authoriz|authoris)ation\b|\b(?:eligible|able|permitted|entitled|allowed|cleared)\s+to\s+work\b|\bright\s+to\s+work\b|\brefugees?\b|\basylees?\b|\basylum\b|\bDACA\b/i;
 
+// ---------------------------------------------------------------- age clauses
+//
+// This population is high schoolers and rising freshmen, so the age clause is the one
+// requirement in a posting that is routinely about them, and it was read wrongly in both
+// directions at once: a negated clause ("You do not need to be 18 years of age to apply")
+// produced a hard 18+ requirement and the sentence inviting the student to apply was
+// printed beside the rejection as its evidence, while half the ordinary ways of writing a
+// real 18+ rule ("Minimum age: 18.", "Must be at least 18.", "Applicants under 18 will not
+// be considered.") matched nothing at all and a 16-year-old was told in so many words that
+// "the posting does not state a minimum age".
+//
+// The whole family is therefore handled in one place, in a fixed order: ranges first, so
+// the top of "aged 16 to 18" is never mistaken for a floor; then the affirmative floors,
+// negation-guarded on the LEAD-IN the way the clearance and enrolment blocks below are,
+// plus one narrow after-the-phrase check for the handful of wordings that cancel the age
+// clause from behind (see `AGE_CANCELLED_AFTER`); then the exclusionary wording, which
+// states a floor with the word "not" in it and so must be exempt from that guard; then the
+// lower alternative a posting offers a minor; and only if nothing numeric was found at all,
+// the unnumbered "legal working age".
+//
+// A whole-clause negation window was tried here and had to be taken out again: it scanned
+// the text AFTER the age phrase for any word in `NEGATED`, so "Must be 18 years of age or
+// older with no exceptions." — and every sibling of it ("without exception", "no experience
+// necessary", "no felony convictions", "regardless of prior experience") — silently lost a
+// real adult-only floor and told a 16-year-old the posting states no minimum age. The
+// negatives in those sentences belong to a different predicate in the same unpunctuated
+// clause, which is precisely why the two blocks below only ever read the lead-in.
+
+/**
+ * The window inside which a one- or two-digit number can plausibly be an age gate.
+ *
+ * Below 14 no US employer states a hiring floor, and above 25 it is a tenure or a salary
+ * band rather than an age. The window is what stops "18 credit hours" and "$18 and up" from
+ * being read as ages on its own, but it is nowhere near enough by itself — see the two
+ * exclusion patterns below.
+ */
+const AGE_FLOOR_PLAUSIBLE = 14;
+const AGE_CEILING_PLAUSIBLE = 25;
+
+/**
+ * The stand-in minimum recorded for a clause that gates on age without naming a number.
+ *
+ * It is never compared against anybody: the requirement it belongs to carries
+ * `necessity: 'unclear'`, and eligibility.ts only reads minima off requirements the posting
+ * states as `required`. Zero is written here rather than a guessed 16 or 18 so that if it
+ * ever does escape into a comparison it can disqualify no one.
+ */
+const AGE_UNSPECIFIED_MIN = 0;
+
+/**
+ * What a number is measuring when it is not measuring an age.
+ *
+ * Tested against the text immediately after the digits. "at least 18 credit hours per
+ * semester", "at least 20 hours per week", "18 months of experience", "$18 and up" and
+ * "each cohort will be 20 students" all read as an age minimum to a pattern that only knows
+ * the number, and each of them would have hard-failed a 16-year-old on a posting with no
+ * age rule at all. Units of time, units of study, units of money and countable people all
+ * belong here; "years of age" deliberately does not, which is why the `years` branch is
+ * narrowed to the phrases that can only mean tenure.
+ */
+const NOT_AN_AGE_AFTER =
+  /^\s*\+?\s*(?:credits?|credit\s+hours?|hours?|hrs?|months?|weeks?|days?|minutes?|mins?|semesters?|quarters?|terms?|units?|courses?|classes|sections?|shifts?|students?|pupils?|applicants?|candidates?|participants?|interns?|employees?|people|persons?|members?|positions?|openings?|spots?|seats?|offices?|locations?|projects?|papers?|pages?|words?|dollars?|usd|%|percent|inches|feet|lbs|pounds|kg|cm|mm|mph|miles?|k\b|years?\s+(?:experience|in\s+business|of\s+(?:experience|work|professional|industry|relevant|coursework|service|operation)))\b/i;
+
+/**
+ * A number that is a rate of pay rather than an age.
+ *
+ * Tested against the handful of characters in front of the digits. "This role pays $18 and
+ * up" and "Pay starts at 18+ per hour" contain the two commonest ways of writing an age
+ * floor, and read as one they turn an hourly wage into a hard 18+ rule.
+ */
+const PAY_BEFORE =
+  /(?:[$£€]\s*|\b(?:pay|pays|paid|rate|rates|wage|wages|salary|stipend|compensation|earn|earns|earning|earnings|hourly|starting\s+at|starts\s+at|up\s+to)\b[^.\n]{0,12})$/i;
+
+/**
+ * A preposition that makes the number a ceiling on the applicant rather than a floor.
+ *
+ * "Applicants under 18 years of age must provide a valid work permit" states no minimum at
+ * all — it states what a minor has to bring — and reading it as one is how a posting that
+ * says "16 years of age or older" two lines earlier ended up with a second, invented 18
+ * floor. A genuinely exclusionary "under 18" is caught further down, where an explicit
+ * exclusion has to be present in the same clause.
+ */
+const AGE_DOWNWARD_BEFORE =
+  /\b(?:under|below|beneath|younger\s+than|less\s+than|up\s+to)\s+(?:the\s+age\s+of\s+|age\s+)?$/i;
+
+/**
+ * The only wordings that cancel an age clause from BEHIND it.
+ *
+ * "Being 18 years of age is not required" puts its negative after the phrase, so a lead-in
+ * check alone would read it as a hard 18+ rule. Scanning the whole clause for anything in
+ * `NEGATED` is not the answer, and was tried: "Must be 18 years of age or older with no
+ * exceptions." is one clause with no punctuation in it, and the "no" belongs to the
+ * exceptions rather than to the age, so a real adult-only floor was deleted and a
+ * 16-year-old was shown "The posting does not state a minimum age." beside a green tick on a
+ * posting that plainly states 18. This list is therefore deliberately tiny: it holds only
+ * phrases that cancel a REQUIREMENT, never a bare negative that could be attached to
+ * anything else in the sentence.
+ */
+const AGE_CANCELLED_AFTER =
+  /\b(?:not|never)\s+(?:a\s+)?(?:required|requirement|necessary|mandatory|needed)\b|\bno\s+(?:such\s+)?(?:age\s+)?(?:requirement|minimum)\b/i;
+
+/**
+ * A number followed by something that can only be describing an age.
+ *
+ * This is the workhorse, and it carries no requirement about what comes BEFORE the digits,
+ * which is the whole point: "Must be 18 years of age or older, or 16 years of age with a
+ * valid work permit" states two minima, and the second one shares its subject and verb with
+ * the first, so a pattern anchored on "must be" saw only the 18 and ruled out the very
+ * applicant the sentence was written to admit.
+ *
+ * The PLURAL "year olds" is excluded, because it is a noun naming a group rather than a
+ * threshold anyone has to clear: "16 and 17 year olds must submit a work permit" is a
+ * sentence about what minors bring with them, and reading its "17 year olds" as a floor
+ * hard-failed the 16-year-old standing next to it in the same list. The singular
+ * predicative "must be 18 years old" is a floor and stays, as does the plural when it is
+ * followed by an explicit "and up".
+ *
+ * The bare "N+" marker is NOT here — see `AGE_PLUS`. It is the one trailing marker that
+ * carries no age word of its own, and letting it match with nothing in front of it turned
+ * every "20+ companies", "20+ engineers" and "15+ mentors" in an About-us paragraph into a
+ * hard age floor that ruled a 16-year-old out of a programme written for high schoolers.
+ */
+const AGE_TRAILING_MARKER =
+  /\b(\d{1,2})(?!\d)[\s-]*(?:(?:years?|yrs?)[\s.-]*(?:of\s+age|old(?:er)?(?!s)|olds?\s+(?:and|or)\s+(?:older|over|above|up)|(?:or|and)\s+(?:older|over|above|up))|(?:or|and)\s+(?:older|over|above|up))/gi;
+
+/**
+ * "must be 18+", "ages 16+" — the one marker that needs a lead-in to mean an age.
+ *
+ * Every other marker in `AGE_TRAILING_MARKER` names an age itself ("years of age", "or
+ * older"), so it can be trusted wherever it appears. A bare "+" names nothing, and
+ * "N+ <countable noun>" is standard company copy: "we operate in 20+ countries", "you will
+ * join a team of 20+ engineers", "partners with 20+ companies", "a network of 15+ mentors".
+ * A denylist of nouns cannot close that — the nouns are unbounded — so the requirement is
+ * moved to the front, where the set of words that can precede an age really is small.
+ *
+ * "is" and "are" are deliberately absent: "There are 20+ offices" is the same shape as
+ * "must be 20+" and would put the floor straight back.
+ */
+const AGE_PLUS = /\b(?:be|ages?|aged)\b\s*:?\s*(?:at\s+least\s+)?(\d{1,2})(?!\d)\s*\+/gi;
+
+/**
+ * A minimum stated in words, where the number is allowed to end the sentence.
+ *
+ * "Must be at least 18." and "Must be at least 18 to apply." are as common as any phrasing
+ * with "years of age" in it and matched nothing, so a posting whose eligibility section
+ * consists of that one line was reported to a 16-year-old as stating no minimum age.
+ *
+ * The bare `must be 18` branch needs a modal in front of it and cannot fall back to "will
+ * be" or "is", because "each cohort will be 20 students" is the same shape. What comes
+ * after the digits is then checked against `AGE_MAY_FOLLOW` rather than against the unit
+ * denylist: relying on the denylist alone read "Your submission must be a minimum of 20
+ * seconds long" and "Your portfolio must be a minimum of 15 slides" as hard age floors,
+ * because "seconds" and "slides" are not on it and the units an application-materials
+ * section can name cannot be enumerated.
+ */
+const AGE_STATED_MIN =
+  /\b(?:must|should|needs?\s+to|has\s+to|have\s+to|(?:is|are)\s+required\s+to)\s+be\s+(?:at\s+least\s+|a\s+minimum\s+of\s+)?(\d{1,2})(?!\d)\b|\b(?:be|are|is)\s+(?:at\s+least|a\s+minimum\s+of)\s+(\d{1,2})(?!\d)\b/gi;
+
+/**
+ * What may follow a number that is somebody's age, stated as an allowlist.
+ *
+ * An age is the last word of its own noun phrase: it ends the sentence ("Must be at least
+ * 18."), or a preposition or conjunction follows it ("18 to apply", "18 by the start date",
+ * "18 at the time of hire", "18 with a valid license", "18 or older"), or the age word
+ * itself does ("18 years of age"). A measurement is followed by its unit — a bare noun —
+ * and that is the one thing this refuses. Written the other way round, as a list of units
+ * that are not ages, it will always be one noun short of the next posting.
+ */
+const AGE_MAY_FOLLOW =
+  /^\s*(?:$|[.,;:!?()[\]"'\n\r]|\+|\b(?:to|by|at|with|or|and|on|before|as|upon|in|when|prior|during|years?|yrs?|old|older)\b)/i;
+
+/**
+ * Who an age can be the age OF.
+ *
+ * The allowlist above turned out to be no more bounded than the denylist it replaced: "to",
+ * "and" and "with" have to be on it, because "18 to apply", "18 and available in June" and
+ * "18 with a valid license" are real floors — and they are also exactly how a measurement
+ * continues before it reaches its unit. "Presentations must be at least 20 to 25 minutes"
+ * put the unit outside the window and came back a hard 18-plus... a hard 20-plus, on the
+ * section of a posting a high-school applicant reads most closely, and a false `ineligible`
+ * is the worst thing this file can produce.
+ *
+ * The SUBJECT is the bounded set. An age belongs to a person, and the words a posting uses
+ * for the person applying can be listed; the things an application section can measure
+ * cannot. A subject-less sentence is the applicant by implication — "Must be at least 18."
+ * is a whole eligibility section in a lot of hourly postings — so that is accepted too.
+ */
+const PERSON_SUBJECT =
+  /\b(?:you|we|i|applicants?|candidates?|interns?|students?|employees?|staff|hires?|participants?|volunteers?|workers?|members?|individuals?|persons?|people|teens?|teenagers?|minors?|adults?|drivers?|counsell?ors?|associates?|assistants?|apprentices?|trainees?|scholars?|fellows?|nominees?|recipients?|residents?|citizens?|everyone|anyone|all)\b/i;
+
+/**
+ * A duty placed on the older group is not a rule about who may apply.
+ *
+ * "Applicants 18 and over must complete a background check" and "Interns aged 18 and over may
+ * operate company vehicles" describe what the adults among the intake also have to do; the
+ * 16-year-old beside them is still invited. Read as a floor, they hard-refused exactly the
+ * applicant the posting was written for. The distinguishing signal is the predicate, and the
+ * predicate of an ELIGIBILITY sentence is a short list — apply, qualify, be eligible, be
+ * considered, participate — while the list of other duties an employer can name is not.
+ */
+const ELIGIBILITY_PREDICATE =
+  /^\s*(?:must|may|shall|will|should|can|are|is)\s+(?:also\s+|still\s+|only\s+|be\s+)?(?:eligible|elig|qualified|qualify|considered|apply|applying|applicants?|accepted|admitted|hired|invited|welcome|encouraged|participate|enroll|join|intern|work|permitted|allowed|able)\b/i;
+
+/**
+ * The minimum written as a labelled field, the way an ATS eligibility box states it.
+ *
+ * "Minimum age: 18." is a whole eligibility section in a lot of hourly and youth postings
+ * and had no pattern at all.
+ */
+const AGE_LABELLED_MIN =
+  /\b(?:minimum\s+age|age\s+minimum|age\s+requirement)(?:\s+requirement)?\s*(?:is|of|=)?\s*:?\s*(\d{1,2})(?!\d)\b/gi;
+
+/**
+ * "must be over the age of 18", "must be older than 18", "must have reached the age of 18".
+ *
+ * "the age of" is required on the `over` branch on purpose. A bare "over 18" would also
+ * match "we have over 20 offices" and "over 15 locations", which would have invented a
+ * hard 20+ requirement out of a company blurb; "older than" carries the word "older" and
+ * needs no such help.
+ *
+ * The modal is required for the same reason `AGE_DOWNWARD_BEFORE` exists, pointed the other
+ * way. "Applicants under 18 years of age must provide a work permit" states what a minor
+ * brings rather than a floor; "Applicants over the age of 18 must complete a background
+ * check", "Interns over the age of 18 may operate company vehicles" and "Staff over the age
+ * of 21 may serve alcohol" are the identical grammar aimed at ADULTS, and reading them as
+ * floors invented an 18+ or 21+ rule that ruled the minor out of a posting that had said
+ * nothing about her. The difference is entirely in the verb: a floor says the applicant
+ * must BE over the age, these say what someone already over it has to do.
+ */
+const AGE_OVER =
+  /\b(?:must|should|needs?\s+to|has\s+to|have\s+to|(?:is|are)\s+required\s+to)\s+(?:be\s+)?(?:(?:over|above)\s+the\s+age\s+of\s+(\d{1,2})(?!\d)|older\s+than\s+(?:the\s+age\s+of\s+)?(\d{1,2})(?!\d)|have\s+(?:reach(?:ed)?|attain(?:ed)?)\s+(?:the\s+)?age\s+of\s+(\d{1,2})(?!\d))\b/gi;
+
+/**
+ * A minimum stated as the exclusion of everyone below it.
+ *
+ * "Applicants under the age of 18 are not eligible." is a real 18+ rule written entirely in
+ * the negative, so it has to be read WITHOUT the negation guard that every other pattern
+ * here runs — and that is exactly why it demands an explicit exclusion in the same clause
+ * before it will fire. "Applicants under 18 must provide a work permit" is the same six
+ * opening words and states no floor whatever.
+ */
+const AGE_UNDER =
+  /\b(?:under|younger\s+than|below)\s+(?:the\s+age\s+of\s+|age\s+)?(\d{1,2})(?!\d)\b/gi;
+
+/** "must be no younger than 18" — a floor whose own wording would trip the negation guard. */
+const AGE_NOT_YOUNGER = /\b(?:no|not)\s+younger\s+than\s+(?:the\s+age\s+of\s+)?(\d{1,2})(?!\d)\b/gi;
+
+/** The words that turn "under 18" from a condition on minors into a bar on them. */
+const EXCLUDES_YOUNGER =
+  /\b(?:not\s+eligible|ineligible|do(?:es)?\s+not\s+qualify|will\s+not\s+be\s+(?:considered|accepted|hired|reviewed)|(?:cannot|can\s?not|can'?t|are\s+unable\s+to|do(?:es)?\s+not)\s+(?:apply|hire|employ|accept|consider|be\s+considered|be\s+hired)|may\s+not\s+apply|are\s+not\s+permitted|need\s+not\s+apply|not\s+accepted|no\s+(?:one|body|applicants?|candidates?|students?|interns?|minors?|persons?|people)\b)/i;
+
+/**
+ * An age band, whose lower end is the floor and whose upper end is not a floor at all.
+ *
+ * "Open to students aged 16 to 18" and "this program is for 16-18 year olds" are how a
+ * youth program describes itself, and the trailing-marker pattern reads the "18 year olds"
+ * at the end of them as an 18+ rule — hard-failing the 16-year-old the program exists for.
+ * The upper number's position is recorded so the other patterns step over it.
+ *
+ * The `between` alternative leaves "the ages of" optional so that "between 16 and 18 years
+ * of age" still reads as a band rather than falling through to a bare 18 floor, but a
+ * `between` match that names no age anywhere is thrown out by `AGE_WORD_AFTER_RANGE` below.
+ * Without that, any two numbers in the 14-25 window became an age band: "We offer between
+ * 18 and 22 an hour", "Stipends range between 18 and 25 per hour" and "Class size is
+ * between 15 and 25" each produced a hard 18+ or 15+ rule out of a sentence with no age in
+ * it, because "an hour", "per hour" and a full stop are not in `NOT_AN_AGE_AFTER` and no
+ * list of units ever will be.
+ */
+const AGE_RANGE =
+  /\b(?:ages?|aged|between\s+(?:the\s+ages?\s+of\s+)?)\s*(\d{1,2})(?!\d)\s*(?:to|through|and|-|–|—)\s*(\d{1,2})(?!\d)\b/gi;
+
+/** The age word a bare "between N and M" has to be followed by before it counts as a band. */
+const AGE_WORD_AFTER_RANGE = /^\s*(?:years?\s+(?:of\s+age|old)|year[\s-]?olds?)\b/i;
+const AGE_RANGE_YEAR_OLDS =
+  /\b(\d{1,2})(?!\d)\s*(?:to|through|-|–|—)\s*(\d{1,2})(?!\d)\s*[- ]?year[- ]?olds?\b/gi;
+
+/**
+ * The thing a posting asks a minor for when it lets one in below its stated floor.
+ *
+ * "Must be 18 years of age or older, or 16 years of age with a valid work permit" is an
+ * ordinary shape for a teen program, and dropping the 16 turned a posting written for
+ * 16-year-olds into a hard rejection of them. The lower number is only ever taken from a
+ * sentence that already yielded a HIGHER floor, which means this pass can only ever relax a
+ * verdict: eligibility.ts fails an applicant solely for falling below the lowest stated
+ * minimum, so adding a lower one can turn a `fail` into the `unknown` that asks the student
+ * which threshold applies to them, and can never turn a `pass` into anything worse.
+ */
+const MINOR_ALTERNATIVE =
+  /\b(?:work(?:ing)?\s+permits?|working\s+papers?|employment\s+certificates?|age\s+certificates?|parental\s+consent|parent(?:al|'s|s')?\s+permission|guardian(?:'s)?\s+consent|guardian(?:'s)?\s+permission|consent\s+of\s+a\s+parent|signed\s+(?:parental|permission))\b/i;
+
+/**
+ * An age gate with no number in it.
+ *
+ * "Applicants must be of legal working age" is a real gate whose threshold depends on the
+ * state, the industry and the hours, so guessing 16 or 18 for it would be inventing a
+ * requirement the posting does not state. The repo's answer for a clause nobody can read
+ * confidently is `unclear`, which eligibility.ts routes to a non-blocking `unknown` telling
+ * the student to check the posting — better than the silent green tick and the words "the
+ * posting does not state a minimum age" that this used to produce.
+ */
+const AGE_UNSPECIFIED =
+  /\b(?:legal\s+working\s+age|legal\s+age\s+to\s+work|minimum\s+legal\s+age|age\s+of\s+majority|legally\s+(?:permitted|allowed|eligible)\s+to\s+work)\b/gi;
+
+interface AgeHit {
+  min: number;
+  /** Where the evidence quote is taken from — the whole match, not just the digits. */
+  index: number;
+  length: number;
+  necessity: 'required' | 'unclear';
+  confidence: number;
+}
+
+/** The first capturing group that actually took part in the match. */
+function firstGroup(m: RegExpMatchArray): string | undefined {
+  return m.slice(1).find((g) => g !== undefined);
+}
+
+function ageRequirements(description: string): AgeHit[] {
+  const hits: AgeHit[] = [];
+
+  // Ranges first: the upper bound's position is banned before anything else can read it.
+  const rangeUpperBounds = new Set<number>();
+  for (const re of [AGE_RANGE, AGE_RANGE_YEAR_OLDS]) {
+    for (const m of description.matchAll(re)) {
+      const at = m.index ?? 0;
+      const [low, high] = [Number(m[1]), Number(m[2])];
+      const highAt = at + m[0].lastIndexOf(m[2]!);
+      rangeUpperBounds.add(highAt);
+      // "Interns must be available between 20 and 25 hours per week" is the same shape as an
+      // age band, and the unit that gives it away sits after the SECOND number, so both ends
+      // are checked. Reading it as a band made a scheduling line into a hard 20+ age rule.
+      const afterHigh = highAt + m[2]!.length;
+      if (NOT_AN_AGE_AFTER.test(description.slice(afterHigh, afterHigh + 40))) continue;
+      if (NOT_AN_AGE_AFTER.test(description.slice(at + m[0].length, at + m[0].length + 40)))
+        continue;
+      // A "between N and M" that never says "age" has to be told it is one by the words
+      // after it, or it is a pay band or a class size rather than an age band.
+      if (
+        /^between\b/i.test(m[0]) &&
+        !/\bages?\b/i.test(m[0]) &&
+        !AGE_WORD_AFTER_RANGE.test(description.slice(afterHigh, afterHigh + 40))
+      )
+        continue;
+      if (PAY_BEFORE.test(description.slice(Math.max(0, at - 24), at))) continue;
+      const [from, to] = clauseBounds(description, at, m[0].length);
+      if (NEGATED.test(description.slice(from, to))) continue;
+      if (low >= AGE_FLOOR_PLAUSIBLE && low <= AGE_CEILING_PLAUSIBLE && low <= high) {
+        hits.push({
+          min: low,
+          index: at,
+          length: m[0].length,
+          necessity: 'required',
+          confidence: 0.85,
+        });
+      }
+    }
+  }
+
+  const addFloor = (m: RegExpMatchArray, opts: { guardNegation: boolean; confidence: number }) => {
+    const raw = firstGroup(m);
+    if (raw === undefined) return;
+    const at = (m.index ?? 0) + m[0].indexOf(raw);
+    const min = Number(raw);
+    if (min < AGE_FLOOR_PLAUSIBLE || min > AGE_CEILING_PLAUSIBLE) return;
+    if (rangeUpperBounds.has(at)) return;
+    if (NOT_AN_AGE_AFTER.test(description.slice(at + raw.length, at + raw.length + 40))) return;
+    const lead = description.slice(Math.max(0, at - 24), at);
+    if (PAY_BEFORE.test(lead)) return;
+    if (opts.guardNegation) {
+      if (AGE_DOWNWARD_BEFORE.test(lead)) return;
+      const start = m.index ?? 0;
+      const [from, to] = clauseBounds(description, start, m[0].length);
+      if (NEGATED.test(description.slice(from, start))) return;
+      if (AGE_CANCELLED_AFTER.test(description.slice(start + m[0].length, to))) return;
+    }
+    hits.push({
+      min,
+      index: m.index ?? 0,
+      length: m[0].length,
+      necessity: 'required',
+      confidence: opts.confidence,
+    });
+  };
+
+  // Affirmative floors. The negation window is the lead-in, plus the narrow list of phrases
+  // that cancel the clause from behind it: "You do not need to be 18 years of age to apply"
+  // puts the "not" in front and "Being 18 years of age is not required" puts it behind, and
+  // both of them used to produce a hard 18+ rule.
+  for (const re of [AGE_TRAILING_MARKER, AGE_PLUS, AGE_LABELLED_MIN, AGE_OVER]) {
+    for (const m of description.matchAll(re)) {
+      // A duty the adults in the intake also carry, rather than a bar on everyone else —
+      // see `ELIGIBILITY_PREDICATE`. Only a modal directly after the marker can be one, so
+      // "Must be 18 or older to apply." and "Open to students 14 and up." are untouched.
+      const after = description.slice(
+        (m.index ?? 0) + m[0].length,
+        (m.index ?? 0) + m[0].length + 60,
+      );
+      if (
+        /^\s*(?:must|may|shall|will|should|can|are|is)\b/i.test(after) &&
+        !ELIGIBILITY_PREDICATE.test(after)
+      ) {
+        continue;
+      }
+      addFloor(m, { guardNegation: true, confidence: 0.95 });
+    }
+  }
+
+  // "must be at least 18" carries no age word of its own, so the SUBJECT decides whether it
+  // is an age or a measurement, and the words after the number are a second check that a
+  // unit does not follow immediately — see `PERSON_SUBJECT` and `AGE_MAY_FOLLOW`.
+  for (const m of description.matchAll(AGE_STATED_MIN)) {
+    const raw = firstGroup(m);
+    if (raw === undefined) continue;
+    const at = (m.index ?? 0) + m[0].indexOf(raw);
+    if (!AGE_MAY_FOLLOW.test(description.slice(at + raw.length, at + raw.length + 24))) continue;
+    const [from] = clauseBounds(description, m.index ?? 0, m[0].length);
+    const subject = description.slice(from, m.index ?? 0);
+    if (subject.trim() !== '' && !PERSON_SUBJECT.test(subject)) continue;
+    addFloor(m, { guardNegation: true, confidence: 0.95 });
+  }
+
+  // Floors written in the negative, which the guard above would throw away.
+  for (const m of description.matchAll(AGE_UNDER)) {
+    const [from, to] = clauseBounds(description, m.index ?? 0, m[0].length);
+    if (!EXCLUDES_YOUNGER.test(description.slice(from, to))) continue;
+    addFloor(m, { guardNegation: false, confidence: 0.85 });
+  }
+  for (const m of description.matchAll(AGE_NOT_YOUNGER)) {
+    addFloor(m, { guardNegation: false, confidence: 0.85 });
+  }
+
+  // The lower threshold offered to a minor, taken only from a sentence that already stated a
+  // higher one, and only the lowest such number so a "16 and 17 year olds" list does not
+  // become three separate requirements.
+  const alternatives: AgeHit[] = [];
+  for (const hit of hits) {
+    if (hit.necessity !== 'required') continue;
+    const [sFrom, sTo] = sentenceSpan(description, hit.index, hit.length);
+    const sentence = description.slice(sFrom, sTo);
+    if (!MINOR_ALTERNATIVE.test(sentence)) continue;
+    let lowest: AgeHit | null = null;
+    for (const n of sentence.matchAll(/\b(\d{1,2})(?!\d)\b/g)) {
+      const min = Number(n[1]);
+      const at = sFrom + (n.index ?? 0);
+      if (min < AGE_FLOOR_PLAUSIBLE || min >= hit.min) continue;
+      if (NOT_AN_AGE_AFTER.test(description.slice(at + n[1]!.length, at + n[1]!.length + 40)))
+        continue;
+      if (PAY_BEFORE.test(description.slice(Math.max(0, at - 24), at))) continue;
+      if (lowest === null || min < lowest.min) {
+        lowest = {
+          min,
+          index: at,
+          length: n[1]!.length,
+          necessity: 'required',
+          confidence: 0.7,
+        };
+      }
+    }
+    if (lowest !== null) alternatives.push(lowest);
+  }
+  hits.push(...alternatives);
+
+  // An unnumbered gate is only worth recording when nothing numeric was found; a posting
+  // that says "legal working age" and then "must be 18 or older" has already answered it.
+  if (hits.length === 0) {
+    for (const m of description.matchAll(AGE_UNSPECIFIED)) {
+      const [from, to] = clauseBounds(description, m.index ?? 0, m[0].length);
+      if (NEGATED.test(description.slice(from, to))) continue;
+      hits.push({
+        min: AGE_UNSPECIFIED_MIN,
+        index: m.index ?? 0,
+        length: m[0].length,
+        necessity: 'unclear',
+        confidence: 0.4,
+      });
+    }
+  }
+
+  return hits;
+}
+
 export function deterministicRequirements(description: string): Candidate[] {
   const out: Candidate[] = [];
   const push = (c: Omit<Candidate, 'sourceQuote'>, m: RegExpMatchArray) => {
     out.push({ ...c, sourceQuote: sentenceAround(description, m.index ?? 0, m[0].length) });
   };
 
-  // Age — "must be at least 18 years of age", "must be 18 years or older", "be 18+ to apply".
+  // Age — the whole family, in both polarities. See the block above `ageRequirements`.
   //
-  // "or older" is as common in real postings as "of age", and without it the clause fell
-  // through to the model, which is the one pass that does not run without an API key.
-  for (const m of description.matchAll(
-    /\b(?:must be|be)\s+(?:at least\s+)?(\d{2})\s*(?:\+|(?:years?\s*)?(?:of age|old|or older|or over|or above))/gi,
-  )) {
-    const min = Number(m[1]);
-    if (min >= 14 && min <= 25) {
-      push(
-        { kind: 'age', operator: 'min', value: { min }, necessity: 'required', confidence: 0.95 },
-        m,
-      );
-    }
+  // The model pass is not a safety net for any of this: it is gated on hasApiKey(), so a
+  // user authenticated through the Claude Code CLI gets deterministic extraction only, and
+  // this is the pass that decides whether a 16-year-old sees a posting written for them.
+  for (const hit of ageRequirements(description)) {
+    out.push({
+      kind: 'age',
+      // An unnumbered gate records no threshold, so "min" would be a lie about what the
+      // posting said; it is the presence of a gate that is being recorded.
+      operator: hit.necessity === 'unclear' ? 'present' : 'min',
+      value: { min: hit.min },
+      necessity: hit.necessity,
+      confidence: hit.confidence,
+      sourceQuote: sentenceAround(description, hit.index, hit.length),
+    });
   }
 
   // Sponsorship — the phrasing is remarkably standardised across employers.

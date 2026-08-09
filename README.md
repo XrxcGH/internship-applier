@@ -5,13 +5,15 @@ actually eligible for, and — once **you** approve each one — drafts applicat
 in your own writing voice and pre-fills the application form for your review.
 
 **Status: built through M8.** Resume ingestion, discovery, matching, the review queue, the
-writing engine, form filling, the tracker, and packaging are all implemented, with 505
-tests. See [`docs/11-roadmap.md`](docs/11-roadmap.md) for what each milestone covers and,
-more usefully, what is still untested.
+writing engine, form filling, the tracker, and packaging are all implemented, and each of
+them has tests — `npm test` prints how many, which is a more honest answer than a number
+written down here and left to rot. See [`docs/11-roadmap.md`](docs/11-roadmap.md) for what
+each milestone covers and, more usefully, what is still untested.
 
-Two gaps worth knowing before you rely on it: the per-vendor ATS adapters (Greenhouse,
-Lever, Ashby, Workday) have never been run against a real posting, and answer drafting has
-not been exercised against a live model.
+Two gaps worth knowing before you rely on it: none of the per-vendor ATS adapters
+(Greenhouse, Lever, Ashby, Workday) is built, so every form is filled by the generic
+label-driven mapper, which has never been pointed at a real posting from any of them; and
+answer drafting has not been exercised against a live model.
 
 ## Running it
 
@@ -89,9 +91,10 @@ These are hard constraints in the design, not settings:
 ## Environment (verified on this machine)
 
 - Node v24.16.0, npm 11.13.0, git — present
-- Python 3.14.6, pip 26.1.2 — present, but **not used**; see
-  [ADR-001](docs/02-architecture.md#adr-001--typescript-over-python) for why the stack is
-  TypeScript despite Python being a reasonable fit for this domain
+- Python — **not used**, and not installed here either; nothing in `apps/` or `packages/`
+  runs a Python process. Both stacks were weighed with Python on the machine, so see
+  [ADR-001](docs/02-architecture.md#adr-001--typescript-over-python) for why the choice went
+  to TypeScript despite Python being a reasonable fit for this domain
 - Platform: Windows 11
 
 ## Next step

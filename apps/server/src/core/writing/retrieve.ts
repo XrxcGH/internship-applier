@@ -1,13 +1,17 @@
 /**
  * Evidence retrieval — docs/06 § ① Retrieval, not invention.
  *
- * The drafting prompt never sees the whole profile. It sees a bounded set of facts
- * relevant to the question, each carrying a `ref` that points back at where it came from.
- * Two reasons, and the second is the important one:
+ * Facts come out of the profile carrying a `ref` that points back at where they came from.
+ * Two consumers read them, and they want opposite things:
  *
- *   - a smaller prompt drafts better;
- *   - every sentence the model writes has to be traceable to one of these items, and
- *     FactGuard checks exactly that. Facts that were never supplied cannot be "supported".
+ *   - the drafting prompt wants few, because a smaller prompt drafts better and every
+ *     draft and revision pays for it. `formatEvidence` bounds that side;
+ *   - FactGuard wants ALL of them, because every sentence it sees has to be traceable to
+ *     one of these items and a fact that was never supplied cannot be "supported" — so a
+ *     fact left out here is, at gate G3, something the student never did.
+ *
+ * `retrieveEvidence` therefore returns the corpus and `formatEvidence` prints the prompt.
+ * They were one number for a long time, and the number was the guard's problem.
  *
  * Deterministic: keyword and skill overlap, no model call, no embeddings yet.
  */
@@ -16,7 +20,8 @@ import type { ConfirmedProfile } from '@ia/shared';
 export interface Evidence {
   /** Stable path back into the profile, e.g. "experience.0.bullets.2". */
   ref: string;
-  kind: 'experience' | 'project' | 'education' | 'skill' | 'certification' | 'identity';
+  kind:
+    'experience' | 'project' | 'education' | 'skill' | 'certification' | 'language' | 'identity';
   /** The verbatim fact. FactGuard compares generated claims against this text. */
   text: string;
   /** Structured values pulled out for the deterministic checks. */
@@ -35,6 +40,20 @@ export interface Evidence {
      * invented name because the profile spells out four more words in the middle.
      */
     honors?: string[];
+    /**
+     * Languages with the proficiency the profile actually records, as structure rather
+     * than only inside the item text.
+     *
+     * The text alone is not enough for a check. "My Spanish is fluent." folds to two
+     * content tokens, one of them 'spanish', so lexical coverage is 0.5 and the claim is
+     * returned `supported` — quoting `Languages: Spanish (Conversational)` underneath it
+     * as proof. Proficiency inflation on a thin resume is the same class of lie as
+     * position inflation, which factGuard caps at amber precisely so a human at G3 is
+     * never handed a green tick with the contradicting line printed beside it. Making the
+     * verdict is factGuard's job; supplying the two values to compare is this file's, and
+     * without them the comparison would mean re-parsing prose this file just formatted.
+     */
+    languages?: Array<{ name: string; proficiency: string }>;
   };
   score: number;
 }
@@ -72,8 +91,57 @@ function overlap(a: Set<string>, b: string[]): number {
   return hits / b.length;
 }
 
+/**
+ * How many facts the corpus carries when the caller states no preference.
+ *
+ * It is a floor and not a cut: see the cap comment in `retrieveEvidence`. Forty covers an
+ * ordinary busy young-applicant profile — a dozen or so activities, a school or two, a
+ * project, the skills line, the languages line and a certification — whole.
+ */
+const DEFAULT_EVIDENCE_LIMIT = 40;
+
+/**
+ * The ceiling on the DEFAULT corpus — what a caller that stated no preference gets.
+ *
+ * Sixty is roughly a thirty-bullet flagship activity plus everything else a resume of that
+ * size carries. Past it the round-robin is already giving every entry its headline fact
+ * and several of its bullets, and the marginal item is the twentieth bullet of the
+ * lowest-ranked club.
+ *
+ * It deliberately does NOT clamp a caller that asked for more. It used to, and that made
+ * `limit` a hard cut above sixty instead of the floor this file documents it as: the G3
+ * gate passes `Number.MAX_SAFE_INTEGER` to mean "no cut at the gate" (routes/answers.ts),
+ * got sixty, and on a sixteen-activity resume the ten bullets past the ceiling were
+ * outside the corpus — so "I repaired damaged spines with the Gaylord book tape the
+ * librarian ordered", a bullet the student typed into their own profile, came back
+ * `unsupported` at G3 where there is no override. A ceiling that overrules the caller who
+ * knows what they need is deciding which of the student's facts are true.
+ */
+const MAX_EVIDENCE_ITEMS = 60;
+
+/**
+ * How many evidence lines the drafting prompt is allowed. The corpus is sized for the
+ * guard; this is sized for the model. Twenty-four fits one fact about every entry on a
+ * two-dozen-entry resume, which is the shape this tool is built for.
+ *
+ * This is the cap that defends COST, and it is the only one that has to: `formatEvidence`
+ * applies it to whatever array it is handed, so the prompt stays twenty-four lines even
+ * when the corpus behind it is the whole profile. MAX_EVIDENCE_ITEMS defends nothing on
+ * this side.
+ */
+const PROMPT_EVIDENCE_LINES = 24;
+
 export interface RetrieveOptions {
-  /** Hard cap on what reaches the prompt. */
+  /**
+   * Floor on the size of the verification corpus, not a hard cut. The first round of the
+   * selection below — one fact from every entry the profile holds — is kept whole even
+   * when it runs past this, because dropping an entry's only fact is what turns a true
+   * sentence into an `unsupported` block at G3 where there is no override.
+   *
+   * Nothing clamps it from above either. `Number.MAX_SAFE_INTEGER` is the documented way
+   * for the G3 gate to say "no cut here", and it has to mean that: MAX_EVIDENCE_ITEMS
+   * bounds only the caller who omits this field.
+   */
   limit?: number;
   /** Posting text, so "why this role" pulls the relevant side of the profile. */
   postingContext?: string;
@@ -105,9 +173,9 @@ function identityEvidence(profile: ConfirmedProfile): Evidence | null {
  * Builds the evidence set for one question.
  *
  * The identity line above is always included regardless of score. Everything else is
- * ranked by keyword overlap and cut at `limit`, with one education and one experience item
- * topped up at the tail if the ranking dropped them — a draft that cannot name the user's
- * own school or current role is worse than one with a slightly larger prompt.
+ * ranked by keyword overlap and then selected by round-robin over the profile's entries,
+ * so every entry contributes a fact before any entry contributes a second — see the long
+ * note at the selection step for the false reds that shape forced.
  */
 export function retrieveEvidence(
   profile: ConfirmedProfile,
@@ -224,6 +292,38 @@ export function retrieveEvidence(
     });
   }
 
+  // Languages the profile holds, on one line the way the skills line works.
+  //
+  // Nothing read this field. It survives extraction (`languages` on ResumeExtraction),
+  // toProfile copies it, the database persists it, and then it stopped: the guard was
+  // never shown it, so "I am conversational in Spanish" came back blocking at G3 with
+  // `"Spanish" does not appear anywhere on your profile` — about a word the profile
+  // stores verbatim, with no override and a remedy the user had already performed. A
+  // language that happened to be echoed by an AP course escaped by accident; a heritage
+  // language with no course or club to echo it never did, so the block landed hardest on
+  // exactly the students most likely to have one.
+  //
+  // The proficiency belongs in the text rather than being dropped: it is the one thing a
+  // reviewer at G3 can hold "I am fluent" up against.
+  const languages = profile.languages ?? [];
+  if (languages.length > 0) {
+    items.push({
+      ref: 'languages',
+      kind: 'language',
+      text: `Languages: ${languages.map((l) => `${l.name} (${l.proficiency})`).join(', ')}`,
+      // The names go in `facts.skills` too, because "I have experience with Tagalog" is
+      // checked against the held-skill list rather than against the prose. `facts.languages`
+      // carries the same names with their recorded proficiency, which is what a check on
+      // "My Spanish is fluent." against a profile that says Conversational needs — see the
+      // field's own note on Evidence.
+      facts: {
+        skills: languages.map((l) => l.name),
+        languages: languages.map((l) => ({ name: l.name, proficiency: l.proficiency })),
+      },
+      score: overlap(query, tokens(languages.map((l) => l.name).join(' '))) + 0.2,
+    });
+  }
+
   profile.certifications.forEach((c, i) => {
     items.push({
       ref: `certifications.${i}`,
@@ -241,43 +341,140 @@ export function retrieveEvidence(
   });
 
   const identity = identityEvidence(profile);
-  const limit = Math.max(0, (opts.limit ?? 14) - (identity ? 1 : 0));
   const ranked = items.sort((a, b) => b.score - a.score);
 
-  // Always keep the entries a claim is most likely to be about, even when the question's
-  // keywords rank them last. At the default limit a sixteen-activity resume — a real
-  // young-applicant volume — dropped its last few entries for ANY generic question, and
-  // one of them was the student's only real job: "I worked as a math tutor at Bright
-  // Minds Tutoring Center", a true sentence about their own employment, came back red at
-  // G3 as an invented employer. A second school fell the same way, so a dual-enrollment
-  // GPA was blocked with a message quoting the OTHER school's number as the profile's.
-  // Every education entry and every real-work entry is rescued into a tail slot: schools
-  // and jobs are few and carry the facts most often checked; clubs are many, and a
-  // dropped club costs a weaker draft rather than a false red.
-  const chosen = ranked.slice(0, limit);
+  // ── selection.
+  //
+  // One ranked cut used to decide everything, and a ranked cut is the wrong instrument,
+  // because the base scores encode a priority ordering that a young applicant's resume
+  // inverts. A bullet-less club role line scores +0.3, the skills line +0.2, a project
+  // +0.1, a bullet +0.15 and a certification +0.05 — so on a generic question, where no
+  // keyword overlap breaks the tie, the clubs simply ate the budget. At eight activities
+  // plus one job every one of these came back BLOCKING at G3, each a verbatim
+  // restatement of something the profile holds:
+  //
+  //   "I am certified in First Aid/CPR/AED through the American Red Cross."
+  //   "I built Trail Tracker, a trail-condition map for the county park system."
+  //   "I have experience with Python and use it for data work."
+  //
+  // Raising the keyword score does not rescue them, either: `overlap` divides by the
+  // EVIDENCE token count, so a question naming the certification outright still scored
+  // 0.30 and tied the clubs. And bullets past roughly the seventh on one entry fell the
+  // same way, so "I designed the intake mechanism in Onshape" — a line the student typed
+  // into their own profile — was an invented name.
+  //
+  // So the set is built by round-robin over ENTRIES instead. Each experience entry, each
+  // school, each project, each certification, the skills line and the languages line is
+  // one bucket, holding its own items in score order (an experience bucket holds the role
+  // line and then its bullets). Every bucket contributes its headline fact before any
+  // bucket contributes a second. That is the guarantee: every kind of evidence the
+  // profile holds is represented before any kind gets a second slot, and no single
+  // verbose entry can starve the others.
+  const bucketOf = (ref: string): string => ref.replace(/\.bullets\.\d+$/, '');
   const mustKeep = (e: Evidence): boolean => e.kind === 'education' || workRefs.has(e.ref);
-  const inChosen = new Set(chosen.map((c) => c.ref));
-  const topUps = ranked.filter((r) => mustKeep(r) && !inChosen.has(r.ref));
 
-  // The old guarantee still holds: at least one experience item of any kind.
-  if (
-    !chosen.some((c) => c.kind === 'experience') &&
-    !topUps.some((t) => t.kind === 'experience')
-  ) {
+  // Insertion order is ranked order, so buckets come out ordered by their best item, and
+  // each bucket's own items come out in score order — the role line first, then its
+  // bullets. That ordering is also what the drafting prompt reads off the head of the
+  // returned array, so it stays relevance-ordered rather than being reshuffled by rules
+  // that only matter at the ceiling.
+  const buckets = new Map<string, Evidence[]>();
+  for (const item of ranked) {
+    const key = bucketOf(item.ref);
+    const list = buckets.get(key);
+    if (list) list.push(item);
+    else buckets.set(key, [item]);
+  }
+
+  // ── the cap, and the trade-off it encodes.
+  //
+  // The cap is a COST guard, never a correctness knob, so it is not allowed to cut into
+  // the first round: dropping an entry's only fact is what produced every false red
+  // above. `limit` is therefore a floor and never a cut, in both directions — a caller
+  // asking for FEWER items still gets the whole first round, and a caller asking for MORE
+  // gets what it asked for. MAX_EVIDENCE_ITEMS only bounds the corpus of a caller that
+  // stated no preference; the drafting prompt is bounded separately and unconditionally by
+  // PROMPT_EVIDENCE_LINES in `formatEvidence`, which is the cap that actually defends cost.
+  //
+  // The trade-off chosen here is that the VERIFICATION corpus and the DRAFTING prompt are
+  // no longer the same thing. FactGuard has to see everything the profile holds or a true
+  // sentence about a held fact is red with no override, while the prompt drafts better
+  // small — so `formatEvidence` bounds what the model reads and this set stays whole. The
+  // price is real and is worth naming: a bigger corpus is a bigger token union for
+  // FactGuard's lexical coverage score, which nudges a few vague fabrications from red to
+  // amber. That is the right direction to spend on. Retrieval truncation was never a
+  // fabrication defence — every item here is a fact the profile actually holds, and the
+  // checks that catch invention (names, dates, GPAs, durations, offices, skills) are
+  // exact, not lexical. A narrow corpus bought nothing against a liar and blocked honest
+  // students, which is the trade this file exists to refuse.
+  const firstRound = buckets.size + (identity ? 1 : 0);
+  const effectiveLimit =
+    opts.limit === undefined
+      ? Math.min(MAX_EVIDENCE_ITEMS, Math.max(DEFAULT_EVIDENCE_LIMIT, firstRound))
+      : Math.max(opts.limit, firstRound);
+  const cap = Math.max(0, effectiveLimit - (identity ? 1 : 0));
+
+  // Only a profile with more entries than the ceiling can lose a whole entry, and when
+  // that happens the thing to lose is a club, never a school or a job. Schools and real
+  // jobs are few and carry the dates, GPAs and employers FactGuard interrogates hardest:
+  // a sixteen-activity resume once dropped the student's only real job, and "I worked as
+  // a math tutor at Bright Minds Tutoring Center" came back red at G3 as an invented
+  // employer, while a second school falling the same way blocked a dual-enrollment GPA
+  // with the OTHER school's number quoted as the profile's.
+  if (buckets.size > cap) {
+    const droppable = [...buckets.entries()].filter(([, list]) => !list.some(mustKeep)).reverse();
+    for (const [key] of droppable) {
+      if (buckets.size <= cap) break;
+      buckets.delete(key);
+    }
+    // A profile that is nothing but schools and jobs can still overflow. Then the lowest
+    // ranked go, which is the ordinary ranked cut and the best available answer.
+    for (const key of [...buckets.keys()].reverse()) {
+      if (buckets.size <= cap) break;
+      buckets.delete(key);
+    }
+  }
+
+  const chosen: Evidence[] = [];
+  for (let round = 0; chosen.length < cap; round++) {
+    let placed = false;
+    for (const list of buckets.values()) {
+      const item = list[round];
+      if (!item) continue;
+      chosen.push(item);
+      placed = true;
+      if (chosen.length >= cap) break;
+    }
+    if (!placed) break;
+  }
+
+  // The old guarantee still holds: at least one experience item of any kind. Round zero
+  // covers it whenever an experience bucket exists, but a profile whose every bucket is a
+  // school could otherwise leave the drafting prompt with nothing to write from.
+  if (chosen.length > 0 && !chosen.some((c) => c.kind === 'experience')) {
     const exp = ranked.find((r) => r.kind === 'experience');
-    if (exp) topUps.push(exp);
+    if (exp) chosen[chosen.length - 1] = exp;
   }
 
-  let slot = chosen.length - 1;
-  for (const item of topUps) {
-    while (slot >= 0 && mustKeep(chosen[slot]!)) slot--;
-    if (slot < 0) break;
-    chosen[slot--] = item;
-  }
   return identity ? [identity, ...chosen] : chosen;
 }
 
-/** The evidence block as the drafting prompt sees it. */
+/**
+ * The evidence block as the drafting prompt sees it.
+ *
+ * Bounded, and separately from the corpus above. The retrieved set is sized so FactGuard
+ * can never call a held fact invented, which on a busy resume means it is larger than a
+ * prompt wants — and a fatter prompt drafts worse and costs more on every draft and every
+ * revision. Taking the head of the array takes the round-robin's first rounds, so what
+ * the model reads is one fact about each entry rather than eleven bullets from one of
+ * them. For a resume made of one-line activities, breadth is the more useful half.
+ *
+ * Facts below the line are not lost, they are only unwritten-about: the student can still
+ * state them themselves at G3 and the guard will now recognise them.
+ */
 export function formatEvidence(evidence: Evidence[]): string {
-  return evidence.map((e) => `[${e.ref}] ${e.text}`).join('\n');
+  return evidence
+    .slice(0, PROMPT_EVIDENCE_LINES)
+    .map((e) => `[${e.ref}] ${e.text}`)
+    .join('\n');
 }

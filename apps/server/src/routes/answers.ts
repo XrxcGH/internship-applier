@@ -26,6 +26,7 @@ import {
 import { publish } from '../infra/events';
 import { logger } from '../infra/logger';
 import { getProfile } from '../core/profile/repository';
+import { gatePostingContext, WHOLE_PROFILE } from '../core/filling/plan';
 import { draftAnswer } from '../core/writing/draft';
 import { guardDraft, type GuardResult } from '../core/writing/factGuard';
 import { retrieveEvidence } from '../core/writing/retrieve';
@@ -94,6 +95,48 @@ function confirmedProfile(): ConfirmedProfile | null {
   return p?.confirmedAt ? (p as ConfirmedProfile) : null;
 }
 
+/** What the posting contributes to a draft and to the gate. */
+interface PostingWords {
+  /** Retrieval context: the role title, the company, then the description. */
+  postingContext: string | undefined;
+  /** The two names the profile cannot supply, for FactGuard. */
+  contextNames: string[];
+}
+
+/**
+ * The posting's words, derived once and used by every path.
+ *
+ * The drafting call and the gate each built their own version of this and they disagreed, in
+ * both of the ways a disagreement can hurt.
+ *
+ * Drafting passed `<title> at <company>\n\n<description>` to retrieval and the gate passed
+ * the description alone, so the two ends of one request scored the same profile against
+ * different queries. Retrieval ranks by keyword overlap, and the employer's name and the role
+ * title are precisely the words that promote the entries an answer is going to be about: a
+ * club named for the same thing the company is named for ("Northside Robotics Boosters"
+ * against Nova Robotics) sat near the top of the evidence the draft was written from and near
+ * the bottom of the evidence the gate checked it against. Anything past the ceiling on either
+ * side then differs, and a claim built from an item only one side holds is a fabrication to
+ * the other. The gate is the side with no override.
+ *
+ * The company and the title were the other half. The gate was handed them as `contextNames`
+ * and the drafting guard was not, so the draft's one revision round was spent deleting the
+ * only sentence that named the employer, and "why do you want to work here" reached the user
+ * with the answer to it removed.
+ *
+ * One function, so a caller cannot supply half of this again.
+ */
+function postingWords(ctx: ApplicationContext | null): PostingWords {
+  if (!ctx) return { postingContext: undefined, contextNames: [] };
+  return {
+    // The shared builder, not a second copy of the same template string. The re-check that
+    // can withdraw an approval calls it too, and when the two built their own the gate and
+    // the re-check ranked the same profile against different queries.
+    postingContext: gatePostingContext(ctx),
+    contextNames: [ctx.company, ctx.title],
+  };
+}
+
 // ────────────────────────────────────────────────────────── verification pass
 
 interface Verified {
@@ -121,7 +164,17 @@ function verify(
   style: StyleProfile | undefined,
   ctx: ApplicationContext | null,
 ): Verified {
-  const evidence = retrieveEvidence(profile, question, { postingContext: ctx?.description ?? '' });
+  const posting = postingWords(ctx);
+  // `WHOLE_PROFILE` is imported from core/filling/plan.ts rather than declared here, and the
+  // reason is the whole point of it: `recheckApproval` in that file re-runs this exact pass
+  // at the last gate before an employer's form, and when the two files each chose their own
+  // corpus size the re-check withdrew ticks this pass had just granted. One constant, both
+  // gates. It means what it says — retrieve.ts applies its own ceiling only to a caller that
+  // states no limit, so this pass really does check against every fact the profile holds.
+  const evidence = retrieveEvidence(profile, question, {
+    postingContext: posting.postingContext,
+    limit: WHOLE_PROFILE,
+  });
   // The employer's name and the role title come from the posting and are nowhere on the
   // profile, so FactGuard has to be told them or it reads them as inventions. Nobody passed
   // them, and the result was that "What draws me to Stripe is the documentation" could not
@@ -131,7 +184,7 @@ function verify(
   // thing FactGuard exists to stop. Naming the company is the most ordinary sentence a
   // "why this company" answer contains. Mentioning is all this buys: "I interned at Stripe"
   // is still blocked, by `affiliationFrame` in factGuard.ts.
-  const guard = guardDraft(text, evidence, ctx ? [ctx.company, ctx.title] : []);
+  const guard = guardDraft(text, evidence, posting.contextNames);
   // Em-dash density and sentence rhythm are tells only relative to how this person writes,
   // which is why the drafting side hands the same baselines over. Measured against the
   // generic defaults instead, someone who genuinely writes with em dashes opened the review
@@ -410,6 +463,7 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
         });
 
       emit('retrieve');
+      const posting = postingWords(ctx);
       let result;
       try {
         emit('generate');
@@ -417,7 +471,14 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
           profile,
           question: row.questionText,
           maxWords: req.body?.maxWords,
-          postingContext: ctx ? `${ctx.title} at ${ctx.company}\n\n${ctx.description}` : undefined,
+          postingContext: posting.postingContext,
+          // Same two names the gate is given below. Without them the drafting guard read
+          // the employer's own name as an invented organisation, spent the single revision
+          // round telling the model to drop the sentence that named it, and the answer to
+          // "Why do you want to intern at Nova Robotics?" arrived at G3 with Nova Robotics
+          // taken out of it. Mentioning is all this buys: "I interned at Nova Robotics" is
+          // still refused, here and at the gate, by `affiliationFrame` in factGuard.ts.
+          contextNames: posting.contextNames,
           style: loadStyle(),
           samples: loadSamples(),
         });
@@ -464,7 +525,12 @@ export async function answerRoutes(app: FastifyInstance): Promise<void> {
       return {
         ...answerPayload(updated),
         revised: result.revised,
-        unresolved: result.unresolved,
+        // Reported from the pass that produced the flags on this row, not from the drafting
+        // loop's own copy. The two ran against different evidence and different names, so the
+        // response could say the draft still had unverified claims while the flags beside it
+        // were empty and the approve endpoint would have taken it. They agree now, and saying
+        // it once means they cannot drift apart again.
+        unresolved: v.guard.blocking.length > 0,
         styleNote: v.styleNote,
         styleMatch: v.style.match,
       };
