@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { EducationLevel } from '@ia/shared';
+import { bulletlessExperience, EducationLevel, lostTheEvidence } from '@ia/shared';
 import type { CandidateProfile, EducationEntry } from '@ia/shared';
 import * as api from '../lib/api';
 import {
@@ -8,8 +8,18 @@ import {
   isDismissible,
   OPTIONAL_WIZARD_FIELDS,
 } from '../lib/review';
+import { readUrlField, tidyList } from '../lib/profileEdit';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Notice, SelectField, TextField } from '../components/Controls';
+import {
+  CertificationsEditor,
+  ExperienceEditor,
+  LanguagesEditor,
+  LinksEditor,
+  ListEditor,
+  ProjectsEditor,
+  SkillsEditor,
+} from '../components/ProfileEditors';
 
 type Step = 'upload' | 'confirm' | 'facts' | 'done';
 
@@ -210,40 +220,76 @@ export function gpaBoxesFor(
 }
 
 /**
- * Moves one item in a list, returning a new array.
- *
- * An out-of-range move returns the list untouched rather than splicing `undefined` into it,
- * which is what "move up" on the first row would otherwise do to a student's honors section.
- */
-export function moveListItem<T>(items: readonly T[], from: number, to: number): T[] {
-  const next = [...items];
-  if (from === to || from < 0 || to < 0 || from >= next.length || to >= next.length) return next;
-  const [moved] = next.splice(from, 1);
-  if (moved === undefined) return next;
-  next.splice(to, 0, moved);
-  return next;
-}
-
-/**
- * Drops the blank coursework and honors rows on the way to the server.
+ * Drops the blank rows every "Add" button can leave behind, on the way to the server.
  *
  * "Add" starts a row empty, and a row left empty would otherwise be stored. The education
  * evidence line joins these with commas, so three abandoned rows put ", , ," into the text
  * FactGuard quotes back to the user as proof that their own award is real. Surrounding
  * whitespace goes with them, because " National Honor Society" and "National Honor Society"
  * are one award and only one of the two matches what a draft says.
+ *
+ * Experience bullets get the same treatment for a sharper version of the same reason: a
+ * blank bullet is an evidence item whose text is the empty string, which matches nothing and
+ * dilutes the retrieval budget that decides which real bullets the drafting step gets to see.
+ *
+ * Addresses are repaired rather than dropped. `links` and a project's `url` are the profile's
+ * two `z.string().url()` fields, people type "github.com/rosa", and ingestion already adds
+ * the missing scheme on the way in — so a link typed here and a link read off the resume end
+ * up stored the same way instead of one of them failing the save. Text that is not an address
+ * at all is LEFT AS TYPED, because `savingProblems` names it and holds every button that
+ * saves: silently deleting what someone just typed is the worse of the two.
+ *
+ * Every list is guarded rather than assumed. This runs on whatever the wizard is holding, and
+ * a profile that reached it without one of these arrays would throw here — on the one code
+ * path between the user's edits and the server.
  */
 export function tidyProfileLists(profile: CandidateProfile): CandidateProfile {
-  const clean = (xs: string[] | undefined): string[] | undefined =>
-    xs === undefined ? undefined : xs.map((x) => x.trim()).filter((x) => x !== '');
+  // An unparseable address keeps what was typed, so the notice can name it and the user can
+  // see what they wrote; an empty one becomes absent rather than the empty string, which is
+  // not a URL and would fail the very save this function exists to let through.
+  const url = (raw: string | undefined): string | undefined => {
+    const text = (raw ?? '').trim();
+    if (text === '') return undefined;
+    return readUrlField(text).url ?? text;
+  };
   return {
     ...profile,
-    education: profile.education.map((e) => ({
+    education: (profile.education ?? []).map((e) => ({
       ...e,
       institution: e.institution.trim(),
-      coursework: clean(e.coursework),
-      honors: clean(e.honors),
+      coursework: tidyList(e.coursework),
+      honors: tidyList(e.honors),
     })),
+    ...(profile.experience && {
+      experience: profile.experience.map((e) => ({
+        ...e,
+        organization: e.organization.trim(),
+        title: e.title.trim(),
+        bullets: tidyList(e.bullets) ?? [],
+        skills: tidyList(e.skills),
+      })),
+    }),
+    ...(profile.projects && {
+      projects: profile.projects.map((p) => ({
+        ...p,
+        name: p.name.trim(),
+        description: p.description.trim(),
+        url: url(p.url),
+        bullets: tidyList(p.bullets) ?? [],
+        skills: tidyList(p.skills),
+      })),
+    }),
+    ...(profile.skills && {
+      skills: profile.skills.map((s) => ({ ...s, name: s.name.trim() })),
+    }),
+    ...(profile.links && {
+      links: {
+        ...profile.links,
+        github: url(profile.links.github),
+        linkedin: url(profile.links.linkedin),
+        portfolio: url(profile.links.portfolio),
+      },
+    }),
   };
 }
 
@@ -257,6 +303,53 @@ export function tidyProfileLists(profile: CandidateProfile): CandidateProfile {
  */
 export function blankInstitutions(profile: CandidateProfile): number[] {
   return profile.education.flatMap((e, i) => (e.institution.trim() === '' ? [i] : []));
+}
+
+/**
+ * Every reason the next save would come back as a shape error, in words, before it is tried.
+ *
+ * The server answers a breach of the profile schema with "Profile did not match the expected
+ * shape" and names no field, so a single emptied box anywhere in these editors used to be a
+ * wall with nothing on it. That was survivable while `institution` was the only required
+ * field a user could reach; with editors for experience, projects and skills it is six more,
+ * and each one is a box somebody can clear by holding backspace.
+ *
+ * The list is exhaustive by construction: it names every `.min(1)` string and every
+ * `.url()` on CandidateProfile that this wizard renders a control for. A new required control
+ * belongs here on the same day, or it reintroduces the wall.
+ *
+ * Numbering is 1-based because that is what the entry cards are labelled with on screen.
+ */
+export function savingProblems(profile: CandidateProfile): string[] {
+  const out: string[] = [];
+
+  const schools = blankInstitutions(profile);
+  if (schools.length === 1) out.push(`School ${schools[0]! + 1} has no name.`);
+  else if (schools.length > 1) {
+    out.push(`Schools ${schools.map((i) => i + 1).join(', ')} have no name.`);
+  }
+
+  (profile.experience ?? []).forEach((e, i) => {
+    if (e.title.trim() === '') out.push(`Entry ${i + 1} has no title.`);
+    if (e.organization.trim() === '') out.push(`Entry ${i + 1} has no organization.`);
+  });
+
+  (profile.projects ?? []).forEach((p, i) => {
+    if (p.name.trim() === '') out.push(`Project ${i + 1} has no name.`);
+    const { problem } = readUrlField(p.url);
+    if (problem) out.push(`Project ${i + 1}: ${problem}.`);
+  });
+
+  (profile.skills ?? []).forEach((s, i) => {
+    if (s.name.trim() === '') out.push(`Skill ${i + 1} has no name.`);
+  });
+
+  for (const key of ['github', 'linkedin', 'portfolio'] as const) {
+    const { problem } = readUrlField(profile.links?.[key]);
+    if (problem) out.push(`Your ${key} link: ${problem}.`);
+  }
+
+  return out;
 }
 
 /**
@@ -434,27 +527,39 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const remaining = profile?.needsReview.length ?? 0;
 
   /**
-   * A school with no name is the one shape this editor can produce that the profile schema
-   * will not take, and the server answers it with a shape error naming no row. Saying which
-   * row, and holding every button that saves, is cheaper than a wall nobody can read. It is
-   * shown on both steps because Confirm saves too, and a Confirm greyed out with the reason
+   * Every emptied box the profile schema will not take, named, with every button that saves
+   * held until they are gone. The server answers a breach with a shape error naming no field,
+   * and saying which one is cheaper than a wall nobody can read.
+   *
+   * Shown on both steps because Confirm saves too, and a Confirm greyed out with the reason
    * on the previous screen is the same wall with an extra click in front of it.
    *
    * Four buttons save, not three: Save, Continue, Confirm, and "I have checked this" beside a
    * flag on the facts step — which saves the profile first so that the flag it clears is not
-   * clearing it on stale facts. That fourth one was left off this hold, and it is reachable
-   * in precisely the state the hold is for (a flag still open is why the button is rendered
-   * at all), so clicking it put the shape error back on screen under the notice that exists
-   * to replace it. Any new button that calls the server with this profile belongs here too.
+   * clearing it on stale facts. That fourth one was left off this hold once, and it is
+   * reachable in precisely the state the hold is for (a flag still open is why the button is
+   * rendered at all), so clicking it put the shape error back on screen under the notice that
+   * exists to replace it. Any new button that calls the server with this profile belongs here.
+   *
+   * This used to be schools alone, which was the whole list while `institution` was the only
+   * required field a user could reach. The experience, project and skill editors made it six
+   * more. `savingProblems` is the list, and it is a function so a test can hold it.
    */
-  const nameless = profile ? blankInstitutions(profile) : [];
+  const nameless = profile ? savingProblems(profile) : [];
   const namelessNotice = nameless.length > 0 && (
     <Notice tone="caution">
-      {nameless.length === 1
-        ? `School ${nameless[0]! + 1} has no name.`
-        : `Schools ${nameless.map((i) => i + 1).join(', ')} have no name.`}{' '}
-      A school row cannot be saved without one. Type the name back in, or put a dash there if you
-      would rather not say.
+      <strong>This cannot be saved yet.</strong>
+      <ul className="mt-2 space-y-1">
+        {nameless.map((problem) => (
+          <li key={problem} className="u-prose">
+            {problem}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2">
+        Each of those is a box the file has to have something in. Type it back, or put a dash there
+        if you would rather not say — and remove the row outright if it should not be there at all.
+      </p>
     </Notice>
   );
 
@@ -523,14 +628,48 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               />
             </div>
 
+            {/* The lines under each entry are counted beside the entries, because the
+                count on its own hid the failure this block exists to show. A real resume
+                came back as "Experience — 27 entries · Projects — none found · Skills —
+                none found", and every one of those twenty-seven entries was a bare title
+                with nothing under it: the reader had dropped the description of everything
+                the person had actually done, and the screen reported it as a healthy
+                number. What is stored is what a generated sentence gets checked against
+                later, so an entry count is the wrong measure of it on its own. */}
             <dl className="mt-8 space-y-1">
-              <Summary label="Experience" n={profile.experience.length} />
-              <Summary label="Projects" n={profile.projects.length} />
+              <Summary
+                label="Experience"
+                n={profile.experience.length}
+                extra={lineLabel(profile.experience.reduce((t, e) => t + e.bullets.length, 0))}
+              />
+              <Summary
+                label="Projects"
+                n={profile.projects.length}
+                extra={lineLabel(profile.projects.reduce((t, p) => t + p.bullets.length, 0))}
+              />
               <Summary label="Skills" n={profile.skills.length} />
             </dl>
+
+            {/* The threshold is `lostTheEvidence`, in @ia/shared, and it is not "every entry
+                is bare": the resume this was written for had twenty-seven entries carrying
+                ONE line between them, and an exact-zero test called that fine. The server
+                raises `experience.bullets` from the same function, so the flag and this
+                paragraph cannot disagree about one profile. */}
+            {lostTheEvidence(profile.experience) && (
+              <Notice tone="caution">
+                {bulletlessExperience(profile.experience)} of those {profile.experience.length}{' '}
+                entries kept none of the lines printed under them on your resume. The titles,
+                organizations and dates are here and can be checked; what you did is not. Sentences
+                about the work itself have nothing behind them, and gate G3 refuses a sentence it
+                cannot trace to a fact — with no override. Uploading the file again reads it afresh;
+                below, you can also put the lines back by hand.
+              </Notice>
+            )}
+
             <p className="text-faint mt-4 text-[0.9375rem] italic">
-              Editing individual jobs and projects is not built yet. Correct the identity fields
-              above, your schooling below, and the eligibility facts on the next step.
+              Everything the reader took off your resume is below, and all of it can be corrected,
+              reordered, added to and thrown out. What is stored here is the whole of what the rest
+              of this app knows about you.
             </p>
 
             <EducationEditor
@@ -540,6 +679,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               onEntry={editEducation}
               onTyped={(boxes) => setTyped((prev) => ({ ...prev, ...boxes }))}
             />
+
+            {/* `patch` unchanged from the identity fields above, so an edit in here clears the
+                flag it answers by the same rule. The entry editors pass no `clears` for a
+                field nobody flagged, which keeps `nextReviewFlags` from inventing work at a
+                gate that blocks on its list being empty. */}
+            <ExperienceEditor profile={profile} flagged={flagged} edit={patch} />
+            <ProjectsEditor profile={profile} flagged={flagged} edit={patch} />
+            <SkillsEditor profile={profile} flagged={flagged} edit={patch} />
+            <CertificationsEditor profile={profile} flagged={flagged} edit={patch} />
+            <LanguagesEditor profile={profile} flagged={flagged} edit={patch} />
+            <LinksEditor profile={profile} flagged={flagged} edit={patch} />
           </Section>
 
           {namelessNotice}
@@ -1084,86 +1234,6 @@ function EducationRow({
 }
 
 /**
- * A list of arbitrary length that can be added to, edited, reordered and cut down.
- *
- * Honors and coursework are both unbounded, and a rising freshman applying with a resume
- * that is mostly awards can have twenty-six of them. Each row wraps rather than truncating,
- * so a long award name pushes the buttons onto the next line instead of clipping the name
- * the student needs to be able to read before they can correct it.
- */
-function ListEditor({
-  label,
-  singular,
-  hint,
-  items,
-  onChange,
-}: {
-  label: string;
-  singular: string;
-  hint?: string;
-  items: string[];
-  onChange: (next: string[]) => void;
-}) {
-  return (
-    <div className="mt-5">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[1rem]">{label}</span>
-        <span className="u-data text-faint text-[0.8125rem]">{items.length}</span>
-      </div>
-      {hint && <p className="text-faint u-prose mt-1 text-[0.9375rem] leading-snug">{hint}</p>}
-
-      {items.length > 0 && (
-        <ul className="mt-2 space-y-2">
-          {items.map((item, i) => (
-            <li key={i} className="flex flex-wrap items-center gap-2">
-              <span className="u-data text-faint w-6 shrink-0 text-right">{i + 1}</span>
-              <input
-                value={item}
-                aria-label={`${singular} ${i + 1}`}
-                onChange={(e) => onChange(items.map((x, k) => (k === i ? e.target.value : x)))}
-                className="u-data border-rule focus:border-accent min-w-[12rem] flex-1 rounded-t border-b bg-transparent px-1 py-1.5 outline-none transition-colors"
-              />
-              <span className="flex shrink-0 items-center gap-1">
-                <Button
-                  size="sm"
-                  aria-label={`Move ${singular.toLowerCase()} ${i + 1} up`}
-                  disabled={i === 0}
-                  onClick={() => onChange(moveListItem(items, i, i - 1))}
-                >
-                  Up
-                </Button>
-                <Button
-                  size="sm"
-                  aria-label={`Move ${singular.toLowerCase()} ${i + 1} down`}
-                  disabled={i === items.length - 1}
-                  onClick={() => onChange(moveListItem(items, i, i + 1))}
-                >
-                  Down
-                </Button>
-                <Button
-                  size="sm"
-                  variant="danger"
-                  aria-label={`Remove ${singular.toLowerCase()} ${i + 1}`}
-                  onClick={() => onChange(items.filter((_, k) => k !== i))}
-                >
-                  Remove
-                </Button>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="mt-2">
-        <Button size="sm" onClick={() => onChange([...items, ''])}>
-          Add {singular.toLowerCase()}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
  * What the last save cost at G3, said out loud on the screen that cost it.
  *
  * The server re-checks every approved answer against the profile a write just stored and
@@ -1204,13 +1274,21 @@ export function WithdrawnNotice({ items }: { items: api.WithdrawnApproval[] }) {
   );
 }
 
-function Summary({ label, n }: { label: string; n: number }) {
+function Summary({ label, n, extra }: { label: string; n: number; extra?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-6">
       <dt className="text-dim text-[1rem]">{label}</dt>
       <dd className="u-data" style={{ color: n > 0 ? 'var(--ink)' : 'var(--ink-faint)' }}>
         {n === 0 ? 'none found' : `${n} entr${n === 1 ? 'y' : 'ies'}`}
+        {/* Only alongside entries. "none found · no lines under them" says one thing twice. */}
+        {n > 0 && extra && <span className="text-faint"> · {extra}</span>}
       </dd>
     </div>
   );
+}
+
+/** How much detail came with a set of entries, said in a way zero cannot hide inside. */
+function lineLabel(lines: number): string {
+  if (lines === 0) return 'no lines under them';
+  return `${lines} ${lines === 1 ? 'line' : 'lines'} of detail`;
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
-export type View = 'home' | 'setup' | 'queue' | 'applications' | 'tracker' | 'voice' | 'settings';
+export type View =
+  'home' | 'setup' | 'discovery' | 'queue' | 'applications' | 'tracker' | 'voice' | 'settings';
 
 interface NavItem {
   id: View;
@@ -32,6 +33,10 @@ export function Nav({
     { id: 'home', label: 'Overview' },
     { id: 'setup', label: 'Profile' },
     { id: 'voice', label: 'Voice' },
+    // Ahead of the queue because it is what fills the queue, and locked with it: every
+    // /api/discovery route answers 409 until a profile is confirmed, since eligibility
+    // would have nothing to check a posting against.
+    { id: 'discovery', label: 'Discover', blocked: locked },
     { id: 'queue', label: 'Queue', blocked: locked },
     { id: 'applications', label: 'Applications', blocked: locked },
     { id: 'tracker', label: 'Tracker', blocked: locked },

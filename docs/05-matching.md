@@ -19,10 +19,11 @@ is the only consumer of a filter set, and it reads seven leaves: `term.seasons`,
 `term.years`, `positionTypes`, `location.cities`, `role.roleFamilies`, `role.titleIncludes`
 and `company.onlyCompanies`. Everything else in the Groups table parses and validates and is
 then ignored — `POST /api/discovery/plan` returns the same plan for a fully populated filter
-set as it does for `{}`, and says nothing about having dropped the rest. No screen in the web
-app sends one, so no user is affected today; an API caller is, silently. Read the table as
-the intended model, not as shipped behaviour, and check `queryPlanner.ts` before relying on
-a group.
+set as it does for `{}` — though it now says which leaves it dropped, in a plan note. The
+Discover screen sends exactly one of the seven, `company.onlyCompanies`, and nothing else, so
+no user meets the silent half; an API caller sending a fuller body gets the note. Read the
+table as the intended model, not as shipped behaviour, and check `queryPlanner.ts` before
+relying on a group.
 
 Three rules govern the parts that are live:
 

@@ -381,8 +381,12 @@ describe('a date the schema will not take verbatim', () => {
       expect(d.experience[0]?.endDate, JSON.stringify(raw)).toBeUndefined();
       expect(d.needsReview, JSON.stringify(raw)).not.toContain('experience.0.endDate');
     }
+    // `skills` is here because BASE states none, not because of anything the end date did.
+    // Asserting the whole list rather than just the absence of the end-date flag is the
+    // point of this line — a repair that quietly added a flag for every entry would pass a
+    // narrower assertion — so the expectation names it.
     const clean = withStoreEnd(null);
-    expect(clean.needsReview).toEqual([...REQUIRED_BY_G1]);
+    expect(clean.needsReview).toEqual([...REQUIRED_BY_G1, 'skills']);
   });
 
   it('will not read "Present" as a start date or as the day a card was earned', () => {
