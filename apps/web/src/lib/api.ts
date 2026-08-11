@@ -482,12 +482,27 @@ export interface DeletePreview {
 
 export const getDeletePreview = () => request<DeletePreview>('/api/privacy/delete-preview');
 
+/**
+ * What a delete actually managed, including the part of it that did not.
+ *
+ * `failed` was missing from this type, so the one list that says which of your files are
+ * still on the disk was read off the wire and dropped one line later — and Settings rendered
+ * the message alone, in green. Same class of loss as `withdrawnApprovals` above: the client
+ * is not the place a fact goes missing.
+ */
+export interface DeleteResult {
+  message: string;
+  deletedRows: number;
+  deletedPaths: string[];
+  failed: Array<{ path: string; reason: string }>;
+}
+
 export const deleteEverything = (confirm: string) =>
-  request<{ message: string; deletedPaths: string[] }>('/api/privacy/delete-all', {
+  request<DeleteResult>('/api/privacy/delete-all', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ confirm }),
-  });
+  }).then((r) => ({ ...r, failed: r.failed ?? [] }));
 
 /**
  * Downloads a protected endpoint as a file.

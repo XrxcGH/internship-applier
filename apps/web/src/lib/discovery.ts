@@ -132,8 +132,23 @@ export function needsBoard(source: string): boolean {
 
 // ─────────────────────────────────────────────────────────────────── the run list
 
-export function targetKey(t: { source: string; board: string }): string {
-  return `${t.source}:${t.board}`;
+/**
+ * Defensive about `board`, because the server has been wrong about it.
+ *
+ * `PlannedTarget` promises a string and the plan endpoint once answered with the key missing
+ * entirely: a company name with no ASCII alphanumerics — "삼성전자", or a name that is nothing
+ * but a stripped suffix — left `slugCandidates` empty, a non-null assertion put `undefined`
+ * in the board, and `JSON.stringify` dropped the key on the way out. The first `.trim()` on
+ * this side then threw during render, and with no error boundary anywhere in the app the
+ * screen went blank until a reload. The server no longer does that. This still does not
+ * trust it, because a blank chip is a bad plan and a blank screen is a broken app.
+ */
+export function boardOf(t: { board?: string | null }): string {
+  return t.board ?? '';
+}
+
+export function targetKey(t: { source: string; board?: string | null }): string {
+  return `${t.source}:${boardOf(t)}`;
 }
 
 /**
@@ -194,7 +209,7 @@ export function whyCannotRun(targets: RunTarget[]): string | null {
   if (targets.length === 0) {
     return 'Nothing to search yet. Add the community list, or resolve a company below.';
   }
-  const blank = targets.find((t) => needsBoard(t.source) && t.board.trim() === '');
+  const blank = targets.find((t) => needsBoard(t.source) && boardOf(t).trim() === '');
   if (blank) {
     return `The ${sourceLabel(blank.source)} target has no board name, so it would fetch nothing.`;
   }

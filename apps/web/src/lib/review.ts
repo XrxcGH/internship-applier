@@ -11,6 +11,14 @@
  */
 export function isAnswered(value: unknown): boolean {
   if (value === null || value === undefined) return false;
+  // An empty list is not an answer to "the reader found none of these". Every non-string
+  // counted as answered, so the `skills` corpus flag — raised when an extraction came back
+  // with no skills at all — cleared on ANY touch of the skills editor: add a skill, remove
+  // it again, and the net change is nothing while the flag is gone, `remaining` drops, and
+  // Confirm unlocks. That is the touch-and-undo hole this predicate exists to close, one
+  // type over. It also means emptying the list puts the flag back, which is the same rule
+  // read in the other direction.
+  if (Array.isArray(value)) return value.length > 0;
   if (typeof value !== 'string') return true;
   const trimmed = value.trim();
   return trimmed !== '' && trimmed !== 'unknown';

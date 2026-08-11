@@ -49,6 +49,11 @@ export const ANSWERED_IN_WIZARD: Record<string, string> = {
  */
 export function isAnswered(value: unknown): boolean {
   if (value === null || value === undefined) return false;
+  // An empty list is not an answer to "the reader found none of these" — the same rule the
+  // web copy carries, and for the same reason: every non-string counted as answered, so the
+  // `skills` corpus flag cleared on any touch of the skills editor, including a touch that
+  // was immediately undone.
+  if (Array.isArray(value)) return value.length > 0;
   if (typeof value !== 'string') return true;
   const trimmed = value.trim();
   return trimmed !== '' && trimmed !== 'unknown';

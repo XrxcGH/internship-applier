@@ -334,6 +334,17 @@ export function termTokens(filters: SearchFilters): string[] {
   return [...new Set(out)];
 }
 
+/** One target per `source:board`, keeping the first reason given for it. */
+function dedupeTargets(targets: PlannedTarget[]): PlannedTarget[] {
+  const seen = new Set<string>();
+  return targets.filter((t) => {
+    const key = `${t.source}:${t.board}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function planQueries(
   profile: ConfirmedProfile,
   filters: SearchFilters,
@@ -385,23 +396,80 @@ export function planQueries(
       pinned.push(...already.map((b) => ({ ...b, reason: 'company you pinned' })));
       continue;
     }
+    /**
+     * A name a board slug cannot be guessed from is said so, not guessed at anyway.
+     *
+     * `slugCandidates` strips everything outside [a-z0-9], so a name written in a non-Latin
+     * script — "삼성電子", "字节跳动" — or one that is nothing but a stripped company suffix
+     * ("Co.") leaves it with no candidates at all. `slugs[0]!` was then `undefined`, the
+     * non-null assertion hid it from the type checker, and `board: undefined` was dropped
+     * outright by JSON.stringify on the way out — so the plan answered with targets that
+     * had no `board` key despite PlannedTarget promising a string, and the first thing on
+     * the client to call `.trim()` on it threw during render. The app has no error
+     * boundary, so the screen went blank and stayed blank until a reload.
+     */
+    const slug = slugs[0];
+    if (slug === undefined) {
+      notes.push(
+        `"${c}" has no resolved board, and a board name cannot be guessed from it — the ` +
+          'vendors take names written in the Latin alphabet. Find its board on the Discover ' +
+          'screen, or paste one of its job URLs directly.',
+      );
+      continue;
+    }
     for (const source of ['greenhouse', 'lever', 'ashby'] as const) {
-      pinned.push({ source, board: slugs[0]!, reason: 'company you pinned (board unverified)' });
+      pinned.push({ source, board: slug, reason: 'company you pinned (board unverified)' });
     }
     notes.push(
-      `"${c}" has no resolved board yet, so its name was guessed as "${slugs[0]!}" on ` +
+      `"${c}" has no resolved board yet, so its name was guessed as "${slug}" on ` +
         'Greenhouse, Lever and Ashby. Resolve it in Discover to search the right one.',
     );
   }
 
+  /**
+   * The community list, which needs no board and no key, planned by default.
+   *
+   * This was the cold start, and it made "the plan" a misnomer for every new user: targets
+   * came only from pinned companies and from boards a PREVIOUS run had already resolved, so
+   * a fresh install planned nothing, and the note it printed sent the user to look for
+   * companies and paste URLs without mentioning the one source that is a single click and
+   * covers more postings than everything else here combined. It only ever healed after a run
+   * that this plan could not have produced.
+   *
+   * `github_list` with an empty board reads the list for the upcoming season (aggregators.ts).
+   * A run already resolved as a source row is not planned twice, because it arrives in
+   * `knownBoards` and would otherwise be fetched once per copy.
+   */
+  const listPlanned = knownBoards.some((b) => b.source === 'github_list');
+  const community: PlannedTarget[] = listPlanned
+    ? []
+    : [
+        {
+          source: 'github_list',
+          board: '',
+          reason: 'the community internship list — no company or key needed',
+        },
+      ];
+
   // Pinned targets survive truncation, because the comment above is a promise: the user
   // asked for those by name. Slicing the concatenated list dropped them silently once the
-  // pinned list alone exceeded the cap.
+  // pinned list alone exceeded the cap. The community list survives for the same reason:
+  // dropping the only target a new user has is dropping the whole plan.
   const max = opts.maxTargets ?? 40;
   // A board promoted into the pinned list is not searched twice.
   const rest = knownBoards.filter((b) => !promoted.has(b));
-  const room = Math.max(0, max - pinned.length);
-  const targets = [...pinned, ...rest.slice(0, room)];
+  const kept = [...community, ...pinned];
+  const room = Math.max(0, max - kept.length);
+  /**
+   * One target per board, whatever put it there.
+   *
+   * Two spellings of one company — "Stripe" and "Stripe Inc" — are two different strings to
+   * `onlyCompanies` and one slug to `slugCandidates`, so each produced its own greenhouse,
+   * lever and ashby target. A duplicated target is fetched twice, counted twice in `found`,
+   * and filed as a duplicate of itself; on the Discover screen the two chips also collided
+   * on their React key.
+   */
+  const targets = dedupeTargets([...kept, ...rest.slice(0, room)]);
   const dropped = rest.length - room;
 
   if (dropped > 0) {

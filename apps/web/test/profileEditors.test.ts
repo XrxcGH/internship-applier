@@ -62,16 +62,17 @@ function amberCount(html: string): number {
 }
 
 function render(
-  Editor: (props: {
-    profile: CandidateProfile;
-    flagged: (path: string) => boolean;
-    edit: () => void;
-  }) => unknown,
+  Editor: (props: never) => unknown,
   p: CandidateProfile,
   flagged: (path: string) => boolean = () => false,
 ): string {
   return renderToStaticMarkup(
-    createElement(Editor as never, { profile: p, flagged, edit: () => undefined }),
+    createElement(Editor as never, {
+      profile: p,
+      flagged,
+      edit: () => undefined,
+      editList: () => undefined,
+    }),
   );
 }
 
