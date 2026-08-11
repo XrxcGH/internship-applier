@@ -10,12 +10,15 @@ import {
   gpaBoxesFor,
   gpaBoxKey,
   mergeWithdrawn,
-  moveListItem,
   nextReviewFlags,
   readGpaBoxes,
   tidyProfileLists,
   WithdrawnNotice,
 } from '../src/pages/Onboarding';
+// Moved out of the wizard when the experience, project and skill editors arrived and needed
+// it too — a component file importing from a page is the wrong direction. The editors those
+// helpers serve are covered in profileEditors.test.ts.
+import { moveListItem } from '../src/lib/profileEdit';
 
 /**
  * G1 is the gate where an extraction error gets corrected, so anything the wizard cannot

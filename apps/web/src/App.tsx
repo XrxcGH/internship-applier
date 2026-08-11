@@ -5,6 +5,7 @@ import { fetchHealth } from './lib/api';
 import { Field, Nav, Page, RunningHead, Section, type View } from './components/Chrome';
 import { Badge, Button, Notice } from './components/Controls';
 import { Onboarding } from './pages/Onboarding';
+import { Discovery } from './pages/Discovery';
 import { Matches } from './pages/Matches';
 import { Applications } from './pages/Applications';
 import { Voice } from './pages/Voice';
@@ -41,10 +42,11 @@ const GATES = [
 const MILESTONES = [
   { id: 'M0', label: 'Skeleton', done: true },
   { id: 'M1', label: 'Resume → profile', done: true },
-  // Server only, and said so here: the endpoints exist and work, but nothing in this
-  // interface calls them, so a flat "Discovery · done" on the overview told a first-time
-  // user to go and find a screen that has never been built.
-  { id: 'M2', label: 'Discovery (server only)', done: true },
+  // This read "Discovery (server only)" for as long as the endpoints existed with nothing
+  // in the interface calling them. `pages/Discovery.tsx` is that screen, so the qualifier
+  // goes — and if the screen is ever removed, the qualifier comes back rather than the row
+  // going on claiming a milestone the user cannot reach.
+  { id: 'M2', label: 'Discovery', done: true },
   { id: 'M3', label: 'Matching', done: true },
   { id: 'M4', label: 'Review queue', done: true },
   { id: 'M5', label: 'Writing engine', done: true },
@@ -85,7 +87,15 @@ export function App() {
       );
     }
     if (view === 'voice') return <Voice />;
-    if (view === 'queue') return <Matches onOpenApplications={() => setView('applications')} />;
+    if (view === 'discovery') return <Discovery onOpenQueue={() => setView('queue')} />;
+    if (view === 'queue') {
+      return (
+        <Matches
+          onOpenApplications={() => setView('applications')}
+          onOpenDiscovery={() => setView('discovery')}
+        />
+      );
+    }
     if (view === 'applications') return <Applications onBack={() => setView('queue')} />;
     if (view === 'tracker') return <Tracker />;
     if (view === 'settings') return <Settings />;
@@ -167,9 +177,13 @@ function Home({
                 </Button>
                 {confirmed && (
                   <>
-                    <Button variant="primary" onClick={() => onNavigate('queue')}>
-                      Open the queue (G2)
+                    {/* Ahead of the queue on purpose. A confirmed profile with nothing
+                        searched yet reaches an empty queue, and the button that fixes
+                        that was reachable only from the nav bar. */}
+                    <Button variant="primary" onClick={() => onNavigate('discovery')}>
+                      Find postings
                     </Button>
+                    <Button onClick={() => onNavigate('queue')}>Open the queue (G2)</Button>
                     <Button onClick={() => onNavigate('voice')}>Set up your voice</Button>
                   </>
                 )}

@@ -261,6 +261,35 @@ export const StyleProfile = z.object({
   computedAt: z.string().datetime(),
 });
 
+/**
+ * Whether an extraction kept the titles and dropped the substance.
+ *
+ * `bullets` is the evidence corpus — the only thing a generated sentence about an entry can
+ * be traced to, and gate G3 refuses a sentence it cannot trace. An extraction that returns
+ * twenty-seven entries and no lines under any of them is the right SHAPE and useless, and it
+ * reports on screen as a healthy "27 entries" unless something asks this question.
+ *
+ * The threshold is not zero, and that is the whole point of it being a function rather than
+ * an `every()` at each call site. The resume this was written for came back with twenty-seven
+ * entries carrying ONE line between them, which an exact-zero test reads as fine. Four fifths
+ * bare is a reading failure; a mixed resume where half the entries are one-liners is a resume.
+ *
+ * Three is the floor because below it the fraction says nothing: one bare entry out of one is
+ * an ordinary line on an ordinary resume, not a signal about the reader.
+ *
+ * Both G1 surfaces read this — the server raises `experience.bullets` onto `needsReview` from
+ * it, and the wizard shows the paragraph explaining what it costs — so the two cannot come to
+ * different conclusions about the same profile.
+ */
+export function bulletlessExperience(entries: ReadonlyArray<{ bullets: string[] }>): number {
+  return entries.filter((e) => e.bullets.length === 0).length;
+}
+
+export function lostTheEvidence(entries: ReadonlyArray<{ bullets: string[] }>): boolean {
+  if (entries.length < 3) return false;
+  return bulletlessExperience(entries) >= Math.ceil(entries.length * 0.8);
+}
+
 export type EducationEntry = z.infer<typeof EducationEntry>;
 export type ExperienceEntry = z.infer<typeof ExperienceEntry>;
 export type ProjectEntry = z.infer<typeof ProjectEntry>;

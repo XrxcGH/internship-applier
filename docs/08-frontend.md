@@ -43,10 +43,18 @@ bumps. Concretely:
 No router. `App.tsx` holds `const [view, setView] = useState<View>('home')`, and
 
 ```ts
-type View = 'home' | 'setup' | 'queue' | 'applications' | 'tracker' | 'voice' | 'settings';
+type View =
+  | 'home'
+  | 'setup'
+  | 'discovery'
+  | 'queue'
+  | 'applications'
+  | 'tracker'
+  | 'voice'
+  | 'settings';
 ```
 
-Seven views, no URLs, no deep links, no browser history. For a single-user local tool with
+Eight views, no URLs, no deep links, no browser history. For a single-user local tool with
 no sharing and no bookmarks this is enough; it is worth knowing that a refresh returns you
 to the overview.
 
@@ -64,11 +72,27 @@ Where **G1** lives. Three steps in one component, not a resumable wizard.
 | Step | Contents |
 | --- | --- |
 | **1 · Resume** | Drag-drop or click to choose. PDF, DOCX, TXT, Markdown — legacy `.doc` is not accepted, because it cannot be read. |
-| **2 · What the reader found** | Name, email and phone as editable fields, plus counts for education, experience, projects and skills. Editing individual jobs and courses is **not built**; the identity fields and the eligibility facts below are the ones matching depends on. |
+| **2 · What the reader found** | Everything the extractor produced, all of it editable: name, pronouns, email and phone; then education, experience, projects, skills, certifications, languages and links, each an add/edit/reorder/remove list. Entry counts carry the number of lines under them, because "27 entries" hid an extraction that had kept every title and dropped every bullet. |
 | **3 · What a resume never says** | Date of birth, work authorization, availability window, home city and state. Each says why it is asked. A flag clears only when the field actually holds an answer — reverting a control to its unanswered state puts the flag back. |
 
 Confirmation is blocked while anything is flagged, and every flag has a control that can
 clear it, including ones the wizard has no dedicated field for.
+
+### Discover — `discovery` (`pages/Discovery.tsx`)
+
+Where postings come from, and the screen M2 shipped without — for the whole of that milestone
+the endpoints were reachable only over HTTP, the queue's empty state told people to POST to
+`/api/discovery/run` by hand, and the query planner wrote notes saying "Resolve it in Discover"
+about a screen that did not exist.
+
+Six sections: what is stored and which sources have their key; the plan read out of the
+profile, with its keywords, term tokens and target chips; a company box that either re-plans
+with the names pinned or probes Greenhouse, Lever and Ashby for the board each one really
+uses; the editable run list and its summary; the paste-a-URL path; and the earlier runs.
+
+The run summary leads with an accounting that adds up — fetched, new, already stored, merged —
+and puts the `skipped` list in its own notice under the heading "This search was not complete."
+Nothing here runs on a schedule and nothing reaches the network until a button is pressed.
 
 ### Queue — `queue` (`pages/Matches.tsx`)
 
@@ -108,16 +132,18 @@ Writing samples in, measured style profile out, described in plain language.
 ### Settings — `settings` (`pages/Settings.tsx`)
 
 Four sections: model access with a connection test, what it has cost, export everything, and
-delete everything. **Not built:** the source and API-key management, the scoring-weight
+delete everything. **Not built:** API-key entry — Discover reports which sources have a key
+and names the `.env` variables, but nothing in the interface writes one — the scoring-weight
 editor with learned adjustments, and the answer-library editor that this doc used to list.
 
 ## Component inventory
 
-Five, all in `components/`:
+Six, all in `components/`:
 
 | Component | What it is |
 | --- | --- |
 | `Chrome` | `Nav`, `Page`, `RunningHead`, `Section`, `Field` — the frame every screen sits in |
+| `ProfileEditors` | The G1 editors for experience, projects, skills, certifications, languages and links, plus the `ListEditor` the education rows share |
 | `Controls` | `Button`, `TextField`, `TextArea`, `SelectField`, `Notice`, `Badge`, `Empty` |
 | `AnswerReview` | One answer at gate G3, with its evidence and flags |
 | `FillReview` | One fill run, and gate G4 |

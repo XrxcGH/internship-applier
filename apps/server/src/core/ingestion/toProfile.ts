@@ -9,6 +9,7 @@
  */
 import { z } from 'zod';
 import { ulid } from 'ulid';
+import { lostTheEvidence } from '@ia/shared';
 import type { CandidateProfile, Skill } from '@ia/shared';
 import type { ResumeExtraction } from './extractProfile';
 import { deriveProfile } from './deriveFields';
@@ -692,6 +693,35 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
     evidence: [],
   }));
 
+  /**
+   * Two ways an extraction can come back the right shape and still be missing the substance.
+   *
+   * A real reading of an activity-heavy student resume produced twenty-seven experience
+   * entries, none of which carried a single one of the lines printed under it, and no skills
+   * at all. Every count on the G1 screen was a number, so nothing looked wrong: "Experience —
+   * 27 entries" beside "Skills — none found". What it actually meant is that the retrieval
+   * step had twenty-seven titles and no description of anything the person did, so any
+   * sentence about the work itself would be refused at G3 — which has no override — while
+   * `inferRoleFamilies` read an empty skills list and planned a narrower search than the
+   * resume warranted.
+   *
+   * One aggregate flag each rather than one per entry. Every one of those entries was already
+   * flagged for its own missing start date, and twenty-seven "I have checked this" clicks is
+   * how a gate stops being read.
+   *
+   * `lostTheEvidence` is the threshold, and it lives in @ia/shared because the G1 screen shows
+   * the paragraph explaining what it costs and the two must not disagree about one profile. It
+   * is deliberately not "every entry is bare": the resume this was written for had twenty-seven
+   * entries carrying ONE line between them, which an exact-zero test reads as fine. `skills`
+   * fires on a resume that produced something, since a document with neither education nor
+   * experience has bigger problems and gets flagged for them.
+   */
+  const corpusFlags: string[] = [];
+  if (lostTheEvidence(experience)) corpusFlags.push('experience.bullets');
+  if (skills.length === 0 && (experience.length > 0 || education.length > 0)) {
+    corpusFlags.push('skills');
+  }
+
   const draft: CandidateProfile = {
     id: ulid(),
     fullName: x.fullName ?? '',
@@ -757,6 +787,8 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
       // Every date the resume stated and this file could not store exactly as written —
       // see the readers above, which decide both the stored month and this flag together.
       ...dateFlags,
+      // An extraction that came back the right shape with the substance missing.
+      ...corpusFlags,
       // Level "other" is the extraction's honest answer for a homeschool co-op or a
       // dual-enrollment academy, and derivation cannot rank it: academicLevel degrades to
       // 'none', the seniority band to entry_intern, and an actively enrolled student

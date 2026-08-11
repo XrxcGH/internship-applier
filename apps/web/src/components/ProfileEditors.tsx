@@ -1,0 +1,585 @@
+import type { ReactNode } from 'react';
+import { ExperienceType } from '@ia/shared';
+import type { CandidateProfile, ExperienceEntry, ProjectEntry, Skill } from '@ia/shared';
+import { moveListItem } from '../lib/profileEdit';
+import { Button, SelectField, TextField } from './Controls';
+
+/**
+ * The G1 editors for everything the reader pulls out of a resume that is not a school.
+ *
+ * G1 is the gate where an extraction error is corrected, so anything the wizard cannot edit
+ * is an extraction error made permanent. Until these existed the confirm screen showed three
+ * counts — "Experience · 27 entries", "Projects · none found", "Skills · none found" — and a
+ * note saying entries were not editable yet. That was not a cosmetic gap. A real resume came
+ * back as twenty-seven bare titles with not one of the lines printed underneath them, and the
+ * student could neither see that had happened nor put a single line back: the evidence corpus
+ * every generated sentence is checked against was gone, and the only remedy on the screen was
+ * to upload the file again and hope.
+ *
+ * The shape rules these controls have to respect, because the server answers a breach with
+ * "Profile did not match the expected shape" naming no field: an experience entry needs a
+ * title and an organization, a project needs a name, a skill needs a name, and a URL has to
+ * be a URL. `savingProblems` in the wizard names each one before any save is attempted.
+ */
+
+const EXPERIENCE_LABELS: Record<ExperienceEntry['type'], string> = {
+  job: 'Job',
+  internship: 'Internship',
+  volunteer: 'Volunteer',
+  research: 'Research',
+  club: 'Club or activity',
+  freelance: 'Freelance',
+};
+
+/** The shared schema keeps this one inline, so it is named here rather than re-declared. */
+type Certification = CandidateProfile['certifications'][number];
+
+const SKILL_CATEGORIES: Array<[Skill['category'], string]> = [
+  ['language', 'Language'],
+  ['framework', 'Framework'],
+  ['tool', 'Tool'],
+  ['domain', 'Domain'],
+  ['soft', 'Working style'],
+];
+
+/**
+ * The frame every entry list shares: a heading that counts, a card per entry with the
+ * reordering and removal controls, and one button that adds.
+ *
+ * Never sliced or capped, for the reason the education list carries the same note: a list
+ * that quietly stops at some round number is an extraction error the user cannot see, let
+ * alone correct, and twenty-seven activities is a real resume rather than a pathological one.
+ */
+function EntryList<T>({
+  label,
+  singular,
+  hint,
+  entries,
+  onChange,
+  blank,
+  children,
+}: {
+  label: string;
+  singular: string;
+  hint?: ReactNode;
+  entries: T[];
+  onChange: (next: T[]) => void;
+  /** A fresh entry for "Add", in whatever shape the schema demands of a new row. */
+  blank: () => T;
+  children: (entry: T, index: number, replace: (next: T) => void) => ReactNode;
+}) {
+  return (
+    <div className="mt-10">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <h3 className="u-eyebrow">{label}</h3>
+        <span className="u-data text-faint">
+          {entries.length === 0
+            ? 'none found'
+            : `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`}
+        </span>
+      </div>
+      {hint && <p className="text-faint u-prose mb-3 text-[0.9375rem] leading-snug">{hint}</p>}
+
+      {entries.length > 0 && (
+        <ul className="space-y-6">
+          {entries.map((entry, index) => (
+            <li key={index} className="u-card-flat px-5 py-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <span className="u-data text-faint text-[0.8125rem]">
+                  {singular} {index + 1}
+                </span>
+                <span className="flex shrink-0 items-center gap-1">
+                  <Button
+                    size="sm"
+                    aria-label={`Move ${singular.toLowerCase()} ${index + 1} up`}
+                    disabled={index === 0}
+                    onClick={() => onChange(moveListItem(entries, index, index - 1))}
+                  >
+                    Up
+                  </Button>
+                  <Button
+                    size="sm"
+                    aria-label={`Move ${singular.toLowerCase()} ${index + 1} down`}
+                    disabled={index === entries.length - 1}
+                    onClick={() => onChange(moveListItem(entries, index, index + 1))}
+                  >
+                    Down
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    aria-label={`Remove ${singular.toLowerCase()} ${index + 1}`}
+                    onClick={() => onChange(entries.filter((_, k) => k !== index))}
+                  >
+                    Remove
+                  </Button>
+                </span>
+              </div>
+              {children(entry, index, (next) =>
+                onChange(entries.map((e, k) => (k === index ? next : e))),
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3">
+        <Button size="sm" onClick={() => onChange([...entries, blank()])}>
+          Add {singular.toLowerCase()}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A list of arbitrary length that can be added to, edited, reordered and cut down.
+ *
+ * Honors, coursework, bullets and per-entry skills are all unbounded. Each row wraps rather
+ * than truncating, so a long award name pushes the buttons onto the next line instead of
+ * clipping the name the student needs to be able to read before they can correct it.
+ */
+export function ListEditor({
+  label,
+  singular,
+  hint,
+  items,
+  onChange,
+}: {
+  label: string;
+  singular: string;
+  hint?: string;
+  items: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <div className="mt-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-[1rem]">{label}</span>
+        <span className="u-data text-faint text-[0.8125rem]">{items.length}</span>
+      </div>
+      {hint && <p className="text-faint u-prose mt-1 text-[0.9375rem] leading-snug">{hint}</p>}
+
+      {items.length > 0 && (
+        <ul className="mt-2 space-y-2">
+          {items.map((item, i) => (
+            <li key={i} className="flex flex-wrap items-center gap-2">
+              <span className="u-data text-faint w-6 shrink-0 text-right">{i + 1}</span>
+              <input
+                value={item}
+                aria-label={`${singular} ${i + 1}`}
+                onChange={(e) => onChange(items.map((x, k) => (k === i ? e.target.value : x)))}
+                className="u-data border-rule focus:border-accent min-w-[12rem] flex-1 rounded-t border-b bg-transparent px-1 py-1.5 outline-none transition-colors"
+              />
+              <span className="flex shrink-0 items-center gap-1">
+                <Button
+                  size="sm"
+                  aria-label={`Move ${singular.toLowerCase()} ${i + 1} up`}
+                  disabled={i === 0}
+                  onClick={() => onChange(moveListItem(items, i, i - 1))}
+                >
+                  Up
+                </Button>
+                <Button
+                  size="sm"
+                  aria-label={`Move ${singular.toLowerCase()} ${i + 1} down`}
+                  disabled={i === items.length - 1}
+                  onClick={() => onChange(moveListItem(items, i, i + 1))}
+                >
+                  Down
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  aria-label={`Remove ${singular.toLowerCase()} ${i + 1}`}
+                  onClick={() => onChange(items.filter((_, k) => k !== i))}
+                >
+                  Remove
+                </Button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-2">
+        <Button size="sm" onClick={() => onChange([...items, ''])}>
+          Add {singular.toLowerCase()}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export interface EditorProps {
+  profile: CandidateProfile;
+  flagged: (path: string) => boolean;
+  /** Applies one change, naming the flag the edit answers. */
+  edit: (fn: (p: CandidateProfile) => CandidateProfile, clears?: string) => void;
+}
+
+// ────────────────────────────────────────────────────────────────────── experience
+
+export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
+  const entries = profile.experience;
+  return (
+    <EntryList
+      label="Experience"
+      singular="Entry"
+      hint={
+        <>
+          Paid work, research, volunteering, and every club or team — the reader files them all
+          here. <strong>What you did</strong> is the part that matters most: those lines are the
+          only thing a generated sentence about this entry can be checked against, and gate G3
+          refuses a sentence it cannot trace to one.
+        </>
+      }
+      entries={entries}
+      onChange={(next) => edit((p) => ({ ...p, experience: next }))}
+      blank={(): ExperienceEntry => ({
+        organization: '',
+        title: '',
+        type: 'job',
+        bullets: [],
+      })}
+    >
+      {(entry, index, replace) => {
+        const path = (field: string) => `experience.${index}.${field}`;
+        return (
+          <>
+            <div className="grid gap-x-8 sm:grid-cols-2">
+              <TextField
+                label="Title"
+                value={entry.title}
+                flagged={flagged(path('title'))}
+                onChange={(e) => replace({ ...entry, title: e.target.value })}
+              />
+              <TextField
+                label="Organization"
+                value={entry.organization}
+                flagged={flagged(path('organization'))}
+                onChange={(e) => replace({ ...entry, organization: e.target.value })}
+              />
+              <SelectField
+                label="Kind"
+                hint="Only jobs, internships, research and freelance work count toward professional experience. A club is still evidence — it just is not a job."
+                value={entry.type}
+                flagged={flagged(path('type'))}
+                onChange={(e) =>
+                  replace({ ...entry, type: e.target.value as ExperienceEntry['type'] })
+                }
+              >
+                {ExperienceType.options.map((type) => (
+                  <option key={type} value={type}>
+                    {EXPERIENCE_LABELS[type]}
+                  </option>
+                ))}
+              </SelectField>
+              <TextField
+                label="Location"
+                hint="City and state, as the resume writes it."
+                value={entry.location ?? ''}
+                flagged={flagged(path('location'))}
+                onChange={(e) => replace({ ...entry, location: e.target.value || undefined })}
+              />
+              {/* Month rather than day, because the profile stores YYYY-MM and a day it
+                  cannot store fails the save on a field nobody typed a day into. */}
+              <TextField
+                label="Started"
+                type="month"
+                value={entry.startDate ?? ''}
+                flagged={flagged(path('startDate'))}
+                onChange={(e) => replace({ ...entry, startDate: e.target.value || undefined })}
+              />
+              <TextField
+                label="Finished"
+                type="month"
+                hint="Leave it empty if you are still there. An empty box means ongoing, and how long the entry ran is measured from it."
+                value={entry.endDate ?? ''}
+                flagged={flagged(path('endDate'))}
+                onChange={(e) => replace({ ...entry, endDate: e.target.value || undefined })}
+              />
+            </div>
+
+            <ListEditor
+              label="What you did"
+              singular="Line"
+              hint="One line per bullet on the resume, written the way you wrote it there."
+              items={entry.bullets}
+              onChange={(bullets) => replace({ ...entry, bullets })}
+            />
+            <ListEditor
+              label="Skills used here"
+              singular="Skill"
+              items={entry.skills ?? []}
+              onChange={(skills) => replace({ ...entry, skills })}
+            />
+          </>
+        );
+      }}
+    </EntryList>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────── projects
+
+export function ProjectsEditor({ profile, flagged, edit }: EditorProps) {
+  return (
+    <EntryList
+      label="Projects"
+      singular="Project"
+      hint="Anything you built or researched under its own name, rather than a position you held."
+      entries={profile.projects}
+      onChange={(next) => edit((p) => ({ ...p, projects: next }))}
+      blank={(): ProjectEntry => ({ name: '', description: '', bullets: [] })}
+    >
+      {(entry, index, replace) => {
+        const path = (field: string) => `projects.${index}.${field}`;
+        return (
+          <>
+            <div className="grid gap-x-8 sm:grid-cols-2">
+              <TextField
+                label="Name"
+                value={entry.name}
+                flagged={flagged(path('name'))}
+                onChange={(e) => replace({ ...entry, name: e.target.value })}
+              />
+              <TextField
+                label="Address"
+                hint="A repo or a page, if there is one. Typing it without https:// is fine."
+                value={entry.url ?? ''}
+                flagged={flagged(path('url'))}
+                onChange={(e) => replace({ ...entry, url: e.target.value || undefined })}
+              />
+              <TextField
+                label="Started"
+                type="month"
+                value={entry.startDate ?? ''}
+                flagged={flagged(path('startDate'))}
+                onChange={(e) => replace({ ...entry, startDate: e.target.value || undefined })}
+              />
+              <TextField
+                label="Finished"
+                type="month"
+                value={entry.endDate ?? ''}
+                flagged={flagged(path('endDate'))}
+                onChange={(e) => replace({ ...entry, endDate: e.target.value || undefined })}
+              />
+            </div>
+            <TextField
+              label="Description"
+              hint="One sentence. This is quoted back to you as evidence, so write what it is rather than how it went."
+              value={entry.description}
+              flagged={flagged(path('description'))}
+              onChange={(e) => replace({ ...entry, description: e.target.value })}
+            />
+            <ListEditor
+              label="What you did"
+              singular="Line"
+              items={entry.bullets}
+              onChange={(bullets) => replace({ ...entry, bullets })}
+            />
+            <ListEditor
+              label="Skills used here"
+              singular="Skill"
+              items={entry.skills ?? []}
+              onChange={(skills) => replace({ ...entry, skills })}
+            />
+          </>
+        );
+      }}
+    </EntryList>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────── skills
+
+/**
+ * Skills, one row each.
+ *
+ * A row rather than a card, because a skill is two short fields and twenty of them stacked as
+ * cards is a page nobody scrolls. `evidence` is carried through untouched: it points at where
+ * in the profile the skill came from, it is what makes claim verification possible, and it is
+ * attached during confirmation rather than typed.
+ */
+export function SkillsEditor({ profile, flagged, edit }: EditorProps) {
+  const skills = profile.skills;
+  const replaceAll = (next: Skill[]) => edit((p) => ({ ...p, skills: next }), 'skills');
+
+  return (
+    <div className="mt-10">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <h3 className="u-eyebrow">Skills</h3>
+        <span className="u-data text-faint">
+          {skills.length === 0 ? 'none found' : `${skills.length}`}
+        </span>
+      </div>
+      <p className="text-faint u-prose mb-3 text-[0.9375rem] leading-snug">
+        These are read when the search plan is built, so a language or a tool missing from here is a
+        search that never runs for it.
+      </p>
+
+      {skills.length > 0 && (
+        <ul className="space-y-2">
+          {skills.map((skill, i) => (
+            <li key={i} className="flex flex-wrap items-center gap-2">
+              <span className="u-data text-faint w-6 shrink-0 text-right">{i + 1}</span>
+              <input
+                value={skill.name}
+                aria-label={`Skill ${i + 1}`}
+                onChange={(e) =>
+                  replaceAll(skills.map((s, k) => (k === i ? { ...s, name: e.target.value } : s)))
+                }
+                className={`u-data min-w-[10rem] flex-1 rounded-t border-b bg-transparent px-1 py-1.5 outline-none transition-colors ${
+                  flagged(`skills.${i}.name`) ? 'border-caution' : 'border-rule focus:border-accent'
+                }`}
+              />
+              <select
+                value={skill.category}
+                aria-label={`Skill ${i + 1} kind`}
+                onChange={(e) =>
+                  replaceAll(
+                    skills.map((s, k) =>
+                      k === i ? { ...s, category: e.target.value as Skill['category'] } : s,
+                    ),
+                  )
+                }
+                className="u-data bg-raised text-ink border-rule focus:border-accent shrink-0 rounded border px-2 py-1.5 outline-none transition-colors"
+              >
+                {SKILL_CATEGORIES.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                variant="danger"
+                aria-label={`Remove skill ${i + 1}`}
+                onClick={() => replaceAll(skills.filter((_, k) => k !== i))}
+              >
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3">
+        <Button
+          size="sm"
+          onClick={() => replaceAll([...skills, { name: '', category: 'tool', evidence: [] }])}
+        >
+          Add skill
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────── certifications and languages
+
+export function CertificationsEditor({ profile, flagged, edit }: EditorProps) {
+  return (
+    <EntryList
+      label="Certifications"
+      singular="Certification"
+      hint="The date is where a claim like “certified for three years” starts counting, so it is worth getting right."
+      entries={profile.certifications}
+      onChange={(next) => edit((p) => ({ ...p, certifications: next }))}
+      blank={(): Certification => ({ name: '' })}
+    >
+      {(entry, index, replace) => (
+        <div className="grid gap-x-8 sm:grid-cols-3">
+          <TextField
+            label="Name"
+            value={entry.name}
+            flagged={flagged(`certifications.${index}.name`)}
+            onChange={(e) => replace({ ...entry, name: e.target.value })}
+          />
+          <TextField
+            label="Issued by"
+            value={entry.issuer ?? ''}
+            flagged={flagged(`certifications.${index}.issuer`)}
+            onChange={(e) => replace({ ...entry, issuer: e.target.value || undefined })}
+          />
+          <TextField
+            label="Earned"
+            type="month"
+            value={entry.date ?? ''}
+            flagged={flagged(`certifications.${index}.date`)}
+            onChange={(e) => replace({ ...entry, date: e.target.value || undefined })}
+          />
+        </div>
+      )}
+    </EntryList>
+  );
+}
+
+export function LanguagesEditor({ profile, flagged, edit }: EditorProps) {
+  return (
+    <EntryList
+      label="Languages"
+      singular="Language"
+      entries={profile.languages}
+      onChange={(next) => edit((p) => ({ ...p, languages: next }))}
+      blank={() => ({ name: '', proficiency: '' })}
+    >
+      {(entry, index, replace) => (
+        <div className="grid gap-x-8 sm:grid-cols-2">
+          <TextField
+            label="Language"
+            value={entry.name}
+            flagged={flagged(`languages.${index}.name`)}
+            onChange={(e) => replace({ ...entry, name: e.target.value })}
+          />
+          <TextField
+            label="How well"
+            hint="Written the way you would say it: native, fluent, conversational."
+            value={entry.proficiency}
+            flagged={flagged(`languages.${index}.proficiency`)}
+            onChange={(e) => replace({ ...entry, proficiency: e.target.value })}
+          />
+        </div>
+      )}
+    </EntryList>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────── links
+
+export function LinksEditor({ profile, flagged, edit }: EditorProps) {
+  const links = profile.links;
+  const set = (key: 'github' | 'linkedin' | 'portfolio', value: string) =>
+    edit((p) => ({ ...p, links: { ...p.links, [key]: value || undefined } }), `links.${key}`);
+
+  return (
+    <div className="mt-10">
+      <h3 className="u-eyebrow mb-3">Links</h3>
+      <p className="text-faint u-prose mb-1 text-[0.9375rem] leading-snug">
+        Typed into application forms as they stand. Leaving out https:// is fine — it is added on
+        the way to the file.
+      </p>
+      <div className="grid gap-x-8 sm:grid-cols-3">
+        <TextField
+          label="GitHub"
+          value={links.github ?? ''}
+          flagged={flagged('links.github')}
+          onChange={(e) => set('github', e.target.value)}
+        />
+        <TextField
+          label="LinkedIn"
+          value={links.linkedin ?? ''}
+          flagged={flagged('links.linkedin')}
+          onChange={(e) => set('linkedin', e.target.value)}
+        />
+        <TextField
+          label="Portfolio"
+          value={links.portfolio ?? ''}
+          flagged={flagged('links.portfolio')}
+          onChange={(e) => set('portfolio', e.target.value)}
+        />
+      </div>
+    </div>
+  );
+}

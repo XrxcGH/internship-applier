@@ -31,7 +31,13 @@ const BADGE: Record<string, { label: string; color: string }> = {
  * Keyboard-first: triaging forty postings should feel like triaging email. There is
  * deliberately no bulk-approve and no multi-select — one posting, one decision.
  */
-export function Matches({ onOpenApplications }: { onOpenApplications?: () => void }) {
+export function Matches({
+  onOpenApplications,
+  onOpenDiscovery,
+}: {
+  onOpenApplications?: () => void;
+  onOpenDiscovery?: () => void;
+}) {
   const [rows, setRows] = useState<MatchRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [band, setBand] = useState<Band>('eligible_and_unknown');
@@ -292,18 +298,26 @@ export function Matches({ onOpenApplications }: { onOpenApplications?: () => voi
         </div>
       )}
 
-      {/* This used to open with "Run discovery", and there is no screen, button or
-          shortcut anywhere in this app that runs discovery. Someone who had just been told
-          at G1 that confirming unlocks discovery arrived here, found one button, pressed
-          it, and got the same empty queue back with no idea what they had missed. Say
-          where postings actually come from instead. */}
+      {/* This once opened with "Run discovery" and there was no screen, button or shortcut
+          anywhere in the app that ran discovery, so someone told at G1 that confirming
+          unlocks discovery arrived here, pressed the only button, and got the same empty
+          queue back. It then said so plainly and quoted the two endpoints to POST by hand.
+          Discover exists now, so this points at it — and at the other reason the queue can
+          look empty, which is postings that are stored but have never been scored. */}
       {rows.length === 0 && !error && (
         <Empty title="Nothing in the queue.">
-          Discovery has no screen yet. Postings reach this machine through the server:{' '}
-          <code className="u-data">POST /api/discovery/run</code>, or{' '}
-          <code className="u-data">POST /api/discovery/manual</code> for a single posting you paste
-          in. Recompute scores whatever is already stored. You can also widen the band above to see
-          what was filtered out, and why.
+          <p>
+            Either nothing has been searched yet, or what is stored has not been scored. Discover
+            does both, and it also takes a single posting URL you paste in. Recompute, above, scores
+            whatever is already here — and widening the band shows what was filtered out, and why.
+          </p>
+          {onOpenDiscovery && (
+            <div className="mt-4 flex justify-center">
+              <Button variant="primary" onClick={onOpenDiscovery}>
+                Go to Discover →
+              </Button>
+            </div>
+          )}
         </Empty>
       )}
 
