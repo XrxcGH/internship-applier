@@ -767,3 +767,90 @@ describe('the languages item carries the recorded proficiency as structure', () 
     expect(retrieve(none, QUESTIONS[0]!).some((e) => e.facts.languages)).toBe(false);
   });
 });
+
+/**
+ * What the drafting prompt gets when one kind of evidence outnumbers every other.
+ *
+ * Taking the head of the retrieved array was not enough. The array is round-robin over
+ * ENTRIES, but the buckets come out ordered by their best item, and a bare role line scores
+ * +0.3 against a school's +0.25 and a certification's +0.05. On the resume this was found
+ * with — twenty-seven activities, twenty-six of them with no bullets at all — the first
+ * twenty-four lines were twenty-four bare "Title at Org (dates)" strings. The eleven honors
+ * and four certifications, which on that profile are the only substance it holds, were in
+ * the corpus and never in the prompt: the model was asked to write about a person and shown
+ * nothing they had done.
+ */
+describe('the drafting prompt on an activity-heavy profile', () => {
+  function activityProfile(): ConfirmedProfile {
+    return toDraftProfile(
+      ResumeExtraction.parse({
+        fullName: 'Rosa Sample',
+        pronouns: null,
+        email: 'rosa@example.com',
+        phone: null,
+        location: 'Boston, MA',
+        links: { github: null, linkedin: null, portfolio: null },
+        education: [
+          {
+            institution: 'Sample High School',
+            level: 'high_school',
+            fieldOfStudy: null,
+            startDate: '2022-08',
+            endDate: '2026-06',
+            gpaValue: 3.9,
+            gpaScale: 4,
+            gpaWeighted: null,
+            coursework: ['AP Biology'],
+            honors: ['National Merit Semifinalist', 'Eagle Scout'],
+          },
+        ],
+        // Twenty-seven bare entries, which is the shape that broke it.
+        experience: Array.from({ length: 27 }, (_, i) => ({
+          organization: `Club ${i + 1}`,
+          title: 'Member',
+          type: 'club',
+          startDate: '2024-09',
+          endDate: null,
+          location: null,
+          bullets: [],
+        })),
+        projects: [],
+        skills: [{ name: 'SolidWorks', category: 'tool' }],
+        certifications: [{ name: 'First Aid/CPR/AED', issuer: 'American Red Cross', date: '2023' }],
+        languages: [],
+        needsReview: [],
+      }),
+    ) as ConfirmedProfile;
+  }
+
+  const block = (): string =>
+    formatEvidence(retrieveEvidence(activityProfile(), 'Tell us about yourself.', { limit: 200 }));
+
+  it('shows the honors, which on this profile are the only substance there is', () => {
+    expect(block()).toMatch(/National Merit Semifinalist/);
+  });
+
+  it('shows the certification, the skill and the school', () => {
+    const b = block();
+    expect(b).toMatch(/First Aid/);
+    expect(b).toMatch(/SolidWorks/);
+    expect(b).toMatch(/Sample High School/);
+  });
+
+  it('still leads with experience, which is what most questions ask about', () => {
+    const lines = block().split('\n');
+    expect(lines.filter((l) => l.startsWith('[experience')).length).toBeGreaterThan(0);
+    // And identity is always first, since a draft that cannot use the writer's own name or
+    // city gets those blocked at G3.
+    expect(lines[0]).toMatch(/^\[identity\]/);
+  });
+
+  it('does not let one kind take every line', () => {
+    const kinds = new Set(
+      block()
+        .split('\n')
+        .map((l) => /^\[(\w+)/.exec(l)?.[1]),
+    );
+    expect(kinds.size).toBeGreaterThanOrEqual(4);
+  });
+});

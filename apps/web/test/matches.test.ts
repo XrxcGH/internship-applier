@@ -94,3 +94,32 @@ describe('termLabel', () => {
     expect(termLabel({ season: null, year: null })).toBe('Term not stated');
   });
 });
+
+/**
+ * The currency the posting actually stated.
+ *
+ * This printed "$" whatever `currency` held, which was survivable only while the parser
+ * could read nothing but dollars. It reads symbols now — and Ashby alone returns GBP and SEK
+ * on an ordinary board — so a €2,000 stipend would have been shown as "$2,000/mo". Not a
+ * formatting slip: a wrong number in the pane where someone decides whether to apply.
+ */
+describe('payLabel, in currencies that are not dollars', () => {
+  it('uses the symbol the currency is written with', () => {
+    expect(payLabel({ min: 25, period: 'hour', currency: 'GBP' })).toBe('£25/hr');
+    expect(payLabel({ min: 2000, period: 'month', currency: 'EUR' })).toBe('€2,000/mo');
+    expect(payLabel({ min: 30, period: 'hour', currency: 'CAD' })).toBe('CA$30/hr');
+  });
+
+  it('writes out a currency it has no symbol for, rather than guessing one', () => {
+    // "2,000 SEK" cannot be mistaken for a different currency. "$2,000" can.
+    expect(payLabel({ min: 2000, period: 'month', currency: 'SEK' })).toBe('2,000 SEK/mo');
+  });
+
+  it('still defaults to dollars, which is what a bare $ on these boards means', () => {
+    expect(payLabel({ min: 30, period: 'hour' })).toBe('$30/hr');
+  });
+
+  it('carries the currency across both ends of a range', () => {
+    expect(payLabel({ min: 25, max: 35, period: 'hour', currency: 'GBP' })).toBe('£25–£35/hr');
+  });
+});

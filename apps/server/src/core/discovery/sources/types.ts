@@ -52,6 +52,45 @@ export interface SourceResult {
    * read as complete coverage.
    */
   gaps?: string[];
+  /**
+   * Postings this source says are no longer open, as canonical URLs.
+   *
+   * A source that publishes its own closure signal is the best evidence there is that a
+   * posting has gone, and it was being thrown away: the community list marks a finished role
+   * `active: false` and the adapter simply skipped the row. Nothing closed, nothing said —
+   * the stored posting stayed open until forty-five days of not-being-seen expired it, and
+   * in the meantime the queue went on offering a student an application they could no longer
+   * make. `refreshPostings` can only ask a URL whether it 404s; this is the source telling us
+   * outright, and it costs no request at all.
+   *
+   * Empty and absent mean the same thing — "this source does not say" — and neither is ever
+   * read as "everything else is still open".
+   */
+  closed?: string[];
+}
+
+/**
+ * A response that is not shaped like a list of postings, said out loud.
+ *
+ * `data.jobs ?? []` was the shape every adapter here used, and it cannot tell a board with
+ * nothing posted from an endpoint that has changed, moved, or started answering with an
+ * error object. Both came out as "0 found", not degraded, nothing in `skipped` — a run
+ * reporting a clean, complete search of a source it had in fact failed to read, which is the
+ * one failure this file's `gaps` channel exists to prevent.
+ *
+ * An absent key is a genuine empty board on several of these APIs, so only a key that is
+ * PRESENT and not an array counts as drift.
+ */
+export function wrongShape(source: string, value: unknown): SourceResult | null {
+  if (value === undefined || value === null || Array.isArray(value)) return null;
+  return {
+    postings: [],
+    notes: [],
+    gaps: [
+      `${source}: the source answered with something that is not a list of postings, so ` +
+        'nothing from it is in these results. Its API may have changed.',
+    ],
+  };
 }
 
 export interface JobSource {

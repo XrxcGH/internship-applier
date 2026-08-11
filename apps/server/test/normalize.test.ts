@@ -612,3 +612,49 @@ describe('reading HTML out of a feed', () => {
     );
   });
 });
+
+/**
+ * Money that is not written in dollars, and money written the way an ATS abbreviates it.
+ *
+ * The regex opened on `\$` and nothing else, so "£25 per hour" and "€2,000 per month" both
+ * came back null and the posting entered the queue as pay not disclosed. That is not an edge
+ * case — Ashby hands back GBP and SEK on an ordinary board. The fractional part was
+ * `\.\d{2}`, exactly two places or none, which is the one shape these boards never use for a
+ * range: "$211.4K – $290.6K a year" matched only "$211", the K fell outside the match, and a
+ * posting paying two hundred thousand a year was stored as $211 a MONTH.
+ */
+describe('parseCompensation, beyond the dollar sign', () => {
+  it('reads the symbols other currencies are written with', () => {
+    expect(parseCompensation('The rate is £25 per hour.')).toMatchObject({
+      min: 25,
+      currency: 'GBP',
+      period: 'hour',
+    });
+    expect(parseCompensation('A stipend of €2,000 per month.')).toMatchObject({
+      min: 2000,
+      currency: 'EUR',
+      period: 'month',
+    });
+    expect(parseCompensation('¥300,000 per month')).toMatchObject({ currency: 'JPY' });
+    expect(parseCompensation('₹40,000 per month')).toMatchObject({ currency: 'INR' });
+  });
+
+  it('still reads a dollar, and still reads which dollar', () => {
+    expect(parseCompensation('Pays $30/hour.')).toMatchObject({ min: 30, currency: 'USD' });
+    expect(parseCompensation('Pays CA$30/hour.')).toMatchObject({ min: 30, currency: 'CAD' });
+  });
+
+  it('reads an abbreviated range with one decimal place', () => {
+    // Stored as $211 a month before, in the pane where someone decides whether to apply.
+    expect(parseCompensation('Salary range: $211.4K – $290.6K a year')).toMatchObject({
+      min: 211_400,
+      max: 290_600,
+      period: 'year',
+      currency: 'USD',
+    });
+  });
+
+  it('keeps the cents on a figure that has them', () => {
+    expect(parseCompensation('Pays $22.50 per hour.')).toMatchObject({ min: 22.5 });
+  });
+});

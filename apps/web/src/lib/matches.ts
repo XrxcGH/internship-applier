@@ -163,7 +163,6 @@ export function payLabel(c: Record<string, unknown> | null): string {
    * could show '/hour' and '/hr' depending on whether the field happened to be set. This
    * string sits in the G2 detail pane, where someone is deciding whether to apply.
    */
-  const money = (n: number): string => n.toLocaleString('en-US');
   const PERIOD: Record<string, string> = {
     hour: '/hr',
     week: '/wk',
@@ -172,9 +171,44 @@ export function payLabel(c: Record<string, unknown> | null): string {
     total: ' total',
   };
 
-  const max = typeof c['max'] === 'number' ? `–$${money(c['max'])}` : '';
+  /**
+   * The currency the posting stated, rather than a dollar sign on everything.
+   *
+   * This printed "$" whatever `currency` held, which was survivable only while the parser
+   * could read nothing but dollars. It reads symbols now, and Ashby alone returns GBP and
+   * SEK on an ordinary board — so a €2,000 stipend would have been shown to the user as
+   * "$2,000/mo", which is not a formatting slip but a wrong number in the pane where
+   * someone decides whether a posting is worth applying to.
+   *
+   * A currency with no symbol here is written out in full after the figure ("2,000 SEK")
+   * rather than guessed at. That is how those currencies are ordinarily written, and it
+   * cannot be mistaken for a different one.
+   */
+  const SYMBOL: Record<string, string> = {
+    USD: '$',
+    CAD: 'CA$',
+    AUD: 'A$',
+    NZD: 'NZ$',
+    SGD: 'S$',
+    HKD: 'HK$',
+    TWD: 'NT$',
+    MXN: 'MX$',
+    BRL: 'R$',
+    GBP: '£',
+    EUR: '€',
+    JPY: '¥',
+    INR: '₹',
+  };
+  const code = typeof c['currency'] === 'string' ? c['currency'].toUpperCase() : 'USD';
+  const symbol = SYMBOL[code];
+  const money = (n: number): string => {
+    const figure = n.toLocaleString('en-US');
+    return symbol ? `${symbol}${figure}` : `${figure} ${code}`;
+  };
+
+  const max = typeof c['max'] === 'number' ? `–${money(c['max'])}` : '';
   const period = PERIOD[String(c['period'] ?? 'hour')] ?? '/hr';
-  return `$${money(min)}${max}${period}`;
+  return `${money(min)}${max}${period}`;
 }
 
 /**
