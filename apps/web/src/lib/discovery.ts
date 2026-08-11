@@ -49,6 +49,11 @@ export interface RunSummary {
   found: number;
   new: number;
   duplicates: number;
+  /**
+   * Stored postings a source said outright have closed. Optional because a summary written
+   * before this existed is read back from the database by the run history.
+   */
+  closed?: number;
   bySource: SourceReport[];
   /** Everything the run did not cover, never left implicit — docs/04 § Pipeline reporting. */
   skipped: string[];
@@ -235,7 +240,14 @@ export function alreadyStored(s: RunSummary): number {
 
 /** The one-line result, with every posting fetched accounted for somewhere in it. */
 export function runHeadline(s: RunSummary): string {
-  if (s.found === 0) return 'No source returned a posting.';
+  // A run that fetched nothing can still have done the most useful thing in it: a source
+  // that lists its own finished roles closes postings without returning a single open one.
+  const closed = s.closed ?? 0;
+  if (s.found === 0) {
+    return closed > 0
+      ? `No source returned an open posting · ${closed} closed`
+      : 'No source returned a posting.';
+  }
   const seen = alreadyStored(s);
   const parts = [
     `${s.found} ${s.found === 1 ? 'posting' : 'postings'} fetched`,
@@ -243,6 +255,7 @@ export function runHeadline(s: RunSummary): string {
   ];
   if (seen > 0) parts.push(`${seen} already stored`);
   if (s.duplicates > 0) parts.push(`${s.duplicates} merged`);
+  if (closed > 0) parts.push(`${closed} closed`);
   return parts.join(' · ');
 }
 

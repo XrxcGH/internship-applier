@@ -24,6 +24,7 @@ import {
   type JobSource,
   type NormalizedPosting,
   type SourceQuery,
+  wrongShape,
   type SourceResult,
 } from './types';
 
@@ -106,6 +107,8 @@ export const greenhouse: JobSource = {
     if (!q.board) return noBoard('greenhouse', 'board token');
     const url = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(q.board)}/jobs?content=true`;
     const data = await fetchJson<{ jobs?: GhJob[] }>(url, { rps: 2 });
+    const drift = wrongShape('greenhouse', data.jobs);
+    if (drift) return drift;
 
     const postings = (data.jobs ?? []).map((j) => {
       // Greenhouse returns `content` HTML-escaped. Decoded first, or stripHtml finds no
@@ -152,6 +155,11 @@ export const lever: JobSource = {
     if (!q.board) return noBoard('lever', 'company slug');
     const url = `https://api.lever.co/v0/postings/${encodeURIComponent(q.board)}?mode=json`;
     const data = await fetchJson<LeverPost[]>(url, { rps: 2 });
+    // Lever's root IS the array, so `data.map` already threw on drift and the runner
+    // reported it as an error — loud, but as a stack-shaped message about `.map`. Named
+    // here instead, in the same words as its siblings.
+    const drift = wrongShape('lever', data);
+    if (drift) return drift;
 
     const postings = data.map((p) => {
       const text = p.descriptionPlain ?? '';
@@ -185,6 +193,60 @@ interface AshbyJob {
   employmentType?: string;
   isRemote?: boolean;
   publishedAt?: string;
+  compensation?: { summaryComponents?: AshbyPayComponent[] };
+}
+
+interface AshbyPayComponent {
+  /** Salary, EquityPercentage, EquityCashValue, Commission, Bonus. Only the first is pay. */
+  compensationType?: string;
+  /** "1 YEAR", "1 MONTH", "1 HOUR", or "NONE" for a component with no period. */
+  interval?: string;
+  currencyCode?: string | null;
+  minValue?: number | null;
+  maxValue?: number | null;
+}
+
+const ASHBY_INTERVAL: Record<string, 'hour' | 'week' | 'month' | 'year'> = {
+  '1 HOUR': 'hour',
+  '1 WEEK': 'week',
+  '1 MONTH': 'month',
+  '1 YEAR': 'year',
+};
+
+/**
+ * The pay Ashby states, rather than the pay a regex can find in the prose.
+ *
+ * The URL above has always asked for this — `includeCompensation=true` — and nothing read
+ * the answer, so every Ashby posting's pay came from running the text parser over the
+ * description. On a real board that is not a near miss: Ramp's Android internship states
+ * $11,700 a month here, and the text pass found an unrelated "$10,000 per year" further
+ * down the page and stored that. The queue showed the student a figure fourteen times too
+ * small, and the sort that puts better-paid postings first believed it.
+ *
+ * Only a `Salary` component is pay. Equity, bonus and commission are real numbers that
+ * answer a different question, and one of them landing in `min` would be worse than the
+ * regex ever was. A component with no interval is skipped rather than guessed at.
+ */
+function ashbyPay(job: AshbyJob): Record<string, unknown> | null {
+  const components = job.compensation?.summaryComponents;
+  if (!Array.isArray(components)) return null;
+
+  for (const c of components) {
+    if (c.compensationType !== 'Salary') continue;
+    if (typeof c.minValue !== 'number') continue;
+    const period = ASHBY_INTERVAL[String(c.interval ?? '').toUpperCase()];
+    if (!period) continue;
+    return {
+      min: c.minValue,
+      // A single-figure band arrives as min === max. Storing the pair anyway would render
+      // as "$11,700–$11,700/mo", which reads as a range somebody forgot to finish.
+      ...(typeof c.maxValue === 'number' && c.maxValue !== c.minValue ? { max: c.maxValue } : {}),
+      currency: c.currencyCode ?? 'USD',
+      period,
+      raw: 'stated by the employer on the job board',
+    };
+  }
+  return null;
 }
 
 export const ashby: JobSource = {
@@ -195,6 +257,8 @@ export const ashby: JobSource = {
     if (!q.board) return noBoard('ashby', 'board name');
     const url = `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(q.board)}?includeCompensation=true`;
     const data = await fetchJson<{ jobs?: AshbyJob[] }>(url, { rps: 2 });
+    const drift = wrongShape('ashby', data.jobs);
+    if (drift) return drift;
 
     const postings = (data.jobs ?? []).map((j) => {
       const text = j.descriptionPlain ?? '';
@@ -213,6 +277,10 @@ export const ashby: JobSource = {
       );
       // Ashby states remoteness structurally; trust that over the text heuristic.
       if (j.isRemote && !p.workArrangement) p.workArrangement = 'remote';
+      // And it states the pay, which is why the request asks for it. Only when it does:
+      // a board that publishes no band leaves the text reading in place rather than
+      // replacing a figure that was found with nothing.
+      p.compensation = ashbyPay(j) ?? p.compensation;
       return p;
     });
 

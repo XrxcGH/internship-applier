@@ -455,11 +455,32 @@ export interface ParsedComp {
 }
 
 /**
- * A money figure: an optional currency prefix glued to the dollar sign, one or two amounts
- * with an optional "k", and an optional period.
+ * How a posting can open a money figure: a dollar sign with an optional currency prefix
+ * glued to it, or a bare currency symbol.
+ *
+ * The symbols were missing, so this read dollars and nothing else — "£25 per hour" and
+ * "€2,000 per month" both parsed to null, and the posting went into the queue as pay not
+ * disclosed. Not an edge case: Ashby alone hands back GBP and SEK on an ordinary board.
  */
-const MONEY_RE =
-  /([A-Za-z]{1,3})?\$\s?([\d,]+(?:\.\d{2})?)\s*(k\b)?\s*(?:(?:-|–|—|to)\s*\$?\s?([\d,]+(?:\.\d{2})?)\s*(k\b)?)?\s*(?:\/|per\s+|an?\s+)?\s*(hour|hourly|hrs?|week|weekly|wk|month|monthly|mo|day|daily|year|yearly|yr|annually)?/gi;
+const CURRENCY_TOKEN = '(?:[A-Za-z]{1,3})?\\$|[£€¥₹]';
+
+/**
+ * A money figure: a currency opener, one or two amounts with an optional "k", and an
+ * optional period.
+ *
+ * The fractional part is `\.\d+` rather than `\.\d{2}`, which is the shape every ATS uses
+ * for an abbreviated range. "$211.4K – $290.6K a year" matched only "$211" — two decimal
+ * places or nothing — and the "K" was left outside the match, so a posting paying two
+ * hundred thousand a year was stored as $211 a MONTH, and the queue showed it that way
+ * beside the honest ones.
+ */
+const MONEY_RE = new RegExp(
+  `(${CURRENCY_TOKEN})\\s?([\\d,]+(?:\\.\\d+)?)\\s*(k\\b)?\\s*` +
+    `(?:(?:-|–|—|to)\\s*(?:${CURRENCY_TOKEN})?\\s?([\\d,]+(?:\\.\\d+)?)\\s*(k\\b)?)?\\s*` +
+    `(?:\\/|per\\s+|an?\\s+)?\\s*` +
+    `(hour|hourly|hrs?|week|weekly|wk|month|monthly|mo|day|daily|year|yearly|yr|annually)?`,
+  'gi',
+);
 
 const PERIOD_BY_UNIT: Record<string, 'hour' | 'day' | 'week' | 'month' | 'year'> = {
   hour: 'hour',
@@ -504,6 +525,27 @@ const DOLLAR_PREFIX: Record<string, string> = {
   mx: 'MXN',
   r: 'BRL',
 };
+
+/** The bare symbols, which name their currency outright rather than qualifying a dollar. */
+const SYMBOL_CURRENCY: Record<string, string> = {
+  '£': 'GBP',
+  '€': 'EUR',
+  '¥': 'JPY',
+  '₹': 'INR',
+};
+
+/**
+ * The currency a figure is in, from whatever opened it.
+ *
+ * USD is still the fallback, because a bare `$` on these boards overwhelmingly is one — but
+ * it is now a fallback rather than the only answer this function could give.
+ */
+function currencyOf(token: string | undefined): string {
+  const raw = (token ?? '$').trim();
+  const symbol = SYMBOL_CURRENCY[raw];
+  if (symbol) return symbol;
+  return DOLLAR_PREFIX[raw.replace(/\$$/, '').toLowerCase()] ?? 'USD';
+}
 
 /** Words that make the figure a company statistic rather than an offer of pay. */
 const NOT_PAY_BEFORE =
@@ -628,7 +670,7 @@ export function parseCompensation(text: string): ParsedComp | null {
 
   if (!best) return null;
 
-  const [, prefix, rawMin, kMin, rawMax, kMax] = best.match;
+  const [, opener, rawMin, kMin, rawMax, kMax] = best.match;
   const min = amount(rawMin!, kMin);
   const max = rawMax ? amount(rawMax, kMax) : undefined;
 
@@ -646,7 +688,7 @@ export function parseCompensation(text: string): ParsedComp | null {
   return {
     min,
     max,
-    currency: (prefix && DOLLAR_PREFIX[prefix.toLowerCase()]) || 'USD',
+    currency: currencyOf(opener),
     period,
     raw,
   };

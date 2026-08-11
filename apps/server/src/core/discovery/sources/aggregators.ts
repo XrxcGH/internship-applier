@@ -26,7 +26,13 @@ import {
   parseYear,
 } from '../normalize';
 import { parseLocation } from './ats';
-import type { JobSource, NormalizedPosting, SourceQuery, SourceResult } from './types';
+import {
+  wrongShape,
+  type JobSource,
+  type NormalizedPosting,
+  type SourceQuery,
+  type SourceResult,
+} from './types';
 
 function build(
   partial: Pick<
@@ -114,6 +120,8 @@ export const adzuna: JobSource = {
       `&content-type=application/json`;
 
     const data = await fetchJson<{ results?: AdzunaJob[]; count?: number }>(url, { rps: 1 });
+    const drift = wrongShape('adzuna', data.results);
+    if (drift) return drift;
 
     const postings = (data.results ?? []).map((j) =>
       build(
@@ -252,6 +260,9 @@ export const usajobs: JobSource = {
       SearchResult?: { SearchResultItems?: UsaJob[]; SearchResultCountAll?: number };
     };
 
+    const drift = wrongShape('usajobs', data.SearchResult?.SearchResultItems);
+    if (drift) return drift;
+
     const postings = (data.SearchResult?.SearchResultItems ?? []).map((item) => {
       const d = item.MatchedObjectDescriptor;
       const text = [d.UserArea?.Details?.JobSummary, ...(d.UserArea?.Details?.MajorDuties ?? [])]
@@ -355,11 +366,26 @@ export const githubList: JobSource = {
     }
 
     const postings: NormalizedPosting[] = [];
+    const closed: string[] = [];
     let unreadable = 0;
     for (const row of data) {
       const active = row['active'];
       const link = String(row['url'] ?? '');
-      if (active === false || !link.startsWith('http')) continue;
+      if (!link.startsWith('http')) continue;
+      /**
+       * `active: false` is the list saying this role has closed, and it was thrown away.
+       *
+       * The row was skipped and nothing else happened, so a posting stored by an earlier run
+       * stayed open — for forty-five days, until the staleness window expired it — and the
+       * queue went on offering a student an application they could no longer make. This is
+       * the best closure evidence in the whole pipeline: an explicit statement from the
+       * source, costing no request, where `refreshPostings` can only ask a URL whether it
+       * 404s and most closed postings answer 200 with "no longer accepting applications".
+       */
+      if (active === false) {
+        closed.push(canonicalUrl(link));
+        continue;
+      }
 
       const title = String(row['title'] ?? '');
       const company = String(row['company_name'] ?? '');
@@ -410,7 +436,7 @@ export const githubList: JobSource = {
 
     // The count above is a status line; the rows we lost are a hole in the search, and only
     // the second kind belongs in the run summary's list of what was missed.
-    return { postings, notes, gaps };
+    return { postings, notes, gaps, closed };
   },
 };
 

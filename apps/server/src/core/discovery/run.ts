@@ -6,7 +6,7 @@
  * everywhere" when we didn't, which is the failure mode that makes an automated search
  * tool untrustworthy — so degradation is always reported.
  */
-import { desc, eq, or, sql } from 'drizzle-orm';
+import { and, desc, eq, or, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { db, schema } from '../../infra/db/client';
 import { logger } from '../../infra/logger';
@@ -51,6 +51,8 @@ export interface RunSummary {
   found: number;
   new: number;
   duplicates: number;
+  /** Stored postings a source said outright have closed, and which this run shut. */
+  closed: number;
   bySource: SourceReport[];
   /** Populated whenever coverage was reduced. Never left implicit. */
   skipped: string[];
@@ -65,6 +67,7 @@ export async function runDiscovery(
   const reports: SourceReport[] = [];
   const collected: Array<{ posting: NormalizedPosting; source: string }> = [];
   const skipped: string[] = [];
+  const closedUrls: string[] = [];
 
   const limit = opts.concurrency ?? 4;
   const queue = [...targets];
@@ -117,6 +120,11 @@ export async function runDiscovery(
         });
         report.found = result.postings.length;
         report.notes = [...result.notes, ...(result.gaps ?? [])];
+        // A source naming its own closed roles is the best evidence of a closure there is,
+        // and it costs no request. Collected here and applied after every source has been
+        // read, so a posting one source calls closed and another returns as open in the
+        // same run stays open — the sighting is the stronger signal.
+        if (result.closed?.length) closedUrls.push(...result.closed);
         // A source that came back short says so here. Without this a run that stopped at
         // the first page of a paginated source, or dropped rows it could not read, was
         // reported to the user as a complete search of that source.
@@ -162,6 +170,8 @@ export async function runDiscovery(
 
   const { unique, duplicates } = dedupe(collected);
   const inserted = persist(unique);
+  const seen = new Set(unique.map((u) => u.posting.canonicalUrl));
+  const closed = closePostings(closedUrls.filter((u) => !seen.has(u)));
 
   for (const r of reports) {
     r.new = inserted.perSource.get(`${r.source}:${r.board}`) ?? 0;
@@ -175,12 +185,13 @@ export async function runDiscovery(
     found: collected.length,
     new: inserted.total,
     duplicates,
+    closed,
     bySource: reports,
     skipped,
   };
 
   logger.info(
-    { runId, found: summary.found, new: summary.new, duplicates, skipped: skipped.length },
+    { runId, found: summary.found, new: summary.new, duplicates, closed, skipped: skipped.length },
     'discovery run complete',
   );
 
@@ -240,6 +251,80 @@ export function saveManualPosting(posting: NormalizedPosting): string {
   return persist(unique).ids[0] ?? '';
 }
 
+/**
+ * What a later sighting is allowed to change about a posting already on file.
+ *
+ * A row was written once and then never touched again except for its timestamps, so anything
+ * the employer added after we first saw it never landed: a deadline announced a week later,
+ * a pay band filled in, a description rewritten. The deadline is the one that bites — stage 1
+ * of `refreshPostings` closes a posting whose `closesAt` has passed, and a `closesAt` that
+ * arrives after first sight could never reach the column, so that stage had nothing to read
+ * for most of the table. It also meant a parser improvement only ever applied to postings
+ * discovered after it shipped.
+ *
+ * ONLY NON-EMPTY VALUES, and that is the whole safety of it. The same posting is seen through
+ * different sources — the community list carries no description at all, and a run that
+ * re-sighted a Greenhouse posting through it would blank the description, the pay and the
+ * requirements if this overwrote blindly. A later sighting may add what was missing and
+ * correct what changed; it may never replace something with nothing.
+ *
+ * Company, title and canonical URL are deliberately absent. Those three are what dedupe
+ * matched on, so rewriting them from a different source's spelling would move the row out
+ * from under the key that found it.
+ */
+function freshFields(p: NormalizedPosting): Record<string, unknown> {
+  const set: Record<string, unknown> = {};
+  const put = (column: string, value: unknown): void => {
+    if (value === null || value === undefined) return;
+    if (typeof value === 'string' && value.trim() === '') return;
+    if (Array.isArray(value) && value.length === 0) return;
+    set[column] = value;
+  };
+
+  put('applyUrl', p.applyUrl);
+  put('descriptionText', p.descriptionText);
+  put('descriptionHtml', p.descriptionHtml);
+  put('locations', p.locations);
+  put('positionType', p.positionType);
+  put('workArrangement', p.workArrangement);
+  put('hybridDaysOnsite', p.hybridDaysOnsite);
+  put('remoteEligibleIn', p.remoteEligibleIn);
+  put('programFlags', p.programFlags);
+  put('term', p.term);
+  put('compensation', p.compensation);
+  put('requires', p.requires);
+  put('postedAt', p.postedAt);
+  put('closesAt', p.closesAt);
+  return set;
+}
+
+/**
+ * Closes the postings a source said outright are no longer open.
+ *
+ * Matched on canonical URL, which is the key the source published them under and the one
+ * stage 1 of dedupe already normalizes. A URL we have never stored matches nothing and costs
+ * one indexed lookup; there is no reason to complain about it, because a source listing its
+ * own closed roles will always name plenty we never saw open.
+ */
+function closePostings(urls: string[]): number {
+  let closed = 0;
+  for (const url of new Set(urls)) {
+    const rows = db
+      .select({ id: schema.jobPosting.id })
+      .from(schema.jobPosting)
+      .where(and(eq(schema.jobPosting.canonicalUrl, url), eq(schema.jobPosting.isOpen, true)))
+      .all();
+    for (const row of rows) {
+      db.update(schema.jobPosting)
+        .set({ isOpen: false, lastSeenAt: new Date().toISOString() })
+        .where(eq(schema.jobPosting.id, row.id))
+        .run();
+      closed += 1;
+    }
+  }
+  return closed;
+}
+
 interface PersistResult {
   total: number;
   perSource: Map<string, number>;
@@ -288,7 +373,7 @@ function persist(unique: ReturnType<typeof dedupe>['unique']): PersistResult {
         // and rows stored under the old key would otherwise keep matching two distinct
         // requisitions onto one row forever. Recomputing on every sighting means the table
         // heals itself as postings are seen again, with no data migration to get wrong.
-        .set({ lastSeenAt: now, isOpen: true, fingerprint: fp })
+        .set({ lastSeenAt: now, isOpen: true, fingerprint: fp, ...freshFields(p) })
         .where(eq(schema.jobPosting.id, existing[0].id))
         .run();
       linkSources(existing[0].id, entry.sources, p.externalId);

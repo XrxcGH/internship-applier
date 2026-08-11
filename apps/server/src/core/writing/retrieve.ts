@@ -465,15 +465,71 @@ export function retrieveEvidence(
  * Bounded, and separately from the corpus above. The retrieved set is sized so FactGuard
  * can never call a held fact invented, which on a busy resume means it is larger than a
  * prompt wants — and a fatter prompt drafts worse and costs more on every draft and every
- * revision. Taking the head of the array takes the round-robin's first rounds, so what
- * the model reads is one fact about each entry rather than eleven bullets from one of
- * them. For a resume made of one-line activities, breadth is the more useful half.
+ * revision.
+ *
+ * TAKING THE HEAD OF THE ARRAY WAS NOT ENOUGH, and the reason is the same base-score
+ * ordering the selection above already had to work around. The array is round-robin over
+ * entries, but the buckets come out ordered by their best item, and a bare role line scores
+ * +0.3 while a school scores +0.25 and a certification +0.05. On the resume this was found
+ * with — twenty-seven activities, twenty-six of them carrying no bullets at all — the first
+ * twenty-four lines were twenty-four bare "Title at Org (dates)" strings. The eleven honors
+ * and four certifications, which on that profile are the ONLY substance it holds, were in
+ * the corpus and never in the prompt: the model was asked to write about a person and shown
+ * nothing they had done.
+ *
+ * So the prompt is filled by round-robin over KINDS, in the order below, taking one line
+ * from each in turn. Experience leads because it is what most questions ask about; identity
+ * is pulled out and always first, since a draft that cannot use the writer's own name or
+ * city gets those blocked at G3. Within a kind the order is untouched, so it stays the
+ * relevance order the retrieval built.
  *
  * Facts below the line are not lost, they are only unwritten-about: the student can still
- * state them themselves at G3 and the guard will now recognise them.
+ * state them themselves at G3 and the guard will recognise them, because the corpus that
+ * guard reads is the whole set rather than this slice.
  */
+const PROMPT_KIND_ORDER: Array<Evidence['kind']> = [
+  'experience',
+  'education',
+  'project',
+  'skill',
+  'certification',
+  'language',
+];
+
 export function formatEvidence(evidence: Evidence[]): string {
-  return evidence
+  const byKind = new Map<string, Evidence[]>();
+  const identity: Evidence[] = [];
+  for (const e of evidence) {
+    if (e.kind === 'identity') identity.push(e);
+    else {
+      const list = byKind.get(e.kind);
+      if (list) list.push(e);
+      else byKind.set(e.kind, [e]);
+    }
+  }
+
+  // Listed order first, then anything whose kind this list has not been told about — a new
+  // kind must never be silently invisible to the prompt just because nobody updated a
+  // constant.
+  const kinds = [
+    ...PROMPT_KIND_ORDER.filter((k) => byKind.has(k)),
+    ...[...byKind.keys()].filter((k) => !PROMPT_KIND_ORDER.includes(k as Evidence['kind'])),
+  ];
+
+  const chosen: Evidence[] = [...identity];
+  for (let round = 0; chosen.length < PROMPT_EVIDENCE_LINES; round++) {
+    let placed = false;
+    for (const kind of kinds) {
+      const item = byKind.get(kind)?.[round];
+      if (!item) continue;
+      chosen.push(item);
+      placed = true;
+      if (chosen.length >= PROMPT_EVIDENCE_LINES) break;
+    }
+    if (!placed) break;
+  }
+
+  return chosen
     .slice(0, PROMPT_EVIDENCE_LINES)
     .map((e) => `[${e.ref}] ${e.text}`)
     .join('\n');
