@@ -347,6 +347,11 @@ function skipReason(r: FieldResult): 'redline' | 'unclassified' | 'no_match' | '
 const RUN_CONFLICTS: Array<{ startsWith: string; code: ApiErrorCode }> = [
   { startsWith: 'This application is already being filled', code: 'FILL_IN_PROGRESS' },
   { startsWith: 'No open fill run for this application', code: 'NO_RUN' },
+  // Raised by `startRun` and by `continueRun`, both from `claimBrowser`. A 502 here would be
+  // the worst answer available: it reads as "the site broke", and the client that retries it
+  // is racing the very run this refusal exists to protect.
+  { startsWith: 'Another application has the browser open', code: 'FILL_BROWSER_BUSY' },
+  { startsWith: 'This fill run was discarded', code: 'NO_RUN' },
 ];
 
 function refuse(
@@ -375,11 +380,35 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
       resumePath: loaded.data.resumePath,
     };
 
-    const run = await startRun(input);
-    if (run.state === 'failed') {
-      return reply.code(502).send({ error: { code: 'FILL_FAILED', message: run.message } });
+    /**
+     * The same conflict handling continue has had, because start can now refuse too.
+     *
+     * `startRun` used to report every outcome through `run.state === 'failed'`, so this route
+     * needed no catch. It now throws before a run exists at all for the two cases that are
+     * conflicts rather than failures — this application is already opening a browser, or a
+     * different one has the window — and without this those reached Fastify's handler as a
+     * 500 INTERNAL, which tells the user their server is broken when what they have to do is
+     * close the other browser.
+     */
+    try {
+      const run = await startRun(input);
+      if (run.state === 'failed') {
+        return reply.code(502).send({ error: { code: 'FILL_FAILED', message: run.message } });
+      }
+      return serializeRun(run);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const conflict = RUN_CONFLICTS.find((c) => message.startsWith(c.startsWith));
+      if (conflict) {
+        logger.info(
+          { applicationId: req.params.id, code: conflict.code },
+          'fill start refused: the browser is not free',
+        );
+        return reply.code(409).send({ error: { code: conflict.code, message } });
+      }
+      logger.error({ err, applicationId: req.params.id }, 'fill start failed');
+      return reply.code(502).send({ error: { code: 'FILL_FAILED', message } });
     }
-    return serializeRun(run);
   });
 
   /**

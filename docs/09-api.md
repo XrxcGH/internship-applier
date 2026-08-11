@@ -108,9 +108,9 @@ Errors use a consistent envelope:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/applications/:id/fill` | Rejects with `PROFILE_INCOMPLETE` without a confirmed profile, and `ANSWERS_NOT_APPROVED` if any answer lacks `approvedAt`. Streams steps over SSE. |
+| `POST` | `/api/applications/:id/fill` | Rejects with `PROFILE_INCOMPLETE` without a confirmed profile, and `ANSWERS_NOT_APPROVED` if any answer lacks `approvedAt`. Streams steps over SSE. Answers **409** `FILL_BROWSER_BUSY` while a different application has the browser open, and `FILL_IN_PROGRESS` while this one is already opening. |
 | `GET` | `/api/applications/:id/fill` | The current run: filled fields, read-backs, skips, and why. |
-| `POST` | `/api/applications/:id/fill/continue` | Resume after a pause (login wall, needs-input). |
+| `POST` | `/api/applications/:id/fill/continue` | Resume after a pause (login wall, needs-input). Answers **409** `FILL_IN_PROGRESS` while a call is already driving the page — one caller at a time, claimed before the first await rather than from the run's state, which lags several seconds behind. |
 | `DELETE` | `/api/applications/:id/fill` | Abandon the run and close the browser. |
 | `POST` | `/api/applications/:id/mark-submitted` | **G4.** Records that the user submitted it. Requires `{ confirmed: true }` — rejects with `CONFIRMATION_REQUIRED` without it, and `ILLEGAL_TRANSITION` from a status the model does not allow `submitted` to follow. |
 | `POST` | `/api/applications/:id/status` | Manual status transition with an optional note. |

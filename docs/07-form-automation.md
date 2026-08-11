@@ -14,6 +14,21 @@ user logs in once per vendor and the session survives. Storage state per domain 
 referenced from `credential_ref` — which stores **a path to a Playwright storage-state file,
 never a password**.
 
+**One profile directory means one browser, which means one application at a time.** Chromium
+locks `data/browser-profile/`, so a second `launchPersistentContext` against it cannot
+succeed. Runs are keyed per application and nothing used to stop a second one being started —
+the ordinary way in is to park run A on a login wall and go and start application B — so B
+failed on the lock and surfaced as a 502 carrying a raw Playwright complaint about a path.
+`POST /fill` now refuses with 409 `FILL_BROWSER_BUSY` and says which action clears it.
+
+Within one run, exactly one caller drives the page at a time, and the claim is taken
+**before the first await** rather than read off the run's state. `continueRun` spends its
+first several seconds in `detectIntervention` and `buildFormMap` with the state still reading
+`reading`, so a guard on `state === 'filling'` — which is what this had — let two continues
+through into `executePlan` against one page and one keyboard. `insertText` types into
+whatever has focus, so one run's approved essay could land in the box the other had just
+clicked into, on a live form. See `claimBrowser` in `core/filling/run.ts`.
+
 ### Login handling
 
 When a fill run hits a login wall:

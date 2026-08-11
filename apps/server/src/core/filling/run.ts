@@ -36,6 +36,72 @@ export interface FillRun {
 /** Live runs. One per application; starting a second discards the first. */
 const runs = new Map<string, FillRun>();
 
+/**
+ * Which application is driving the browser RIGHT NOW, claimed before the first await.
+ *
+ * The only mutual exclusion this file had was `run.state === 'filling'`, and a continue does
+ * not reach that state for several seconds: `detectIntervention` runs a dozen awaited
+ * locator counts and `buildFormMap` reads the whole document, all of it while the state still
+ * says `reading`. Two continues arriving inside that window both walked past the check and
+ * both reached `executePlan`, against one page and one keyboard. `insertText` types into
+ * whatever has focus, so one run's approved essay lands in the box the other has just clicked
+ * into — on a real employer's form, in the user's name. Read-back catches it afterwards as a
+ * pile of mismatches, which is a strange way to find out.
+ *
+ * A flag rather than a queue, and refusal rather than waiting: a run parks at `awaiting_user`
+ * for as long as it takes a person to sign in, and a second caller queued behind that would
+ * hang for minutes with nothing to show. `null` between calls, and set SYNCHRONOUSLY — the
+ * moment a claim is made across an await boundary instead, this is the bug again.
+ */
+let driving: string | null = null;
+
+/**
+ * Takes the browser for the duration of one call, or says who has it.
+ *
+ * Both messages are matched by prefix in routes/filling.ts to pick a status code, so their
+ * openings are load-bearing: a caller has to be able to tell "wait a moment" from "something
+ * broke", and the whole reason those two are separated there is that a 502 invites a retry
+ * that makes this exact race.
+ */
+function claimBrowser(applicationId: string): void {
+  if (driving === applicationId) {
+    throw new Error('This application is already being filled. Wait for that run to finish.');
+  }
+  if (driving !== null) {
+    throw new Error(
+      'Another application has the browser open. There is one browser profile on this ' +
+        'machine, so one application can be filled at a time. Finish that one, or discard ' +
+        'it, and try this again.',
+    );
+  }
+  driving = applicationId;
+}
+
+function releaseBrowser(applicationId: string): void {
+  if (driving === applicationId) driving = null;
+}
+
+/**
+ * Another application with a browser window already open, if there is one.
+ *
+ * Every run launches `launchPersistentContext` against the single shared profile directory
+ * (browser.ts), so a second window cannot exist: Chromium refuses the profile lock. Nothing
+ * stopped a second application from trying, though — runs are keyed per application, and the
+ * ordinary flow gets there easily, with run A parked on a login wall while the user goes and
+ * starts application B. B failed on the lock and surfaced as a 502 carrying a raw Playwright
+ * message about a directory, which explains neither what happened nor the one thing that
+ * fixes it.
+ *
+ * A run without a session holds no window — it failed to open, or has already been
+ * discarded — so it does not stand in the way.
+ */
+function browserHeldBy(applicationId: string): FillRun | undefined {
+  for (const run of runs.values()) {
+    if (run.applicationId !== applicationId && run.session) return run;
+  }
+  return undefined;
+}
+
 export function getRun(applicationId: string): FillRun | undefined {
   return runs.get(applicationId);
 }
@@ -111,6 +177,43 @@ export interface StartInput {
  * found, and what it intends to leave alone, while the form is still untouched.
  */
 export async function startRun(input: StartInput): Promise<FillRun> {
+  // Claimed before anything is awaited, and held across the discard, the launch and the read.
+  // A second start for this application used to arrive while the first was still inside
+  // `openSession`: it found a run whose `session` was undefined, so the discard closed
+  // nothing, deleted the map entry, and registered its own — and when the first launch
+  // resolved, its BrowserContext was attached to an object no longer in `runs`. Unreachable
+  // by `discardRun`, by `closeAllRuns` on shutdown, and by the close that delete-all does
+  // before removing the profile directory, so it sat there holding the lock on a directory
+  // every later run needs and delete-all is trying to remove.
+  claimBrowser(input.applicationId);
+  try {
+    const held = browserHeldBy(input.applicationId);
+    if (held) {
+      throw new Error(
+        'Another application has the browser open. There is one browser profile on this ' +
+          'machine, so one application can be filled at a time. Finish that one, or discard ' +
+          'it, and try this again.',
+      );
+    }
+    return await open(input);
+  } finally {
+    releaseBrowser(input.applicationId);
+  }
+}
+
+/**
+ * Raised when the run was discarded out from under a launch that was still starting.
+ *
+ * Thrown rather than turned into a `failed` run like every other problem in here, because it
+ * is not one: nothing about the browser or the page went wrong, the user asked for this run
+ * to go away and it did. A `failed` run would be answered with a 502 saying the site broke,
+ * and it would be a run object the registry no longer holds — a thing with a state, sitting
+ * outside the map that is supposed to be the only place run state lives. Named rather than
+ * matched loosely so the rethrow below cannot start catching real launch failures.
+ */
+const DISCARDED_WHILE_OPENING = 'This fill run was discarded while the browser was opening.';
+
+async function open(input: StartInput): Promise<FillRun> {
   await discardRun(input.applicationId);
 
   const run: FillRun = {
@@ -123,7 +226,16 @@ export async function startRun(input: StartInput): Promise<FillRun> {
   runs.set(input.applicationId, run);
 
   try {
-    run.session = await openSession({ headless: input.headless ?? false });
+    const session = await openSession({ headless: input.headless ?? false });
+    // Discarding does not wait for the claim above — shutdown and delete-all have to be able
+    // to close a browser whatever else is happening — so the entry this launch belongs to can
+    // still have been removed while Chromium was starting. Attaching the session to a run
+    // nobody holds is the orphan by another route; closing it here is the only chance.
+    if (runs.get(input.applicationId) !== run) {
+      await session.close();
+      throw new Error(DISCARDED_WHILE_OPENING);
+    }
+    run.session = session;
     await run.session.page.goto(input.applyUrl, { waitUntil: 'domcontentloaded' });
 
     run.state = 'reading';
@@ -151,6 +263,9 @@ export async function startRun(input: StartInput): Promise<FillRun> {
     run.message = summarizeMap(run.map);
     return run;
   } catch (err) {
+    // See DISCARDED_WHILE_OPENING: the user asked for this run to go away, which is not a
+    // failure to report and not a run to hand back.
+    if (err instanceof Error && err.message === DISCARDED_WHILE_OPENING) throw err;
     run.state = 'failed';
     run.message = err instanceof Error ? err.message : String(err);
     logger.error({ err, applicationId: input.applicationId }, 'fill run failed to start');
@@ -171,13 +286,29 @@ export async function continueRun(input: StartInput): Promise<FillRun> {
     throw new Error('No open fill run for this application. Start one first.');
   }
 
-  // One fill at a time, per run. Two overlapping continues share a page and a keyboard —
-  // `insertText` goes to whatever has focus, so one run's approved essay lands in the box the
-  // other just clicked into — and there is no legitimate caller that needs it. The UI cannot
-  // produce this (its buttons disable while a call is in flight), but the local API is a
-  // supported way to drive this server and a second tab can be looking at a stale screen.
-  if (run.state === 'filling') {
-    throw new Error('This application is already being filled. Wait for that run to finish.');
+  /**
+   * One caller in the page at a time, claimed before the first await.
+   *
+   * This was `run.state === 'filling'`, which is the wrong question: a continue spends its
+   * first several seconds in `detectIntervention` and `buildFormMap` with the state still
+   * reading `reading`, and two continues arriving inside that window both walked past the
+   * check and both reached `executePlan` — one page, one keyboard, `insertText` going to
+   * whatever has focus. The UI cannot produce it (its buttons disable while a call is in
+   * flight), but the local API is a supported way to drive this server, a second tab can be
+   * looking at a stale screen, and until routes/filling.ts learned to answer a conflict with
+   * 409 the honest 502 on the first call invited a client to retry straight into it.
+   */
+  claimBrowser(input.applicationId);
+  try {
+    return await drive(run, input);
+  } finally {
+    releaseBrowser(input.applicationId);
+  }
+}
+
+async function drive(run: FillRun, input: StartInput): Promise<FillRun> {
+  if (!run.session) {
+    throw new Error('No open fill run for this application. Start one first.');
   }
 
   // Everything past this point ends in a state the user can act on, the same way starting a
