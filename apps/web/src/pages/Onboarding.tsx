@@ -8,7 +8,7 @@ import {
   isDismissible,
   OPTIONAL_WIZARD_FIELDS,
 } from '../lib/review';
-import { readUrlField, tidyList } from '../lib/profileEdit';
+import { dateProblem, readUrlField, remapListFlags, tidyList } from '../lib/profileEdit';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Notice, SelectField, TextField } from '../components/Controls';
 import {
@@ -282,6 +282,21 @@ export function tidyProfileLists(profile: CandidateProfile): CandidateProfile {
     ...(profile.skills && {
       skills: profile.skills.map((s) => ({ ...s, name: s.name.trim() })),
     }),
+    // Certifications and languages were left out of this, and both editors grow rows the
+    // same way every other list does. The schema takes a blank name for either, so an "Add
+    // certification" clicked and abandoned saved `{ name: '' }` onto the profile and stayed
+    // there: nothing named it, nothing dropped it, and the certification evidence line then
+    // quoted an empty name back to the user at G3 as a fact about them.
+    ...(profile.certifications && {
+      certifications: profile.certifications
+        .map((c) => ({ ...c, name: c.name.trim(), issuer: c.issuer?.trim() }))
+        .filter((c) => c.name !== ''),
+    }),
+    ...(profile.languages && {
+      languages: profile.languages
+        .map((l) => ({ name: l.name.trim(), proficiency: l.proficiency.trim() }))
+        .filter((l) => l.name !== ''),
+    }),
     ...(profile.links && {
       links: {
         ...profile.links,
@@ -322,27 +337,50 @@ export function blankInstitutions(profile: CandidateProfile): number[] {
  */
 export function savingProblems(profile: CandidateProfile): string[] {
   const out: string[] = [];
+  const date = (label: string, value: string | undefined): void => {
+    const problem = dateProblem(value);
+    if (problem) out.push(`${label}: ${problem}.`);
+  };
 
   const schools = blankInstitutions(profile);
   if (schools.length === 1) out.push(`School ${schools[0]! + 1} has no name.`);
   else if (schools.length > 1) {
     out.push(`Schools ${schools.map((i) => i + 1).join(', ')} have no name.`);
   }
+  (profile.education ?? []).forEach((e, i) => {
+    date(`School ${i + 1} started`, e.startDate);
+    date(`School ${i + 1} finishes`, e.endDate);
+  });
 
   (profile.experience ?? []).forEach((e, i) => {
     if (e.title.trim() === '') out.push(`Entry ${i + 1} has no title.`);
     if (e.organization.trim() === '') out.push(`Entry ${i + 1} has no organization.`);
+    date(`Entry ${i + 1} started`, e.startDate);
+    date(`Entry ${i + 1} finished`, e.endDate);
   });
 
   (profile.projects ?? []).forEach((p, i) => {
     if (p.name.trim() === '') out.push(`Project ${i + 1} has no name.`);
     const { problem } = readUrlField(p.url);
     if (problem) out.push(`Project ${i + 1}: ${problem}.`);
+    date(`Project ${i + 1} started`, p.startDate);
+    date(`Project ${i + 1} finished`, p.endDate);
   });
 
   (profile.skills ?? []).forEach((s, i) => {
     if (s.name.trim() === '') out.push(`Skill ${i + 1} has no name.`);
   });
+
+  (profile.certifications ?? []).forEach((c, i) => {
+    date(`Certification ${i + 1} earned`, c.date);
+  });
+
+  // The schema takes an address or the empty string and nothing in between, and this box has
+  // always stored raw text. A scraped address "fixed" to "rosa.dean (at) gmail.com" was the
+  // same unnamed wall as the dates: every save button live, and a shape error naming no field.
+  if (profile.email !== undefined && profile.email.trim() !== '' && !EMAIL.test(profile.email)) {
+    out.push(`"${profile.email}" is not an email address.`);
+  }
 
   for (const key of ['github', 'linkedin', 'portfolio'] as const) {
     const { problem } = readUrlField(profile.links?.[key]);
@@ -351,6 +389,9 @@ export function savingProblems(profile: CandidateProfile): string[] {
 
   return out;
 }
+
+/** Deliberately the loose shape the schema takes, not a stricter one this screen invents. */
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * The withdrawals from two writes in a row, listed once each.
@@ -454,6 +495,27 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
    * per edit: the GPA boxes do, on the one keystroke that takes a number the profile already
    * held back off it. See `editGpaBox`.
    */
+  /**
+   * A change that moved entries around, with this list's review flags moved to match.
+   *
+   * Flags are positional — `experience.3.startDate` — and nothing could move an entry until
+   * the editors added Up, Down and Remove. Without this, one Remove made the gate's amber
+   * markers point at the wrong rows, and removing the last flagged entry left a flag
+   * addressing a row that no longer exists: invisible on screen, and still counted by the
+   * gate that blocks until the list is empty.
+   */
+  const editList = useCallback(
+    (prefix: string, fn: (p: CandidateProfile) => CandidateProfile, moved?: number[]) => {
+      setProfile((prev) => {
+        if (!prev) return prev;
+        const next = fn(prev);
+        if (!moved) return next;
+        return { ...next, needsReview: remapListFlags(next.needsReview, prefix, moved) };
+      });
+    },
+    [],
+  );
+
   const editEducation = useCallback(
     (index: number, next: EducationEntry, clears?: string, options?: { raise?: boolean }) => {
       patch(
@@ -684,12 +746,22 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 flag it answers by the same rule. The entry editors pass no `clears` for a
                 field nobody flagged, which keeps `nextReviewFlags` from inventing work at a
                 gate that blocks on its list being empty. */}
-            <ExperienceEditor profile={profile} flagged={flagged} edit={patch} />
-            <ProjectsEditor profile={profile} flagged={flagged} edit={patch} />
-            <SkillsEditor profile={profile} flagged={flagged} edit={patch} />
-            <CertificationsEditor profile={profile} flagged={flagged} edit={patch} />
-            <LanguagesEditor profile={profile} flagged={flagged} edit={patch} />
-            <LinksEditor profile={profile} flagged={flagged} edit={patch} />
+            <ExperienceEditor
+              profile={profile}
+              flagged={flagged}
+              edit={patch}
+              editList={editList}
+            />
+            <ProjectsEditor profile={profile} flagged={flagged} edit={patch} editList={editList} />
+            <SkillsEditor profile={profile} flagged={flagged} edit={patch} editList={editList} />
+            <CertificationsEditor
+              profile={profile}
+              flagged={flagged}
+              edit={patch}
+              editList={editList}
+            />
+            <LanguagesEditor profile={profile} flagged={flagged} edit={patch} editList={editList} />
+            <LinksEditor profile={profile} flagged={flagged} edit={patch} editList={editList} />
           </Section>
 
           {namelessNotice}

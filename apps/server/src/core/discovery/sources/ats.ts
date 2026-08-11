@@ -27,6 +27,25 @@ import {
   type SourceResult,
 } from './types';
 
+/**
+ * What a target with no board token is: a hole in the search, not an empty board.
+ *
+ * These three adapters fetch a named company's whole board, so without the name there is
+ * nothing to fetch. Reported as a `note` this was invisible — `notes` alone sets neither
+ * `degraded` nor `skipped` (run.ts), so the run summary read "greenhouse: 0 found" and the
+ * user concluded the company had nothing open, when in truth nothing had been asked.
+ */
+function noBoard(source: string, what: string): SourceResult {
+  return {
+    postings: [],
+    notes: [],
+    gaps: [
+      `${source}: no ${what} was supplied, so this target fetched nothing. It is not that ` +
+        'the board is empty — it was never asked.',
+    ],
+  };
+}
+
 function build(
   partial: Pick<
     NormalizedPosting,
@@ -84,7 +103,7 @@ export const greenhouse: JobSource = {
   requiresKey: false,
   isConfigured: () => true,
   async fetch(q: SourceQuery): Promise<SourceResult> {
-    if (!q.board) return { postings: [], notes: ['greenhouse: no board token supplied'] };
+    if (!q.board) return noBoard('greenhouse', 'board token');
     const url = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(q.board)}/jobs?content=true`;
     const data = await fetchJson<{ jobs?: GhJob[] }>(url, { rps: 2 });
 
@@ -130,7 +149,7 @@ export const lever: JobSource = {
   requiresKey: false,
   isConfigured: () => true,
   async fetch(q: SourceQuery): Promise<SourceResult> {
-    if (!q.board) return { postings: [], notes: ['lever: no company slug supplied'] };
+    if (!q.board) return noBoard('lever', 'company slug');
     const url = `https://api.lever.co/v0/postings/${encodeURIComponent(q.board)}?mode=json`;
     const data = await fetchJson<LeverPost[]>(url, { rps: 2 });
 
@@ -173,7 +192,7 @@ export const ashby: JobSource = {
   requiresKey: false,
   isConfigured: () => true,
   async fetch(q: SourceQuery): Promise<SourceResult> {
-    if (!q.board) return { postings: [], notes: ['ashby: no board name supplied'] };
+    if (!q.board) return noBoard('ashby', 'board name');
     const url = `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(q.board)}?includeCompensation=true`;
     const data = await fetchJson<{ jobs?: AshbyJob[] }>(url, { rps: 2 });
 

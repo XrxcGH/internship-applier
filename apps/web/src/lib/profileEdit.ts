@@ -50,6 +50,70 @@ export function readUrlField(raw: string | null | undefined): {
   return { url: candidate, problem: null };
 }
 
+/**
+ * Rewrites the review-flag paths for one list after its entries have moved or gone.
+ *
+ * Flags are positional — the extractor raises `experience.3.startDate`, `certifications.0.date`
+ * — and nothing had ever moved an entry before these editors added Up, Down and Remove. So one
+ * click made the gate's markers point at the wrong rows: remove entry 2 and the genuinely
+ * doubtful entry renders clean while its neighbour wears an amber "check this" on a date the
+ * extractor was perfectly sure of. Remove the LAST flagged entry and the flag points past the
+ * end of the list, where no control can show it — leaving a flag at sign-off for a row that
+ * does not exist, on a gate that blocks until its list is empty.
+ *
+ * `oldIndexForNew[newIndex] = oldIndex`. An old index missing from that array is an entry that
+ * was removed, and its flags go with it: they described a row the user deleted.
+ */
+export function remapListFlags(
+  needsReview: string[],
+  prefix: string,
+  oldIndexForNew: number[],
+): string[] {
+  const newIndexForOld = new Map<number, number>();
+  oldIndexForNew.forEach((oldIndex, newIndex) => newIndexForOld.set(oldIndex, newIndex));
+
+  const pattern = new RegExp(`^${prefix}\\.(\\d+)(\\..*)?$`);
+  const out: string[] = [];
+  for (const flag of needsReview) {
+    const m = pattern.exec(flag);
+    if (!m) {
+      out.push(flag);
+      continue;
+    }
+    const moved = newIndexForOld.get(Number(m[1]));
+    if (moved === undefined) continue;
+    out.push(`${prefix}.${String(moved)}${m[2] ?? ''}`);
+  }
+  return [...new Set(out)];
+}
+
+/** The identity permutation for a list of `length`, which every move and removal starts from. */
+export function indexRange(length: number): number[] {
+  return Array.from({ length }, (_, i) => i);
+}
+
+/**
+ * The one shape the profile stores a date in, checked here rather than trusted to the input.
+ *
+ * Every date box in this wizard is `<input type="month">`, which in Chrome guarantees the
+ * `YYYY-MM` the schema demands. Firefox and desktop Safari do not implement `type="month"`
+ * at all: it degrades to a plain text box, the user types "June 2025" or "2025-6", it is
+ * stored verbatim, and `YearMonth` (packages/shared/src/profile.ts) rejects the save with
+ * "Profile did not match the expected shape" naming no field — on a screen that can hold
+ * twenty-seven entries with two date boxes each. That is the unnamed wall this whole guard
+ * exists to remove, and it was reachable in two of the three major browsers.
+ *
+ * Empty is a complete answer everywhere a date appears here: an absent start date is
+ * ordinary, and an absent end date is how the profile spells "still there".
+ */
+const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+export function dateProblem(raw: string | null | undefined): string | null {
+  const text = (raw ?? '').trim();
+  if (text === '' || YEAR_MONTH.test(text)) return null;
+  return `"${text}" is not a month — write it as 2027-06`;
+}
+
 /** Trims a list of free-text rows and drops the ones "Add" left empty. */
 export function tidyList(xs: string[] | undefined): string[] | undefined {
   return xs === undefined ? undefined : xs.map((x) => x.trim()).filter((x) => x !== '');

@@ -40,7 +40,10 @@ export function Settings() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null);
-  const [deleted, setDeleted] = useState<string | null>(null);
+  const [deleted, setDeleted] = useState<{
+    message: string;
+    failed: Array<{ path: string; reason: string }>;
+  } | null>(null);
 
   // Every action handler on this page surfaces its errors; the mount path used to be the
   // one that did not, so a failed fetch left "Checking…" and "Reading the ledger…"
@@ -83,7 +86,7 @@ export function Settings() {
     setError(null);
     try {
       const r = await deleteEverything(confirmText);
-      setDeleted(r.message);
+      setDeleted({ message: r.message, failed: r.failed });
       setConfirmText('');
       refresh();
     } catch (err) {
@@ -238,7 +241,21 @@ export function Settings() {
 
       <Section n="04" title="Delete everything" step={6}>
         {deleted ? (
-          <Notice tone="verified">{deleted}</Notice>
+          /* Green only when everything really went. A delete that left files behind used to
+             report in the same green as one that did not, with the list of survivors dropped
+             on the client — on the one screen whose whole promise is that nothing is kept. */
+          <Notice tone={deleted.failed.length === 0 ? 'verified' : 'caution'}>
+            {deleted.message}
+            {deleted.failed.length > 0 && (
+              <ul className="mt-3 space-y-1.5">
+                {deleted.failed.map((f) => (
+                  <li key={f.path} className="u-prose text-[0.9375rem]">
+                    <span className="u-data">{f.path}</span> — {f.reason}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Notice>
         ) : preview === null ? (
           <div className="u-card-flat px-5 py-5">
             {/* The precondition holds either way, but saying "loading" over a failed

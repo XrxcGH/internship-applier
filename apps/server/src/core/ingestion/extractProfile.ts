@@ -101,14 +101,15 @@ const SYSTEM = `You extract structured data from a resume or CV. You are one ste
 Rules:
 - Report only what the document actually says. Do not infer, embellish, or normalize job titles, skills, or dates.
 - Copy experience and project bullet points VERBATIM. They are used later as the evidence corpus for verifying generated application text, so paraphrasing them corrupts that check.
-- Copy ALL of them. Every line printed under an entry belongs to that entry's bullets — under a club, a sport, an activity or a volunteer role exactly as under a paid job. An entry that has lines under it in the document and comes back with an empty bullets array leaves the person with nothing behind any sentence they later write about it, and the tool will refuse that sentence even though it is true.
+- Copy ALL of them, and copy the description wherever it sits. A line under the entry is a bullet; so is the text after a dash or a comma on the entry's own line ("Debate Team Captain — organized weekly tournaments for 40 students" is a title, an organization, AND a bullet). This holds for a club, a sport, an activity or a volunteer role exactly as for a paid job. An entry that has any description in the document and comes back with an empty bullets array leaves the person with nothing behind any sentence they later write about it, and the tool will refuse that sentence even though it is true.
+- A section that lists several activities on one line — "Activities: National Honor Society, Chess Club, Varsity Soccer" — is one entry per activity, each with the activity as the organization.
 - One stated role is one entry. Do not split a role across several entries, and do not emit a separate entry for each line printed under an organization.
 - A skills section — headed Skills, Technical Skills, Software, Tools, or anything similar — fills the skills array: one entry per named skill, each with a category. Skills the document names inside a bullet or a coursework line belong there too. A skills section is never an experience entry.
 - A named piece of work with a description — a personal or class project, a build, a research project, a portfolio piece — is a projects entry. A named position at an organization is an experience entry.
 - Pronouns stated in the document (a header line like "he/they") go in the pronouns field, never in the name.
 - A weighted and an unweighted GPA are two facts: the unweighted figure goes in gpaValue, the weighted one in gpaWeighted, and the scale in gpaScale. Do not average, pick, or drop either.
 - Awards and honors go VERBATIM into the honors array of the education entry they belong to (their dates usually say which). An award that names no school (Eagle Scout, a President's Volunteer Service Award) still goes on the education entry for the school the student attended; if the document lists NO education at all, record it as an experience entry — the awarding organization as the organization, the award as the title, type "club" or "volunteer" — and add its path to needsReview. Leadership positions, club memberships and activities are experience entries — type "club" or "volunteer" — with the position as the title and the organization as stated. None of this may be silently dropped: for a student early in their path, these sections are most of the resume.
-- Dates are YYYY-MM. If only a year is given, use YYYY-01 and add the field's path to needsReview. If a date is absent, use null.
+- Copy every date EXACTLY as the document prints it — "2026", "Summer 2025", "Jun-Aug 2025", "Expected May 2027", "Aug 2026 - Present". Do not normalize, complete, or repair a date, and never turn a bare year into a month. If a date is absent, use null.
 - An ongoing role has endDate null.
 - If a value is not present in the document, use null or an empty array. Never invent a plausible value.
 - Add a dotted path to needsReview for anything ambiguous, low-confidence, or reconstructed — for example "education.0.endDate" or "experience.2.type".
@@ -162,6 +163,30 @@ export async function extractResume(input: ExtractionInput): Promise<ResumeExtra
 
   if (result.stopReason === 'refusal') {
     throw new Error('The model declined to process this document. Nothing was extracted.');
+  }
+
+  /**
+   * The output budget running out, named as itself.
+   *
+   * Only `refusal` was checked, so a resume long enough to exhaust `maxTokens` — and the
+   * bullets rule above makes the output strictly longer, on top of a budget the API backend
+   * also spends on thinking — fell through to the JSON parse below and came back as "the
+   * model returned something this app could not read as a resume". That sentence blames the
+   * output format, suggests nothing, and is identical on every retry, so the one action it
+   * implies (upload it again) fails the same way forever.
+   *
+   * This cannot catch the quieter version of the same pressure, where the model stays inside
+   * the budget by returning every entry with an empty `bullets` array and closes valid JSON:
+   * that answers `end_turn` and is caught downstream by `lostTheEvidence` in toProfile.ts,
+   * which flags it for the user at G1 rather than pretending the reading was complete.
+   */
+  if (result.stopReason === 'max_tokens') {
+    logger.error({ provider: result.provider }, 'resume extraction ran out of output budget');
+    throw new Error(
+      'This resume is longer than one reading can return, so the extraction was cut off ' +
+        'partway and nothing was kept. Nothing is wrong with the file. Try the shorter ' +
+        'version of your resume, or split it and upload the halves one after the other.',
+    );
   }
 
   const raw = result.structured ?? safeJson(result.text);

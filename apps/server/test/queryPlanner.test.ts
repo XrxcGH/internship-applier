@@ -464,8 +464,14 @@ describe('pinned companies', () => {
       filters({ company: { onlyCompanies: ['Acme'], excludeCompanies: [] } }),
       [{ source: 'lever', board: 'acme', reason: 'resolved' }],
     );
-    expect(plan.targets).toHaveLength(1);
-    expect(plan.targets[0]).toMatchObject({ source: 'lever', board: 'acme' });
+    // One board for the company, and the community list, which every plan carries until a
+    // run has resolved it as a source of its own. The whole list is asserted rather than
+    // just the first entry, because "guessed as well as resolved" is the failure this test
+    // is for and a `toContainEqual` would not see it.
+    expect(plan.targets).toEqual([
+      { source: 'github_list', board: '', reason: expect.stringContaining('community') },
+      { source: 'lever', board: 'acme', reason: 'company you pinned' },
+    ]);
     expect(plan.notes.join(' ')).not.toMatch(/no resolved board yet/i);
   });
 
@@ -488,5 +494,88 @@ describe('pinned companies', () => {
     expect(plan.targets.filter((t) => t.reason.startsWith('company you pinned'))).toHaveLength(3);
     expect(plan.targets).toHaveLength(4);
     expect(plan.notes.join(' ')).toMatch(/truncated/i);
+  });
+});
+
+/**
+ * The cold start: what a plan contains for somebody who has never run anything.
+ *
+ * Targets came only from pinned companies and from boards a PREVIOUS run had resolved, so a
+ * fresh install planned nothing at all — and the note it printed sent the user off to name
+ * companies and paste URLs without mentioning the one source that needs neither a company
+ * nor a key, and which returns more postings than everything else here combined. The plan
+ * could only start working after a run the plan itself could not have produced.
+ */
+describe('the community list', () => {
+  it('is in the plan for somebody who has run nothing and pinned nobody', () => {
+    const plan = planQueries(profile(), filters());
+    expect(plan.targets).toEqual([
+      { source: 'github_list', board: '', reason: expect.stringContaining('community') },
+    ]);
+    expect(plan.notes.join(' ')).not.toMatch(/no company boards resolved/i);
+  });
+
+  it('is not planned twice once a run has resolved it as a source', () => {
+    const plan = planQueries(profile(), filters(), [
+      { source: 'github_list', board: '', reason: 'already resolved from a previous run' },
+    ]);
+    expect(plan.targets.filter((t) => t.source === 'github_list')).toHaveLength(1);
+  });
+
+  it('survives truncation, because dropping it drops the whole plan of a new user', () => {
+    const known = Array.from({ length: 10 }, (_, i) => ({
+      source: 'greenhouse' as const,
+      board: `board${String(i)}`,
+      reason: 'known',
+    }));
+    const plan = planQueries(profile(), filters(), known, { maxTargets: 3 });
+    expect(plan.targets).toHaveLength(3);
+    expect(plan.targets[0]).toMatchObject({ source: 'github_list' });
+  });
+});
+
+describe('a company name no board slug can be built from', () => {
+  /**
+   * `slugCandidates` keeps [a-z0-9] and nothing else, so a name in a non-Latin script has
+   * no candidates. `slugs[0]!` was `undefined`, the non-null assertion hid it from the type
+   * checker, and JSON.stringify dropped the key on the way out — so the plan answered with
+   * targets carrying no `board` at all, and the first `.trim()` on the client threw during
+   * render. With no error boundary anywhere in the app, the screen went blank.
+   */
+  it('plans no target for it, and says why', () => {
+    const plan = planQueries(
+      profile(),
+      filters({ company: { onlyCompanies: ['삼성전자'], excludeCompanies: [] } }),
+    );
+    expect(plan.targets.filter((t) => t.source !== 'github_list')).toEqual([]);
+    expect(plan.notes.join(' ')).toMatch(/cannot be guessed/i);
+  });
+
+  it('never answers with a target whose board is missing', () => {
+    for (const name of ['삼성전자', '字节跳动', 'Co.', '...', '   ']) {
+      const plan = planQueries(
+        profile(),
+        filters({ company: { onlyCompanies: [name], excludeCompanies: [] } }),
+      );
+      for (const t of plan.targets) {
+        expect({ name, board: typeof t.board }).toEqual({ name, board: 'string' });
+      }
+    }
+  });
+});
+
+describe('two spellings of one company', () => {
+  it('produce one target per board rather than one per spelling', () => {
+    // "Stripe" and "Stripe Inc" are two strings to onlyCompanies and one slug to
+    // slugCandidates, so each minted its own greenhouse, lever and ashby target. A
+    // duplicated target is fetched twice, counted twice in `found`, and filed as a
+    // duplicate of itself — and on the Discover screen the two chips collided on their key.
+    const plan = planQueries(
+      profile(),
+      filters({ company: { onlyCompanies: ['Stripe', 'Stripe Inc'], excludeCompanies: [] } }),
+    );
+    const keys = plan.targets.map((t) => `${t.source}:${t.board}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(plan.targets.filter((t) => t.source === 'greenhouse')).toHaveLength(1);
   });
 });

@@ -394,8 +394,17 @@ function statedMonth(read: ReadDate): string | undefined {
  *
  * A card is a point in time, and the only duration claim it can support runs from that
  * point to today, so the earliest month of the stated year is the reading that cannot make
- * that span shorter than the truth. It is also, exactly, the repair the extractor is told
- * to make and sometimes does not ("If only a year is given, use YYYY-01").
+ * that span shorter than the truth.
+ *
+ * This repair is made HERE and only here, and the extractor is now told the opposite — copy
+ * every date exactly as printed, never turn a bare year into a month. It used to be told to
+ * write YYYY-01 itself, which was the one remaining way a wrong date reached the profile
+ * with nothing flagged: a model that normalized "2026" to "2026-01" but forgot to add the
+ * path to `needsReview` handed this file a clean, unranged month it could not tell from a
+ * genuinely stated January. On a certification that is the safe direction; on an education
+ * END date it is not, and it made a June graduate `ineligible` for a posting wanting the
+ * class of 2026 with no flag anywhere to show for it. Widening belongs in the reader that
+ * knows which field it is widening.
  *
  * Unlike the experience entries above there is no conservative fallback here: a dated
  * certification is what scopes the claim to itself, and with the date dropped the sentence

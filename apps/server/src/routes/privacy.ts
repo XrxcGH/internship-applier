@@ -59,13 +59,37 @@ export async function privacyRoutes(app: FastifyInstance): Promise<void> {
     await closeAllRuns();
 
     const result = await deleteEverything();
-    logger.warn({ paths: result.deletedPaths.length }, 'delete-all completed');
+
+    /**
+     * The message tells the truth about what actually went.
+     *
+     * `deleteEverything` has always collected a `failed` list — a resume PDF a viewer still
+     * has open, a browser profile an orphaned Chromium still holds, a keychain it could not
+     * reach — and this route answered "Everything has been deleted… no copy kept anywhere"
+     * regardless. On the one endpoint in the app whose entire purpose is that promise, to
+     * the one user who has just typed a phrase to make it happen, that is the failure this
+     * repo treats as its worst: an operation that did not finish, reported as one that did.
+     *
+     * The list travels with it, so the screen can name each file rather than leaving the
+     * user to guess which of their resumes is still on the disk.
+     */
+    const failed = result.failed.length;
+    logger.warn(
+      { paths: result.deletedPaths.length, failed },
+      failed > 0 ? 'delete-all finished with failures' : 'delete-all completed',
+    );
 
     return {
       ...result,
       message:
-        'Everything has been deleted. Restart the app to begin again; it will generate a ' +
-        'new encryption key and start from an empty profile.',
+        failed === 0
+          ? 'Everything has been deleted. Restart the app to begin again; it will generate ' +
+            'a new encryption key and start from an empty profile.'
+          : `Most of it has been deleted, but ${String(failed)} ${
+              failed === 1 ? 'thing is' : 'things are'
+            } still on this machine — they are listed below. Close anything that has them ` +
+            'open and delete again. Restart the app either way; it will generate a new ' +
+            'encryption key and start from an empty profile.',
     };
   });
 

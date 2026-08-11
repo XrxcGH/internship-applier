@@ -327,9 +327,30 @@ export const githubList: JobSource = {
     try {
       data = await fetchJson<Array<Record<string, unknown>>>(url, { rps: 1 });
     } catch (err) {
+      // A gap, not just a note. Losing this source loses more postings than every other
+      // source in the app combined, and `notes` alone sets neither `degraded` nor `skipped`
+      // (run.ts) — so a dead repo, a rename, or an outage at raw.githubusercontent.com was
+      // reported to the user as "github_list: 0 found", indistinguishable from a list with
+      // nothing on it. That is the unreported partial search this whole file's header calls
+      // the failure that makes an automated search tool untrustworthy.
+      const message =
+        `github_list: could not read ${repo} (${(err as Error).message}). ` +
+        'Nothing from this source is in these results.';
+      return { postings: [], notes: [], gaps: [message] };
+    }
+
+    // The same silence one level down: an endpoint that answers with JSON of the wrong shape
+    // is not an empty list. `.map`-style adapters throw here and the runner reports it; this
+    // one iterates, so a `{}` or a `{"error": …}` body would produce zero postings, no error,
+    // and a clean-looking report.
+    if (!Array.isArray(data)) {
       return {
         postings: [],
-        notes: [`github_list: could not read ${repo} (${(err as Error).message})`],
+        notes: [],
+        gaps: [
+          `github_list: ${repo} answered with something that is not a list of postings, so ` +
+            'nothing from this source is in these results. The list format may have changed.',
+        ],
       };
     }
 

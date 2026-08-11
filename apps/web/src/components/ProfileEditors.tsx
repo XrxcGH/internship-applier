@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ExperienceType } from '@ia/shared';
 import type { CandidateProfile, ExperienceEntry, ProjectEntry, Skill } from '@ia/shared';
-import { moveListItem } from '../lib/profileEdit';
+import { indexRange, moveListItem } from '../lib/profileEdit';
 import { Button, SelectField, TextField } from './Controls';
 
 /**
@@ -63,11 +63,18 @@ function EntryList<T>({
   singular: string;
   hint?: ReactNode;
   entries: T[];
-  onChange: (next: T[]) => void;
+  /**
+   * `moved` is `oldIndexForNew` — supplied whenever entries changed POSITION, so the review
+   * flags for this list, which are addressed by index, can be rewritten to follow them.
+   * Omitted for edits that leave every index where it was.
+   */
+  onChange: (next: T[], moved?: number[], clears?: string) => void;
   /** A fresh entry for "Add", in whatever shape the schema demands of a new row. */
   blank: () => T;
-  children: (entry: T, index: number, replace: (next: T) => void) => ReactNode;
+  /** `replace(next, clears)` — `clears` names the flag that particular field answers. */
+  children: (entry: T, index: number, replace: (next: T, clears?: string) => void) => ReactNode;
 }) {
+  const order = indexRange(entries.length);
   return (
     <div className="mt-10">
       <div className="mb-3 flex items-baseline justify-between gap-4">
@@ -93,7 +100,12 @@ function EntryList<T>({
                     size="sm"
                     aria-label={`Move ${singular.toLowerCase()} ${index + 1} up`}
                     disabled={index === 0}
-                    onClick={() => onChange(moveListItem(entries, index, index - 1))}
+                    onClick={() =>
+                      onChange(
+                        moveListItem(entries, index, index - 1),
+                        moveListItem(order, index, index - 1),
+                      )
+                    }
                   >
                     Up
                   </Button>
@@ -101,7 +113,12 @@ function EntryList<T>({
                     size="sm"
                     aria-label={`Move ${singular.toLowerCase()} ${index + 1} down`}
                     disabled={index === entries.length - 1}
-                    onClick={() => onChange(moveListItem(entries, index, index + 1))}
+                    onClick={() =>
+                      onChange(
+                        moveListItem(entries, index, index + 1),
+                        moveListItem(order, index, index + 1),
+                      )
+                    }
                   >
                     Down
                   </Button>
@@ -109,14 +126,23 @@ function EntryList<T>({
                     size="sm"
                     variant="danger"
                     aria-label={`Remove ${singular.toLowerCase()} ${index + 1}`}
-                    onClick={() => onChange(entries.filter((_, k) => k !== index))}
+                    onClick={() =>
+                      onChange(
+                        entries.filter((_, k) => k !== index),
+                        order.filter((k) => k !== index),
+                      )
+                    }
                   >
                     Remove
                   </Button>
                 </span>
               </div>
-              {children(entry, index, (next) =>
-                onChange(entries.map((e, k) => (k === index ? next : e))),
+              {children(entry, index, (next, clears) =>
+                onChange(
+                  entries.map((e, k) => (k === index ? next : e)),
+                  undefined,
+                  clears,
+                ),
               )}
             </li>
           ))}
@@ -215,12 +241,42 @@ export interface EditorProps {
   profile: CandidateProfile;
   flagged: (path: string) => boolean;
   /** Applies one change, naming the flag the edit answers. */
-  edit: (fn: (p: CandidateProfile) => CandidateProfile, clears?: string) => void;
+  edit: (
+    fn: (p: CandidateProfile) => CandidateProfile,
+    clears?: string,
+    options?: { raise?: boolean },
+  ) => void;
+  /**
+   * Applies a change that moved entries around, and rewrites this list's index-addressed
+   * review flags to follow them. `moved` is `oldIndexForNew`; flags for an index missing
+   * from it belonged to an entry that was removed and go with it.
+   */
+  editList: (
+    prefix: string,
+    fn: (p: CandidateProfile) => CandidateProfile,
+    moved?: number[],
+  ) => void;
+}
+
+/** The list-change handler every entry editor hands to `EntryList`. */
+function listHandler<T>(
+  { edit, editList }: Pick<EditorProps, 'edit' | 'editList'>,
+  prefix: string,
+  put: (p: CandidateProfile, next: T[]) => CandidateProfile,
+) {
+  return (next: T[], moved?: number[], clears?: string): void => {
+    if (moved) editList(prefix, (p) => put(p, next), moved);
+    // , as the education editor does: most fields in here were never flagged,
+    // and putting a flag on an entry the extractor was happy with — because someone cleared
+    // a date they never had — invents work at a gate that blocks on its list being empty.
+    else edit((p) => put(p, next), clears, { raise: false });
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────── experience
 
-export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
+export function ExperienceEditor(props: EditorProps) {
+  const { profile, flagged } = props;
   const entries = profile.experience;
   return (
     <EntryList
@@ -235,7 +291,7 @@ export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
         </>
       }
       entries={entries}
-      onChange={(next) => edit((p) => ({ ...p, experience: next }))}
+      onChange={listHandler(props, 'experience', (p, next) => ({ ...p, experience: next }))}
       blank={(): ExperienceEntry => ({
         organization: '',
         title: '',
@@ -252,13 +308,15 @@ export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
                 label="Title"
                 value={entry.title}
                 flagged={flagged(path('title'))}
-                onChange={(e) => replace({ ...entry, title: e.target.value })}
+                onChange={(e) => replace({ ...entry, title: e.target.value }, path('title'))}
               />
               <TextField
                 label="Organization"
                 value={entry.organization}
                 flagged={flagged(path('organization'))}
-                onChange={(e) => replace({ ...entry, organization: e.target.value })}
+                onChange={(e) =>
+                  replace({ ...entry, organization: e.target.value }, path('organization'))
+                }
               />
               <SelectField
                 label="Kind"
@@ -266,7 +324,10 @@ export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
                 value={entry.type}
                 flagged={flagged(path('type'))}
                 onChange={(e) =>
-                  replace({ ...entry, type: e.target.value as ExperienceEntry['type'] })
+                  replace(
+                    { ...entry, type: e.target.value as ExperienceEntry['type'] },
+                    path('type'),
+                  )
                 }
               >
                 {ExperienceType.options.map((type) => (
@@ -280,7 +341,9 @@ export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
                 hint="City and state, as the resume writes it."
                 value={entry.location ?? ''}
                 flagged={flagged(path('location'))}
-                onChange={(e) => replace({ ...entry, location: e.target.value || undefined })}
+                onChange={(e) =>
+                  replace({ ...entry, location: e.target.value || undefined }, path('location'))
+                }
               />
               {/* Month rather than day, because the profile stores YYYY-MM and a day it
                   cannot store fails the save on a field nobody typed a day into. */}
@@ -289,7 +352,9 @@ export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
                 type="month"
                 value={entry.startDate ?? ''}
                 flagged={flagged(path('startDate'))}
-                onChange={(e) => replace({ ...entry, startDate: e.target.value || undefined })}
+                onChange={(e) =>
+                  replace({ ...entry, startDate: e.target.value || undefined }, path('startDate'))
+                }
               />
               <TextField
                 label="Finished"
@@ -297,7 +362,9 @@ export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
                 hint="Leave it empty if you are still there. An empty box means ongoing, and how long the entry ran is measured from it."
                 value={entry.endDate ?? ''}
                 flagged={flagged(path('endDate'))}
-                onChange={(e) => replace({ ...entry, endDate: e.target.value || undefined })}
+                onChange={(e) =>
+                  replace({ ...entry, endDate: e.target.value || undefined }, path('endDate'))
+                }
               />
             </div>
 
@@ -306,13 +373,13 @@ export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
               singular="Line"
               hint="One line per bullet on the resume, written the way you wrote it there."
               items={entry.bullets}
-              onChange={(bullets) => replace({ ...entry, bullets })}
+              onChange={(bullets) => replace({ ...entry, bullets }, path('bullets'))}
             />
             <ListEditor
               label="Skills used here"
               singular="Skill"
               items={entry.skills ?? []}
-              onChange={(skills) => replace({ ...entry, skills })}
+              onChange={(skills) => replace({ ...entry, skills }, path('skills'))}
             />
           </>
         );
@@ -323,14 +390,15 @@ export function ExperienceEditor({ profile, flagged, edit }: EditorProps) {
 
 // ──────────────────────────────────────────────────────────────────────── projects
 
-export function ProjectsEditor({ profile, flagged, edit }: EditorProps) {
+export function ProjectsEditor(props: EditorProps) {
+  const { profile, flagged } = props;
   return (
     <EntryList
       label="Projects"
       singular="Project"
       hint="Anything you built or researched under its own name, rather than a position you held."
       entries={profile.projects}
-      onChange={(next) => edit((p) => ({ ...p, projects: next }))}
+      onChange={listHandler(props, 'projects', (p, next) => ({ ...p, projects: next }))}
       blank={(): ProjectEntry => ({ name: '', description: '', bullets: [] })}
     >
       {(entry, index, replace) => {
@@ -342,28 +410,34 @@ export function ProjectsEditor({ profile, flagged, edit }: EditorProps) {
                 label="Name"
                 value={entry.name}
                 flagged={flagged(path('name'))}
-                onChange={(e) => replace({ ...entry, name: e.target.value })}
+                onChange={(e) => replace({ ...entry, name: e.target.value }, path('name'))}
               />
               <TextField
                 label="Address"
                 hint="A repo or a page, if there is one. Typing it without https:// is fine."
                 value={entry.url ?? ''}
                 flagged={flagged(path('url'))}
-                onChange={(e) => replace({ ...entry, url: e.target.value || undefined })}
+                onChange={(e) =>
+                  replace({ ...entry, url: e.target.value || undefined }, path('url'))
+                }
               />
               <TextField
                 label="Started"
                 type="month"
                 value={entry.startDate ?? ''}
                 flagged={flagged(path('startDate'))}
-                onChange={(e) => replace({ ...entry, startDate: e.target.value || undefined })}
+                onChange={(e) =>
+                  replace({ ...entry, startDate: e.target.value || undefined }, path('startDate'))
+                }
               />
               <TextField
                 label="Finished"
                 type="month"
                 value={entry.endDate ?? ''}
                 flagged={flagged(path('endDate'))}
-                onChange={(e) => replace({ ...entry, endDate: e.target.value || undefined })}
+                onChange={(e) =>
+                  replace({ ...entry, endDate: e.target.value || undefined }, path('endDate'))
+                }
               />
             </div>
             <TextField
@@ -371,19 +445,21 @@ export function ProjectsEditor({ profile, flagged, edit }: EditorProps) {
               hint="One sentence. This is quoted back to you as evidence, so write what it is rather than how it went."
               value={entry.description}
               flagged={flagged(path('description'))}
-              onChange={(e) => replace({ ...entry, description: e.target.value })}
+              onChange={(e) =>
+                replace({ ...entry, description: e.target.value }, path('description'))
+              }
             />
             <ListEditor
               label="What you did"
               singular="Line"
               items={entry.bullets}
-              onChange={(bullets) => replace({ ...entry, bullets })}
+              onChange={(bullets) => replace({ ...entry, bullets }, path('bullets'))}
             />
             <ListEditor
               label="Skills used here"
               singular="Skill"
               items={entry.skills ?? []}
-              onChange={(skills) => replace({ ...entry, skills })}
+              onChange={(skills) => replace({ ...entry, skills }, path('skills'))}
             />
           </>
         );
@@ -402,9 +478,16 @@ export function ProjectsEditor({ profile, flagged, edit }: EditorProps) {
  * in the profile the skill came from, it is what makes claim verification possible, and it is
  * attached during confirmation rather than typed.
  */
-export function SkillsEditor({ profile, flagged, edit }: EditorProps) {
+export function SkillsEditor({ profile, flagged, edit, editList }: EditorProps) {
   const skills = profile.skills;
-  const replaceAll = (next: Skill[]) => edit((p) => ({ ...p, skills: next }), 'skills');
+  const replaceAll = (next: Skill[], moved?: number[]) => {
+    const put = (p: CandidateProfile) => ({ ...p, skills: next });
+    // The corpus flag is cleared and re-raised by the value, not by the interaction: an
+    // empty list is not an answer to "the reader found no skills", so `isAnswered` reads an
+    // empty array as unanswered and deleting the last skill puts the flag back.
+    if (moved) editList('skills', put, moved);
+    else edit(put, 'skills');
+  };
 
   return (
     <div className="mt-10">
@@ -456,7 +539,12 @@ export function SkillsEditor({ profile, flagged, edit }: EditorProps) {
                 size="sm"
                 variant="danger"
                 aria-label={`Remove skill ${i + 1}`}
-                onClick={() => replaceAll(skills.filter((_, k) => k !== i))}
+                onClick={() =>
+                  replaceAll(
+                    skills.filter((_, k) => k !== i),
+                    indexRange(skills.length).filter((k) => k !== i),
+                  )
+                }
               >
                 Remove
               </Button>
@@ -479,14 +567,15 @@ export function SkillsEditor({ profile, flagged, edit }: EditorProps) {
 
 // ──────────────────────────────────────────────────────── certifications and languages
 
-export function CertificationsEditor({ profile, flagged, edit }: EditorProps) {
+export function CertificationsEditor(props: EditorProps) {
+  const { profile, flagged } = props;
   return (
     <EntryList
       label="Certifications"
       singular="Certification"
       hint="The date is where a claim like “certified for three years” starts counting, so it is worth getting right."
       entries={profile.certifications}
-      onChange={(next) => edit((p) => ({ ...p, certifications: next }))}
+      onChange={listHandler(props, 'certifications', (p, next) => ({ ...p, certifications: next }))}
       blank={(): Certification => ({ name: '' })}
     >
       {(entry, index, replace) => (
@@ -495,20 +584,32 @@ export function CertificationsEditor({ profile, flagged, edit }: EditorProps) {
             label="Name"
             value={entry.name}
             flagged={flagged(`certifications.${index}.name`)}
-            onChange={(e) => replace({ ...entry, name: e.target.value })}
+            onChange={(e) =>
+              replace({ ...entry, name: e.target.value }, `certifications.${index}.name`)
+            }
           />
           <TextField
             label="Issued by"
             value={entry.issuer ?? ''}
             flagged={flagged(`certifications.${index}.issuer`)}
-            onChange={(e) => replace({ ...entry, issuer: e.target.value || undefined })}
+            onChange={(e) =>
+              replace(
+                { ...entry, issuer: e.target.value || undefined },
+                `certifications.${index}.issuer`,
+              )
+            }
           />
           <TextField
             label="Earned"
             type="month"
             value={entry.date ?? ''}
             flagged={flagged(`certifications.${index}.date`)}
-            onChange={(e) => replace({ ...entry, date: e.target.value || undefined })}
+            onChange={(e) =>
+              replace(
+                { ...entry, date: e.target.value || undefined },
+                `certifications.${index}.date`,
+              )
+            }
           />
         </div>
       )}
@@ -516,13 +617,14 @@ export function CertificationsEditor({ profile, flagged, edit }: EditorProps) {
   );
 }
 
-export function LanguagesEditor({ profile, flagged, edit }: EditorProps) {
+export function LanguagesEditor(props: EditorProps) {
+  const { profile, flagged } = props;
   return (
     <EntryList
       label="Languages"
       singular="Language"
       entries={profile.languages}
-      onChange={(next) => edit((p) => ({ ...p, languages: next }))}
+      onChange={listHandler(props, 'languages', (p, next) => ({ ...p, languages: next }))}
       blank={() => ({ name: '', proficiency: '' })}
     >
       {(entry, index, replace) => (
@@ -531,14 +633,16 @@ export function LanguagesEditor({ profile, flagged, edit }: EditorProps) {
             label="Language"
             value={entry.name}
             flagged={flagged(`languages.${index}.name`)}
-            onChange={(e) => replace({ ...entry, name: e.target.value })}
+            onChange={(e) => replace({ ...entry, name: e.target.value }, `languages.${index}.name`)}
           />
           <TextField
             label="How well"
             hint="Written the way you would say it: native, fluent, conversational."
             value={entry.proficiency}
             flagged={flagged(`languages.${index}.proficiency`)}
-            onChange={(e) => replace({ ...entry, proficiency: e.target.value })}
+            onChange={(e) =>
+              replace({ ...entry, proficiency: e.target.value }, `languages.${index}.proficiency`)
+            }
           />
         </div>
       )}
@@ -550,8 +654,20 @@ export function LanguagesEditor({ profile, flagged, edit }: EditorProps) {
 
 export function LinksEditor({ profile, flagged, edit }: EditorProps) {
   const links = profile.links;
+  /**
+   * `raise: false`, because a link the user deliberately emptied is an ANSWER.
+   *
+   * The default raises a flag for any field left blank, which is right for the six facts G1
+   * exists to collect and wrong here: blank is documented as a complete answer for all three
+   * of these, so deleting a URL the extractor had misfiled minted a brand-new `links.github`
+   * flag, blocked Confirm, and made the user click "I have checked this" on a box they had
+   * just emptied on purpose. Even typing one character and backspacing did it. A flag the
+   * extractor DID raise still clears the moment a real address is behind it.
+   */
   const set = (key: 'github' | 'linkedin' | 'portfolio', value: string) =>
-    edit((p) => ({ ...p, links: { ...p.links, [key]: value || undefined } }), `links.${key}`);
+    edit((p) => ({ ...p, links: { ...p.links, [key]: value || undefined } }), `links.${key}`, {
+      raise: false,
+    });
 
   return (
     <div className="mt-10">

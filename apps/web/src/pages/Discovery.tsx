@@ -77,6 +77,20 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
    */
   const busyRef = useRef(false);
 
+  /**
+   * Only the newest read is allowed to paint, exactly as the queue does with `listSeq`.
+   *
+   * Every one of these four fetches can be in flight more than once — "Rebuild" and "Rebuild
+   * the plan with these" both call `refresh`, and a run calls it again when it finishes — and
+   * responses come back in whatever order the network gives them. Without a sequence number
+   * the last answer to LAND wins rather than the last one ASKED: type "Stripe", rebuild,
+   * clear the field, rebuild again, and if the first answer is slower the screen settles on
+   * Stripe's guessed boards and its caution note for a company that is no longer in the box.
+   * The same race let a failure from an abandoned read overwrite the banner after a newer
+   * read had already succeeded.
+   */
+  const readSeq = useRef(0);
+
   const fail = useCallback((err: unknown) => {
     setError(err instanceof Error ? err.message : String(err));
   }, []);
@@ -90,11 +104,21 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
    */
   const refresh = useCallback(
     (pinned: string[] = []) => {
+      const seq = (readSeq.current += 1);
+      const fresh =
+        <T,>(set: (value: T) => void) =>
+        (value: T): void => {
+          if (seq === readSeq.current) set(value);
+        };
+      const failFresh = (err: unknown): void => {
+        if (seq === readSeq.current) fail(err);
+      };
+
       setError(null);
-      void postingStats().then(setStats).catch(fail);
-      void availableSources().then(setSources).catch(fail);
-      void listRuns().then(setRuns).catch(fail);
-      void getPlan(pinned).then(setPlan).catch(fail);
+      void postingStats().then(fresh(setStats)).catch(failFresh);
+      void availableSources().then(fresh(setSources)).catch(failFresh);
+      void listRuns().then(fresh(setRuns)).catch(failFresh);
+      void getPlan(pinned).then(fresh(setPlan)).catch(failFresh);
     },
     [fail],
   );
@@ -123,6 +147,17 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
   );
 
   const pinned = splitCompanies(companies);
+  /**
+   * The companies as they are NOW, for the work that finishes later.
+   *
+   * `run` captures `pinned` when the button is pressed, and the field stays editable through
+   * a search that can take minutes because typing in it spends nothing. So the plan rebuilt
+   * when the run finished was the plan for the list as of the click: the box could read
+   * "Figma" while the chips underneath it described Stripe, and it only came right if the
+   * user happened to press Rebuild again.
+   */
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
 
   const addTargets = (incoming: RunTarget[]): void => {
     setTargets((prev) => mergeTargets(prev, incoming));
@@ -133,7 +168,9 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
       setResolutions([]);
       setResolveNote(
         pinned.length > RESOLVE_LIMIT
-          ? `Probing the first ${RESOLVE_LIMIT} of ${pinned.length} names. Run it again with the rest.`
+          ? `Probing the first ${RESOLVE_LIMIT} of ${pinned.length} names. The rest are not ` +
+              'probed: take these out of the box above and press it again for the next ' +
+              `${RESOLVE_LIMIT}.`
           : null,
       );
       const found: Array<{ name: string; matches: Resolution[] }> = [];
@@ -154,10 +191,11 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
       const result = await startRun(targets);
       setSummary(result);
       // The stats and the run list both moved; the plan may have too, since a board that
-      // answered is a board the next plan knows about.
-      void postingStats().then(setStats).catch(fail);
-      void listRuns().then(setRuns).catch(fail);
-      void getPlan(pinned).then(setPlan).catch(fail);
+      // answered is a board the next plan knows about. Read through `refresh` rather than
+      // fetching here, so these answers are subject to the same last-asked-wins rule as
+      // every other read on the page — and with the companies as they stand NOW, not as
+      // they stood when the button was pressed minutes ago.
+      refresh(pinnedRef.current);
     });
 
   const score = (): Promise<void> =>
@@ -202,7 +240,12 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
           </div>
         </Notice>
       )}
-      {busy && <p className="u-data text-accent a-pulse mb-4">{busy}…</p>}
+      {/* A live region, because a search takes minutes and says nothing while it runs. A
+          screen-reader user pressing Search otherwise got no announcement that anything had
+          started, finished, or failed — the page simply changed under them. */}
+      <div role="status" aria-live="polite">
+        {busy && <p className="u-data text-accent a-pulse mb-4">{busy}…</p>}
+      </div>
 
       <Section n="01" title="What is stored, and where this looks" step={3}>
         <div className="grid gap-6 lg:grid-cols-2">
@@ -221,7 +264,19 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
                 </p>
                 {onOpenQueue && (
                   <div className="mt-4">
-                    <Button size="sm" variant="primary" onClick={onOpenQueue}>
+                    {/* Held while anything is running, like its twin below the summary.
+                        Leaving one exit enabled meant a user could start a search, leave
+                        for the queue, come back to a remounted screen with a fresh guard —
+                        `busyRef` starts false again — and press Search a second time,
+                        starting a concurrent run over the same boards. The server has no
+                        run lock, so the guard on this page is the only one there is, and a
+                        guard with a door beside it is not a guard. */}
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={busy !== null}
+                      onClick={onOpenQueue}
+                    >
                       Open the queue (G2) →
                     </Button>
                   </div>
