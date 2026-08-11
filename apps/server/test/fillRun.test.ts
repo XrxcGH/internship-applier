@@ -1,0 +1,245 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * Who is allowed to touch the browser, and when.
+ *
+ * Three defects, one root: the run registry had no mutual exclusion around its ASYNC setup.
+ * Every check it did make was correct about the moment it ran and wrong about the seconds
+ * either side of it.
+ *
+ *   1. `continueRun` guarded on `run.state === 'filling'`, but a continue spends its first
+ *      several seconds in `detectIntervention` and `buildFormMap` with the state still
+ *      reading `reading`. Two continues inside that window both reached `executePlan`,
+ *      against one page and one keyboard — and `insertText` types into whatever has focus,
+ *      so one run's approved essay lands in the box the other just clicked into, on a real
+ *      employer's form, in the user's name.
+ *   2. `startRun` registered its run and THEN awaited `openSession`. A second start found
+ *      `session` still undefined, so the discard closed nothing, deleted the entry, and
+ *      registered its own — leaving the first launch's BrowserContext attached to an object
+ *      no longer in `runs`, unreachable by discard, by shutdown, and by the close delete-all
+ *      does before removing the profile directory it is still holding a lock on.
+ *   3. Every run launches against one shared Chromium profile directory, so two applications
+ *      cannot be filled at once — but nothing said so, and the second failed on the profile
+ *      lock as a 502 carrying a raw Playwright message about a directory.
+ *
+ * The browser is mocked because none of this is about a browser. It is about what happens in
+ * the gaps between awaits, and a real Chromium makes those gaps untestable.
+ */
+
+const h = vi.hoisted(() => ({
+  opened: 0,
+  closed: 0,
+  /** Held by `openSession` while set, so a launch can be caught mid-flight. */
+  openGate: null as Promise<void> | null,
+  /** Held by `detectIntervention` while set, which is the window defect 1 lived in. */
+  readGate: null as Promise<void> | null,
+  /** How many `executePlan` calls were in the page at the same moment. */
+  executing: 0,
+  peakExecuting: 0,
+  executed: 0,
+}));
+
+vi.mock('../src/core/filling/browser', () => ({
+  openSession: vi.fn(async () => {
+    if (h.openGate) await h.openGate;
+    h.opened += 1;
+    return {
+      context: {},
+      page: { goto: async () => undefined },
+      close: async () => {
+        h.closed += 1;
+      },
+    };
+  }),
+  detectIntervention: vi.fn(async () => {
+    if (h.readGate) await h.readGate;
+    return null;
+  }),
+}));
+
+vi.mock('../src/core/filling/formMap', () => ({
+  buildFormMap: vi.fn(async () => ({ url: 'http://form.test/1', fields: [{ label: 'Name' }] })),
+  summarizeMap: vi.fn(() => 'one field'),
+}));
+
+vi.mock('../src/core/filling/plan', () => ({
+  buildFillPlan: vi.fn(() => ({ actions: [{ label: 'Name' }], skips: [] })),
+}));
+
+vi.mock('../src/core/filling/fill', () => ({
+  executePlan: vi.fn(async () => {
+    h.executing += 1;
+    h.peakExecuting = Math.max(h.peakExecuting, h.executing);
+    await new Promise((r) => setTimeout(r, 5));
+    h.executing -= 1;
+    h.executed += 1;
+    return { results: [], filled: 1, mismatched: 0, failed: 0 };
+  }),
+  describeFill: vi.fn(() => 'filled 1'),
+  sameDocument: vi.fn(() => true),
+}));
+
+const { closeAllRuns, continueRun, discardRun, getRun, startRun } =
+  await import('../src/core/filling/run');
+
+function gate(): { open: () => void; promise: Promise<void> } {
+  let open!: () => void;
+  const promise = new Promise<void>((r) => {
+    open = r;
+  });
+  return { open, promise };
+}
+
+function input(applicationId: string) {
+  return {
+    applicationId,
+    applyUrl: 'http://form.test/1',
+    profile: {} as never,
+    answers: [],
+    headless: true,
+  };
+}
+
+beforeEach(() => {
+  h.opened = 0;
+  h.closed = 0;
+  h.openGate = null;
+  h.readGate = null;
+  h.executing = 0;
+  h.peakExecuting = 0;
+  h.executed = 0;
+});
+
+afterEach(async () => {
+  await closeAllRuns();
+});
+
+describe('two callers driving one page', () => {
+  it('lets only one continue into executePlan, however slow the read is', async () => {
+    // The defect exactly: both calls are inside `detectIntervention` when the second one
+    // arrives, so `state` says `reading` for both and the old guard saw nothing to refuse.
+    await startRun(input('app-1'));
+    const read = gate();
+    h.readGate = read.promise;
+
+    const first = continueRun(input('app-1'));
+    const second = continueRun(input('app-1')).then(
+      () => 'resolved',
+      (e: Error) => e.message,
+    );
+
+    read.open();
+    await first;
+    expect(await second).toMatch(/already being filled/i);
+    expect(h.executed).toBe(1);
+    // The assertion that names the harm: never two keyboards in one page.
+    expect(h.peakExecuting).toBe(1);
+  });
+
+  it('lets a second continue through once the first has finished', async () => {
+    // The refusal has to be a moment, not a latch — the ordinary flow continues twice, once
+    // after signing in and once for the next wizard step.
+    await startRun(input('app-1'));
+    await continueRun(input('app-1'));
+    await continueRun(input('app-1'));
+    expect(h.executed).toBe(2);
+  });
+
+  it('releases the browser even when the fill throws', async () => {
+    const { executePlan } = await import('../src/core/filling/fill');
+    vi.mocked(executePlan).mockRejectedValueOnce(new Error('the page went away'));
+    await startRun(input('app-1'));
+    await expect(continueRun(input('app-1'))).rejects.toThrow(/page went away/);
+    // A claim leaked here would wedge the application for the life of the process, and the
+    // only symptom would be "already being filled" about a run that ended minutes ago.
+    await expect(continueRun(input('app-1'))).resolves.toBeDefined();
+  });
+});
+
+describe('two starts racing to open one browser', () => {
+  it('opens one session and orphans none', async () => {
+    const open = gate();
+    h.openGate = open.promise;
+
+    const first = startRun(input('app-1'));
+    const second = startRun(input('app-1')).then(
+      () => 'resolved',
+      (e: Error) => e.message,
+    );
+
+    open.open();
+    await first;
+    expect(await second).toMatch(/already being filled/i);
+
+    // One launch, and it is the one the registry holds. The orphan was a second launch whose
+    // context nothing could ever reach: not discard, not shutdown, not the close delete-all
+    // does before removing the profile directory.
+    expect(h.opened).toBe(1);
+    expect(getRun('app-1')?.session).toBeDefined();
+
+    await discardRun('app-1');
+    expect(h.closed).toBe(1);
+  });
+
+  it('closes a session whose run was discarded while the browser was opening', async () => {
+    // Discard does not wait for the claim — shutdown and delete-all have to be able to close
+    // a browser whatever else is happening — so this window stays open and has to be handled
+    // where the launch lands.
+    const open = gate();
+    h.openGate = open.promise;
+
+    const starting = startRun(input('app-1')).then(
+      (r) => r.state,
+      (e: Error) => e.message,
+    );
+    // Let the start get as far as registering its run and awaiting the launch. Discarding
+    // before that point is a different case entirely — there is nothing registered to
+    // discard — and it is the window AFTER registration that leaks a browser.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getRun('app-1')).toBeDefined();
+
+    await discardRun('app-1');
+    open.open();
+
+    expect(await starting).toMatch(/discarded while the browser was opening/i);
+    expect(h.opened).toBe(1);
+    expect(h.closed).toBe(1);
+    expect(getRun('app-1')).toBeUndefined();
+  });
+});
+
+describe('two applications, one profile directory', () => {
+  it('refuses the second and says what to do about it', async () => {
+    // Chromium locks the shared profile directory, so this always failed — as a 502 whose
+    // message was a raw Playwright complaint about a path. The ordinary way to reach it is
+    // to park run A on a login wall and go and start application B.
+    await startRun(input('app-1'));
+    const second = await startRun(input('app-2')).then(
+      () => 'resolved',
+      (e: Error) => e.message,
+    );
+
+    expect(second).toMatch(/another application has the browser open/i);
+    expect(second).toMatch(/one application can be filled at a time/i);
+    expect(h.opened).toBe(1);
+    expect(getRun('app-2')).toBeUndefined();
+  });
+
+  it('lets the second application through once the first is discarded', async () => {
+    await startRun(input('app-1'));
+    await discardRun('app-1');
+    await expect(startRun(input('app-2'))).resolves.toMatchObject({ state: 'reading' });
+    expect(h.opened).toBe(2);
+  });
+
+  it('does not count a run that failed to open as holding the browser', async () => {
+    const { openSession } = await import('../src/core/filling/browser');
+    vi.mocked(openSession).mockRejectedValueOnce(new Error('chromium would not start'));
+    const failed = await startRun(input('app-1'));
+    expect(failed.state).toBe('failed');
+
+    // A run with no session holds no window, and treating it as if it did would lock the
+    // user out of every other application until they found the discard button.
+    await expect(startRun(input('app-2'))).resolves.toMatchObject({ state: 'reading' });
+  });
+});

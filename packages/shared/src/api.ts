@@ -35,6 +35,11 @@ export const ApiErrorCode = z.enum([
   // APPLICATION_IN_PROGRESS, which is about the application having moved past the point the
   // tool can undo; this one clears on its own once the run finishes, and the caller waits.
   'FILL_IN_PROGRESS',
+  // A DIFFERENT application already has the browser window open. There is one Chromium
+  // profile directory on the machine and Chromium locks it, so two applications cannot be
+  // filled at once. Distinct from FILL_IN_PROGRESS, which is the same application: this one
+  // clears when the user finishes or discards the OTHER run, and says which.
+  'FILL_BROWSER_BUSY',
   'APPLICATION_IN_PROGRESS',
   // The review flag being dismissed has a field the user can answer, so it is not dismissible.
   'ANSWER_REQUIRED',
