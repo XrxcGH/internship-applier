@@ -97,7 +97,30 @@ function releaseBrowser(applicationId: string): void {
  */
 function browserHeldBy(applicationId: string): FillRun | undefined {
   for (const run of runs.values()) {
-    if (run.applicationId !== applicationId && run.session) return run;
+    if (run.applicationId === applicationId || !run.session) continue;
+    /**
+     * A window the user already closed holds nothing, whatever the registry still thinks.
+     *
+     * `session !== undefined` was the whole test, and it made a regression out of the most
+     * ordinary ending this flow has: the user reviews the filled form, submits it on the real
+     * page, and closes the Chromium window with the X. Nothing listens for that, so the
+     * finished run sat in the map holding a dead session and every OTHER application was
+     * refused with "another application has the browser open" — about a browser that was not
+     * open — until the user worked out which panel held the ghost and pressed a Close button
+     * for a window that had already gone. Before the mutual exclusion existed, starting the
+     * next application simply worked.
+     *
+     * `page.isClosed()` answers synchronously off Playwright's own state, so it costs nothing
+     * and cannot itself throw at a browser that has gone. The context is closed as well as
+     * forgotten: dropping the entry alone would leave the object holding the profile-directory
+     * lock that every later run needs, which is the orphan this file already fixed once.
+     */
+    if (run.session.page.isClosed()) {
+      void run.session.close().catch(() => undefined);
+      runs.delete(run.applicationId);
+      continue;
+    }
+    return run;
   }
   return undefined;
 }
@@ -189,10 +212,13 @@ export async function startRun(input: StartInput): Promise<FillRun> {
   try {
     const held = browserHeldBy(input.applicationId);
     if (held) {
+      // Naming the page it is sitting on, because the shared enum promises this message
+      // "says which" and it did not: the user was told to go and finish or discard a run
+      // without being told which one, on a screen that shows one application at a time.
       throw new Error(
         'Another application has the browser open. There is one browser profile on this ' +
-          'machine, so one application can be filled at a time. Finish that one, or discard ' +
-          'it, and try this again.',
+          'machine, so one application can be filled at a time. Finish that one, or close ' +
+          `its browser, and try this again. It is the run on ${held.url}`,
       );
     }
     return await open(input);
@@ -212,6 +238,9 @@ export async function startRun(input: StartInput): Promise<FillRun> {
  * matched loosely so the rethrow below cannot start catching real launch failures.
  */
 const DISCARDED_WHILE_OPENING = 'This fill run was discarded while the browser was opening.';
+
+/** The same, one stage later: the user stopped a fill that was already typing. */
+const DISCARDED_WHILE_FILLING = 'This fill run was stopped while it was filling.';
 
 async function open(input: StartInput): Promise<FillRun> {
   await discardRun(input.applicationId);
@@ -376,6 +405,25 @@ async function drive(run: FillRun, input: StartInput): Promise<FillRun> {
       },
     });
 
+    /**
+     * A run the user stopped is not a run that finished.
+     *
+     * Discard is offered while a fill is in flight — that is the whole point of the "Close
+     * the browser and stop" button — and it closes the context out from under `executePlan`.
+     * Every per-field error is caught and turned into `status: 'failed'`, so the fill returns
+     * NORMALLY with a pile of failures, and this line then called it `done`: the route
+     * advanced the application through `filled` to `awaiting_submit`, wrote a `filled` event,
+     * and overwrote `skippedFields`. The user pressed stop and the tracker told them the form
+     * was filled and ready to submit. G4 still held — nothing reached `submitted` — but
+     * recording an abandoned fill as a completed one is the failure this repo likes least.
+     *
+     * The registry is the authority on whether the run is still the user's: `discardRun`
+     * removes the entry, so an entry that is no longer this object means it was discarded.
+     */
+    if (runs.get(input.applicationId) !== run) {
+      throw new Error(DISCARDED_WHILE_FILLING);
+    }
+
     run.state = 'done';
     run.message = describeFill(run.result);
     if (!sameDocument(run.map.url, run.url)) {
@@ -403,6 +451,10 @@ async function drive(run: FillRun, input: StartInput): Promise<FillRun> {
 
     return run;
   } catch (err) {
+    // A run the user stopped is gone from the registry already, and marking a discarded
+    // object `failed` would be writing a verdict onto something nobody holds — and would
+    // hand the route a 502 saying the site broke, about a button the user pressed on purpose.
+    if (err instanceof Error && err.message === DISCARDED_WHILE_FILLING) throw err;
     run.state = 'failed';
     run.message = err instanceof Error ? err.message : String(err);
     logger.error({ err, applicationId: input.applicationId }, 'fill run failed while continuing');

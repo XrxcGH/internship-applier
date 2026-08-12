@@ -1281,3 +1281,66 @@ describe('the model layer cannot clear a deterministic rejection', () => {
     expect(merged.claims).toEqual(base.claims);
   });
 });
+
+/**
+ * Wanting the job is not a claim of having had it.
+ *
+ * `affiliationFrame`'s own docstring names four sentences it must never match — "I want to
+ * intern at Acme", "I would love to work for Acme", "I have admired Acme for years", "I
+ * worked with the Acme API on a side project" — and nothing tested any of them. The frame
+ * then grew present-tense forms, bare verbs and a `with` preposition so that "I am interning
+ * at NCSA" and "I was employed by FBLA" would stop escaping it, and in growing them it began
+ * matching all four.
+ *
+ * What that cost: G3 has no override. A student writing the most ordinary sentence a
+ * why-this-company answer contains got back `"Nova Robotics" is the employer you are applying
+ * to, and your profile has no experience there. Say what draws you to them instead.` —
+ * printed against a sentence already doing exactly that, with no way out but deleting it. On
+ * the drafting path the same flag burned the one revision round telling the model to remove
+ * the company name from an answer about that company.
+ */
+describe('a why-this-company answer', () => {
+  const EMPLOYER = ['Nova Robotics', 'Robotics Software Intern'];
+  const blocked = (claim: string): boolean =>
+    guardDraft(claim, evidenceFor({}), EMPLOYER).claims.some(
+      (c) => c.verdict === 'unsupported' || c.verdict === 'overstated',
+    );
+
+  it('may say the writer wants the job, in every phrasing people use', () => {
+    for (const claim of [
+      'I want to work at Nova Robotics because of what I built at Kestrel Analytics.',
+      'I would love to intern at Nova Robotics this summer.',
+      'I am applying for an internship at Nova Robotics.',
+      'I hope to intern at Nova Robotics next summer.',
+      'My interest in an internship at Nova Robotics comes from my time at Kestrel Analytics.',
+      'I am excited to work at Nova Robotics.',
+    ]) {
+      expect(blocked(claim), claim).toBe(false);
+    }
+  });
+
+  it('may admire them, and may name a tool it worked with', () => {
+    // The other two sentences from the frame's docstring. "worked WITH a thing" is using it;
+    // the preposition belongs to interning and volunteering, not to working.
+    expect(blocked('I have admired Nova Robotics for years.')).toBe(false);
+    // The tool has to be one the profile holds, or a different check refuses it — correctly.
+    const withTool = (claim: string): boolean =>
+      guardDraft(claim, skilledWith(['Google Maps API']), EMPLOYER).claims.some(
+        (c) => c.verdict === 'unsupported' || c.verdict === 'overstated',
+      );
+    expect(withTool('I worked with the Google Maps API on my trail project.')).toBe(false);
+  });
+
+  it('still refuses a job there that the profile does not hold', () => {
+    // The whole reason the frame exists. Wanting the job must not become a way to claim it.
+    for (const claim of [
+      'I interned at Nova Robotics last summer.',
+      'I worked at Nova Robotics for two years.',
+      'My internship at Nova Robotics taught me a lot.',
+      'I was employed by Nova Robotics.',
+      'I volunteered with Nova Robotics for a year.',
+    ]) {
+      expect(blocked(claim), claim).toBe(true);
+    }
+  });
+});

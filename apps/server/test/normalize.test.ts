@@ -635,8 +635,50 @@ describe('parseCompensation, beyond the dollar sign', () => {
       currency: 'EUR',
       period: 'month',
     });
-    expect(parseCompensation('¥300,000 per month')).toMatchObject({ currency: 'JPY' });
-    expect(parseCompensation('₹40,000 per month')).toMatchObject({ currency: 'INR' });
+  });
+
+  it('reads no currency whose magnitudes the period guess is not calibrated for', () => {
+    // ¥ and ₹ were added here on a guess and taken out again on evidence. With no stated
+    // period the parser infers one from magnitude — under 200 hourly, under 20,000 monthly —
+    // which holds for dollars, pounds and euros and not remotely for yen: an ordinary
+    // ¥1,200 hourly wage came out as ¥1,200 a MONTH and ¥280,000 a month as a yearly salary.
+    // Reading a figure and labelling its period wrong is worse than not reading it.
+    expect(parseCompensation('Hourly wage: ¥1,200.')).toBeNull();
+    expect(parseCompensation('₹40,000 per month')).toBeNull();
+  });
+
+  it('reads a figure written in the European convention', () => {
+    // The separators are the other way round on the continent, and these strings were
+    // unmatchable until £/€ were added — so the widening turned "no reading" into a wrong
+    // one 1000x out, on the figure a student decides against a posting with.
+    expect(parseCompensation('Internship allowance of €2.000 per month.')).toMatchObject({
+      min: 2000,
+      period: 'month',
+    });
+    expect(parseCompensation('You will earn €9,50 per hour.')).toMatchObject({
+      min: 9.5,
+      period: 'hour',
+    });
+    expect(parseCompensation('Salary: €3.000 - €3.500 per month.')).toMatchObject({
+      min: 3000,
+      max: 3500,
+    });
+  });
+
+  it('still reads the US convention, which shares every separator', () => {
+    expect(parseCompensation('Pays $1,200 per week.')).toMatchObject({ min: 1200 });
+    expect(parseCompensation('Pays $1,234.56 per week.')).toMatchObject({ min: 1234.56 });
+  });
+
+  it('does not read a perk quoted in money as the wage', () => {
+    // A benefits section is full of figures. Widening to £/€ imported the whole problem into
+    // the postings whose real pay the parser previously could not read at all — and the
+    // tie-break went to whichever came first in the text, so a learning budget beat a wage.
+    expect(parseCompensation('Everyone gets £1,000 a year to spend on learning.')).toBeNull();
+    expect(parseCompensation('€50 monthly wellness allowance')).toBeNull();
+    expect(
+      parseCompensation('Perks: £1,000 a year for learning. You will receive £11.44 per hour.'),
+    ).toMatchObject({ min: 11.44, period: 'hour' });
   });
 
   it('still reads a dollar, and still reads which dollar', () => {

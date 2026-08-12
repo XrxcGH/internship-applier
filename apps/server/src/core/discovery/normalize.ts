@@ -462,7 +462,19 @@ export interface ParsedComp {
  * "€2,000 per month" both parsed to null, and the posting went into the queue as pay not
  * disclosed. Not an edge case: Ashby alone hands back GBP and SEK on an ordinary board.
  */
-const CURRENCY_TOKEN = '(?:[A-Za-z]{1,3})?\\$|[£€¥₹]';
+/**
+ * `£` and `€` only, and the omissions are deliberate.
+ *
+ * `¥` and `₹` were here and are gone again. The period inference below — under 200 is hourly,
+ * under 20,000 monthly, otherwise yearly — is calibrated to currencies whose major unit is
+ * within an order of magnitude of a dollar, which is true of the pound and the euro and not
+ * remotely true of the yen or the rupee: an ordinary Japanese hourly wage of ¥1,200 came out
+ * as ¥1,200 a MONTH, and ¥280,000 a month as a yearly salary. Reading a figure and labelling
+ * its period wrong is worse than not reading it, and these two symbols were added on a guess
+ * rather than on evidence that these boards carry them. `$` keeps its letter prefixes, which
+ * name the currency outright and so need no magnitude guess.
+ */
+const CURRENCY_TOKEN = '(?:[A-Za-z]{1,3})?\\$|[£€]';
 
 /**
  * A money figure: a currency opener, one or two amounts with an optional "k", and an
@@ -554,9 +566,44 @@ const NOT_PAY_BEFORE =
 /** A scale word right after the figure — "$4 billion" is never somebody's wage. */
 const MAGNITUDE_AFTER = /^\s*(?:billion|million|trillion|bn|[bm])\b/i;
 
-/** Wording that marks a figure as what the job pays. */
+/**
+ * Wording that marks a figure as what the job pays.
+ *
+ * `receive` earns its place by losing a real case: "You will receive £11.44 per hour" scored
+ * the same 2 as a learning budget earlier in the same posting, and the tie goes to whichever
+ * comes first in the text, so the perk was stored as the wage.
+ */
 const PAY_CONTEXT =
-  /\b(?:pay|paid|pays|salar(?:y|ies)|compensation|comp|wages?|rates?|stipend|hourly|earn\w*|remuneration|base|range|offers?)\b/i;
+  /\b(?:pay|paid|pays|salar(?:y|ies)|compensation|comp|wages?|rates?|stipend|hourly|earn\w*|receiv\w*|remuneration|base|range|offers?)\b/i;
+
+/**
+ * Perks quoted in money, which are not what the job pays.
+ *
+ * A benefits section is full of figures — a learning budget, a wellness allowance, a pension
+ * contribution, relocation help — and each one reads to the parser exactly like a wage. This
+ * was survivable while only dollars were read, because a US posting's benefits are usually
+ * further from the pay line than a European one's; widening to £ and € imported the whole
+ * problem into the postings whose real pay the parser previously could not read at all.
+ *
+ * Tested on both sides of the figure, because these words sit either way round: "£1,000 a
+ * year for learning" and "a learning budget of £1,000 a year". `stipend` deliberately stays
+ * out — an internship stipend IS the pay — and is only excluded where it is qualified by one
+ * of these nouns.
+ */
+const NOT_PAY_NEAR =
+  /\b(?:pension|401\s?\(?k\)?|reimburse\w*|referral|relocation|commuter|per\s?diem|gym|wellness|well-?being|home[- ]office|professional development)\b/i;
+
+/**
+ * A sum with a purpose attached, which is what makes it a perk rather than a wage.
+ *
+ * The noun alone is not enough to judge by, and the first version of this got it wrong in
+ * the expensive direction: it excluded `allowance` outright, and "Internship allowance of
+ * €2.000 per month" is the ordinary European way of writing an internship's PAY. So the
+ * bare nouns above are the ones that are never a wage in any phrasing, and everything else
+ * has to name what the money is for.
+ */
+const PERK_PURPOSE =
+  /\b(?:to spend on|towards?|for)\s+(?:your\s+)?(?:learning|development|training|education|wellness|well-?being|equipment|books?|courses?|conferences?|travel|meals?|lunch|coworking)\b/i;
 
 /** One money figure found in the text, with how much reason there is to believe it is pay. */
 interface PayCandidate {
@@ -565,8 +612,44 @@ interface PayCandidate {
   score: number;
 }
 
+/**
+ * A written figure, read in whichever convention it was written in.
+ *
+ * This stripped commas and handed the rest to `Number`, which is the US convention and only
+ * the US convention. That was survivable while the regex could open on `$` alone; adding the
+ * European symbols made it a 1000× defect, because continental postings write the separators
+ * the other way round. `"€2.000 per month"` came out as **€2** and `"€9,50 per hour"` as
+ * **€950** — both figures a student would have read off the queue and believed.
+ *
+ * The rule needs no locale, only the string. Two different separators: the LAST one is the
+ * decimal point and the other groups thousands, which is true in both conventions
+ * ("1,234.56" and "1.234,56"). One kind of separator: exactly three digits behind the last
+ * of them is a grouping mark ("2.000", "1,200", "1.234.567"), and anything else is a decimal
+ * point ("22.50", "9,50", "211.4"). No money is written to three decimal places, and no
+ * grouping mark is followed by one or two digits.
+ */
+function readFigure(raw: string): number {
+  const lastComma = raw.lastIndexOf(',');
+  const lastDot = raw.lastIndexOf('.');
+  if (lastComma >= 0 && lastDot >= 0) {
+    const decimal = lastComma > lastDot ? ',' : '.';
+    const group = decimal === ',' ? '.' : ',';
+    return Number(raw.split(group).join('').replace(decimal, '.'));
+  }
+
+  const sep = lastComma >= 0 ? ',' : lastDot >= 0 ? '.' : null;
+  if (sep === null) return Number(raw);
+
+  const at = raw.lastIndexOf(sep);
+  const tail = raw.slice(at + 1);
+  if (tail.length === 3) return Number(raw.split(sep).join(''));
+  // The head keeps any earlier separators of the same kind, which are grouping marks
+  // whatever this last one turned out to be.
+  return Number(`${raw.slice(0, at).split(sep).join('')}.${tail}`);
+}
+
 function amount(raw: string, thousands: string | undefined): number {
-  const n = Number(raw.replace(/,/g, ''));
+  const n = readFigure(raw);
   return thousands ? n * 1000 : n;
 }
 
@@ -652,6 +735,9 @@ export function parseCompensation(text: string): ParsedComp | null {
     const after = clauseAfter(text, end);
 
     if (MAGNITUDE_AFTER.test(after) || NOT_PAY_BEFORE.test(before)) continue;
+    // A perk quoted in money, on either side of the figure. See NOT_PAY_NEAR.
+    if (NOT_PAY_NEAR.test(before) || NOT_PAY_NEAR.test(after)) continue;
+    if (PERK_PURPOSE.test(before) || PERK_PURPOSE.test(after)) continue;
 
     const unit = m[6] ? PERIOD_BY_UNIT[m[6].toLowerCase()] : undefined;
     // A day rate has nowhere to go: the stored schema has hour, week, month, year and

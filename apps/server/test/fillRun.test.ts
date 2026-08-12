@@ -43,13 +43,19 @@ vi.mock('../src/core/filling/browser', () => ({
   openSession: vi.fn(async () => {
     if (h.openGate) await h.openGate;
     h.opened += 1;
-    return {
+    // `closedByUser` is how a test spells "the person clicked the X on the Chromium
+    // window", which is the ordinary end of this flow and which nothing in the server
+    // listens for.
+    const session = {
       context: {},
-      page: { goto: async () => undefined },
+      page: { goto: async () => undefined, isClosed: () => session.closedByUser },
+      closedByUser: false,
       close: async () => {
         h.closed += 1;
+        session.closedByUser = true;
       },
     };
+    return session;
   }),
   detectIntervention: vi.fn(async () => {
     if (h.readGate) await h.readGate;
@@ -241,5 +247,53 @@ describe('two applications, one profile directory', () => {
     // A run with no session holds no window, and treating it as if it did would lock the
     // user out of every other application until they found the discard button.
     await expect(startRun(input('app-2'))).resolves.toMatchObject({ state: 'reading' });
+  });
+});
+
+describe('a browser window the user closed themselves', () => {
+  it('does not go on holding the profile against every other application', async () => {
+    // The ordinary end of the designed flow: fill, review, submit on the real page, close
+    // the Chromium window with the X. Nothing in the server listens for that, so the
+    // finished run sat in the registry holding a dead session and `browserHeldBy` refused
+    // every OTHER application — "another application has the browser open", about a browser
+    // that was not open. Before the mutual exclusion existed, starting the next one worked.
+    await startRun(input('app-1'));
+    const run = getRun('app-1')!;
+    await run.session!.close();
+
+    await expect(startRun(input('app-2'))).resolves.toMatchObject({ state: 'reading' });
+    expect(getRun('app-1')).toBeUndefined();
+  });
+
+  it('still refuses while the window is genuinely open', async () => {
+    // The guard has to keep doing its job, or two applications race the profile lock again.
+    await startRun(input('app-1'));
+    const refused = await startRun(input('app-2')).then(
+      () => 'resolved',
+      (e: Error) => e.message,
+    );
+    expect(refused).toMatch(/another application has the browser open/i);
+    // And it names which one, which the shared error code promises and the message did not.
+    expect(refused).toMatch(/form\.test/);
+  });
+});
+
+describe('a fill the user stops while it is typing', () => {
+  it('is not recorded as a fill that finished', async () => {
+    // Discard is offered mid-fill on purpose. It closes the context under `executePlan`,
+    // every per-field error is caught and becomes `status: failed`, so the fill returned
+    // NORMALLY with a pile of failures and the run was marked `done` — which walked the
+    // application through `filled` to `awaiting_submit` and wrote a `filled` event. The user
+    // pressed stop; the tracker said the form was filled and ready to submit.
+    await startRun(input('app-1'));
+
+    const { executePlan } = await import('../src/core/filling/fill');
+    vi.mocked(executePlan).mockImplementationOnce(async () => {
+      await discardRun('app-1');
+      return { results: [], filled: 0, mismatched: 0, failed: 18 } as never;
+    });
+
+    await expect(continueRun(input('app-1'))).rejects.toThrow(/stopped while it was filling/i);
+    expect(getRun('app-1')).toBeUndefined();
   });
 });
