@@ -616,6 +616,27 @@ const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\
  * along with it. The present and continuous forms and the noun forms are here for that
  * reason; "I deployed it to AWS" still names no affiliation and is still left alone.
  */
+/**
+ * Wanting the job, which is the whole point of the answer and is not a claim of having had it.
+ *
+ * The frame below grew present-tense and bare verb forms so "I am interning at NCSA" and "my
+ * internship at NASA" would stop being waved through, and in growing them it started matching
+ * the four sentences its own docstring promises it must not: "I want to intern at Acme", "I
+ * would love to work for Acme", "I am applying for an internship at Acme", "my interest in an
+ * internship at Acme". Those are the ordinary content of a why-this-company answer — the
+ * employer name is the one thing the question is about — and every one of them came back
+ * BLOCKING at G3 saying "your profile has no experience there. Say what draws you to them
+ * instead", printed against a sentence already doing exactly that. G3 has no override, so the
+ * only way out was deleting the sentence that answered the question.
+ *
+ * A veto rather than a narrowing of the frame, in the same shape as ADMIRATION_FRAME above:
+ * the employment reading stays as sharp as it was, and a sentence that also carries intent is
+ * read as the wish it is. `apply/applying` is here for the same reason — applying FOR a role
+ * at a company is the opposite of having held one.
+ */
+const INTENT_FRAME =
+  /\b(?:want(?:ed|s)?|wish(?:ed|es)?|hop(?:e|ed|es|ing)|plan(?:ned|s|ning)?|like|love|eager|keen|excited|thrilled|look(?:ing)? forward|aim(?:ing|s)?|intend(?:ing|s)?|plan(?:ning)?|plans?|plan|appl(?:y|ying|ied|ication)|seek(?:ing|s)?|plan to|plan on|would love|goal|ambition|dream|interest(?:ed)?)\b/i;
+
 const affiliationFrame = (name: string): RegExp =>
   new RegExp(
     String.raw`(?:` +
@@ -626,10 +647,23 @@ const affiliationFrame = (name: string): RegExp =>
       // stops free prose from vouching, that true sentence about the student's own bullet
       // came back blocking at G3 with no override. The bare form now has to be followed by
       // a preposition of its own, which is what makes it the verb.
-      String.raw`\b(?:i|we)\b[\w\s,'’-]{0,30}?\b(?:intern(?:ed|ing|s)?|work(?:ed|ing|s)?|stud(?:ied|ying|y(?=\s+(?:at|in|abroad|with)\b))|spent|spend(?:ing)?|join(?:ed|ing)?|serv(?:ed|ing)?|hired|employed|volunteer(?:ed|ing)?|apprenticed)\b` +
+      // Split by verb, because the prepositions are not interchangeable. "with" was added so
+      // "I was employed by FBLA" would stop escaping the frame, and the generic verbs took it
+      // too — so "I worked with the Google Maps API on my trail project" read as employment AT
+      // Google Maps API, prose vouching switched off, and a true sentence about the student's
+      // own project came back blocking at G3 with the project description sitting in the
+      // evidence saying "built with the Google Maps API". That is the fourth sentence this
+      // frame's docstring promises never to match. Working WITH a thing is using it; interning
+      // or volunteering WITH an organisation is holding a place in it.
+      String.raw`\b(?:i|we)\b[\w\s,'’-]{0,30}?\b(?:intern(?:ed|ing|s)?|join(?:ed|ing)?|serv(?:ed|ing)?|hired|employed|volunteer(?:ed|ing)?|apprenticed)\b` +
+      String.raw`[\w\s,'’-]{0,25}?\b(?:at|for|with|by|under)\s+` +
+      String.raw`|` +
+      String.raw`\b(?:i|we)\b[\w\s,'’-]{0,30}?\b(?:work(?:ed|ing|s)?|stud(?:ied|ying|y(?=\s+(?:at|in|abroad)\b))|spent|spend(?:ing)?)\b` +
+      String.raw`[\w\s,'’-]{0,25}?\b(?:at|for|by|under)\s+` +
       String.raw`|` +
       // A stint the writer calls their own: "my internship at NASA", "my time at MITRE".
       String.raw`\b(?:my|our)\b[\w\s,'’-]{0,20}?\b(?:internship|apprenticeship|fellowship|placement|role|position|job|time|tenure|summer|semester)\b` +
+      String.raw`[\w\s,'’-]{0,25}?\b(?:at|for|with|by|under)\s+` +
       String.raw`|` +
       // "I did an internship at NASA", "I had a fellowship at JPL", "I completed the
       // apprenticeship at MITRE" — the plainest way to state a stint, and the verb branch
@@ -639,13 +673,14 @@ const affiliationFrame = (name: string): RegExp =>
       // stay behind the "my/our" anchor to keep "I had a great time with SQL" from reading
       // as employment at SQL.
       String.raw`\b(?:i|we)\b[\w\s,'’-]{0,25}?\b(?:an?|the)\b[\w\s,'’-]{0,10}?\b(?:internship|apprenticeship|fellowship|placement|job|position|shift)\b` +
+      String.raw`[\w\s,'’-]{0,25}?\b(?:at|for|with|by|under)\s+` +
       String.raw`)` +
-      // "employed BY", and a determiner between the preposition and the name. The list was
-      // at|for|with with the name immediately after, so "I was employed by FBLA last summer"
-      // and "I interned at THE Plano Star Courier" both fell out of the frame entirely —
-      // and outside the frame an award, or a passing mention in somebody else's bullet, was
-      // allowed to vouch for a job the student never held. One preposition and one "the".
-      String.raw`[\w\s,'’-]{0,25}?\b(?:at|for|with|by|under)\s+(?:(?:the|a|an|my|our|its|their)\s+)?` +
+      // Only the determiner is shared now; each branch above carries its own prepositions,
+      // because "with" belongs to interning and not to working. "I interned at THE Plano Star
+      // Courier" fell out of the frame entirely before a determiner was allowed here — and
+      // outside the frame an award, or a passing mention in somebody else's bullet, was
+      // allowed to vouch for a job the student never held.
+      String.raw`(?:(?:the|a|an|my|our|its|their)\s+)?` +
       escapeRegExp(name) +
       String.raw`|` +
       // The passive-agent order, where the organisation is the subject: "FBLA employed me
@@ -1243,7 +1278,9 @@ export function checkClaimDeterministically(
      * fabricated employment, with the delivery bullet quoted underneath as its evidence.
      * Naming the place is still free; claiming a job there is not.
      */
-    const claimsEmployment = affiliationFrame(raw).test(claim);
+    // Wanting the job is not having had it. See INTENT_FRAME: without this veto the
+    // commonest sentence in a why-this-company answer was refused at a gate with no override.
+    const claimsEmployment = affiliationFrame(raw).test(claim) && !INTENT_FRAME.test(claim);
 
     if (matches([...knownNames])) continue;
     if (!claimsEmployment && containsPhrase(normEvidence, norm)) continue;
@@ -1280,7 +1317,11 @@ export function checkClaimDeterministically(
 
     // The company being applied to may be named freely, but not worked at.
     if (matches(contextNorms)) {
-      if (!affiliationFrame(raw).test(claim)) continue;
+      // The same veto as `claimsEmployment`, and this is the site that prints the refusal:
+      // without it, "I want to work at <them>" — the one sentence a why-this-company answer
+      // exists to contain — came back blocking, telling the writer to say what draws them to
+      // the company in a sentence that already did.
+      if (!claimsEmployment) continue;
       return {
         verdict: 'unsupported',
         reason:
@@ -1296,7 +1337,7 @@ export function checkClaimDeterministically(
     // three true sentences that any engineer would write, about a format, a protocol and an
     // interface. "I interned at IBM" is still read as employment and still red; "I deployed
     // it to AWS" is not a claim about working at AWS and is left alone.
-    if (isAcronymRun(raw) && !affiliationFrame(raw).test(claim)) continue;
+    if (isAcronymRun(raw) && !claimsEmployment) continue;
 
     return {
       verdict: 'unsupported',

@@ -24,7 +24,7 @@ import type { Frame, Locator, Page } from 'playwright';
 import type { FormField } from '@ia/shared';
 import { logger } from '../../infra/logger';
 import { keyDelay } from './browser';
-import { FILLABLE_CONTROLS } from './selectors';
+import { FILLABLE_CONTROLS, SAFE_OPTION } from './selectors';
 import { parseFrameKey } from './formMap';
 import type { FillAction, FillPlan } from './plan';
 
@@ -289,6 +289,22 @@ async function fillOne(page: Page, action: FillAction, documentUrl?: string): Pr
   try {
     await loc.waitFor({ state: 'visible', timeout: 5000 });
 
+    /**
+     * Nothing here re-checks that the element cannot submit, and that is deliberate.
+     *
+     * Three branches below open with `loc.click()`, so the question is real — but every
+     * locator this function can hold comes from `FILLABLE_CONTROLS` or `SAFE_OPTION`
+     * (selectors.ts), and both now exclude a button that is not explicitly `type="button"`.
+     * That includes the index fallback in `locate`, which resolves `nth(N)` against
+     * FILLABLE_CONTROLS itself — so however far a re-rendered page shifts the indices, the
+     * element it lands on is drawn from a set with no submit control in it.
+     *
+     * A second check here would have to ask the page, and a per-field `evaluate` is a round
+     * trip on every field to re-derive what the selector already guarantees. What keeps this
+     * honest instead is `selectors.test.ts`, which asks Chromium's own engine what those two
+     * selectors match — a test that reads the selector string could not tell a working
+     * `:not()` from one the browser silently failed to parse.
+     */
     switch (field.control) {
       case 'file': {
         if (!action.filePath) {
@@ -417,7 +433,7 @@ async function fillOne(page: Page, action: FillAction, documentUrl?: string): Pr
           (await loc.getAttribute('aria-controls')) ?? (await loc.getAttribute('aria-owns'));
         const listbox = owns ? frame.locator(`[id="${owns.replace(/["\\]/g, '\\$&')}"]`) : null;
         const scope = listbox && (await listbox.count()) > 0 ? listbox : frame;
-        const optionLoc = scope.locator('[role=option]');
+        const optionLoc = scope.locator(SAFE_OPTION);
         const offered = await optionLoc.evaluateAll((els) =>
           els.map((el) => ({
             value:

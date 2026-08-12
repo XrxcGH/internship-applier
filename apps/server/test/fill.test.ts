@@ -875,7 +875,8 @@ describe('option lists that are not <select>', () => {
     const page = pageOfFrames([
       {
         url: 'http://form.test/',
-        locator: (sel: string) => (sel === '[role=option]' ? combo.optionList : combo.locator),
+        locator: (sel: string) =>
+          sel.startsWith('[role=option]') ? combo.optionList : combo.locator,
       },
     ]);
     const r = await fillOnce(
@@ -902,7 +903,8 @@ describe('option lists that are not <select>', () => {
     const page = pageOfFrames([
       {
         url: 'http://form.test/',
-        locator: (sel: string) => (sel === '[role=option]' ? combo.optionList : combo.locator),
+        locator: (sel: string) =>
+          sel.startsWith('[role=option]') ? combo.optionList : combo.locator,
       },
     ]);
     const r = await fillOnce(

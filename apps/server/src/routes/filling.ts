@@ -352,6 +352,10 @@ const RUN_CONFLICTS: Array<{ startsWith: string; code: ApiErrorCode }> = [
   // is racing the very run this refusal exists to protect.
   { startsWith: 'Another application has the browser open', code: 'FILL_BROWSER_BUSY' },
   { startsWith: 'This fill run was discarded', code: 'NO_RUN' },
+  // The user pressed stop. A 409 rather than the 502 that says the site broke, and — because
+  // this is a conflict and not a completion — the route below never reaches the code that
+  // would have recorded the abandoned fill as `filled` and walked the application on.
+  { startsWith: 'This fill run was stopped', code: 'NO_RUN' },
 ];
 
 function refuse(
