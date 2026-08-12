@@ -19,6 +19,11 @@ import type { JobSource, NormalizedPosting } from '../src/core/discovery/sources
  * forty-five days of not-being-seen expired it.
  */
 
+/** A term in the shape every adapter builds, including the all-null one they emit. */
+function term(season: string | null, year: number | null): NormalizedPosting['term'] {
+  return { season, year, durationWeeks: null, multiTerm: false } as NormalizedPosting['term'];
+}
+
 function posting(over: Partial<NormalizedPosting> = {}): NormalizedPosting {
   return {
     externalId: 'x1',
@@ -35,7 +40,7 @@ function posting(over: Partial<NormalizedPosting> = {}): NormalizedPosting {
     hybridDaysOnsite: null,
     remoteEligibleIn: [],
     programFlags: [],
-    term: { season: 'summer', year: 2027 },
+    term: term('summer', 2027),
     compensation: null,
     requires: {},
     postedAt: null,
@@ -123,6 +128,47 @@ describe('a second sighting of a stored posting', () => {
     expect(row?.compensation).toMatchObject({ min: 30 });
     expect(row?.closesAt).toBe('2027-03-01T00:00:00Z');
     expect(row?.locations).toHaveLength(1);
+  });
+
+  it('does not overwrite a term with the empty one every parser returns', async () => {
+    // The case a null check cannot see, and the one that would actually happen: `term` is
+    // ALWAYS an object, so a source that read no season, year or duration still hands over
+    // `{season: null, year: null, durationWeeks: null, multiTerm: false}` — non-null, and
+    // straight past a null test onto a posting whose term was known. `requires` is `{}` the
+    // same way. The community list carries neither, and it re-sights everything.
+    stub({ postings: [posting({ term: term('summer', 2027) })] });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+    expect(stored()?.term).toMatchObject({ season: 'summer', year: 2027 });
+
+    stub({
+      postings: [
+        posting({
+          term: term(null, null),
+          requires: {},
+        }),
+      ],
+    });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+    expect(stored()?.term).toMatchObject({ season: 'summer', year: 2027 });
+  });
+
+  it('still lets a later sighting correct a term it can actually read', async () => {
+    // The other direction, which the fix above must not break: a real term replaces a real
+    // term, and a term arriving where there was none lands.
+    stub({ postings: [posting({ term: term(null, null) })] });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+
+    stub({ postings: [posting({ term: term('fall', 2027) })] });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+    expect(stored()?.term).toMatchObject({ season: 'fall', year: 2027 });
+  });
+
+  it('keeps a zero, which is a measurement rather than an absence', async () => {
+    // `hybridDaysOnsite: 0` says fully remote. Treating every falsy value as nothing would
+    // lose that fact on the next sighting.
+    stub({ postings: [posting({ hybridDaysOnsite: 0 })] });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+    expect(stored()?.hybridDaysOnsite).toBe(0);
   });
 
   it('leaves the fields dedupe matched on alone', async () => {
