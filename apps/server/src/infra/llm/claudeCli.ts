@@ -28,7 +28,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { config } from '../../config';
@@ -395,7 +395,18 @@ export const claudeCliBackend: Backend = {
       );
     }
 
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ia-claude-'));
+    /**
+     * Under the app's own root, not the machine's temp directory.
+     *
+     * The file written below is `req.system`, and for drafting that carries the user's name,
+     * their city, the evidence facts, and up to three DECRYPTED writing samples. In
+     * `os.tmpdir()` it was outside the one root config.ts insists everything lives under, so
+     * a process killed mid-generation stranded a plaintext copy of the user's own writing
+     * somewhere "delete everything" does not look — while that endpoint went on promising no
+     * copy is kept anywhere.
+     */
+    await mkdir(config.paths.scratch, { recursive: true });
+    const dir = await mkdtemp(path.join(config.paths.scratch, 'ia-claude-'));
     const systemFile = path.join(dir, 'system.txt');
 
     try {

@@ -170,8 +170,9 @@ export async function runDiscovery(
 
   const { unique, duplicates } = dedupe(collected);
   const inserted = persist(unique);
-  const seen = new Set(unique.map((u) => u.posting.canonicalUrl));
-  const closed = closePostings(closedUrls.filter((u) => !seen.has(u)));
+  // `persist` reports the row each posting landed in, which is the only identity that
+  // survives dedupe merging two addresses onto one job.
+  const closed = closePostings(closedUrls, new Set(inserted.ids));
 
   for (const r of reports) {
     r.new = inserted.perSource.get(`${r.source}:${r.board}`) ?? 0;
@@ -297,11 +298,50 @@ function carriesNothing(value: unknown): boolean {
  * matched on, so rewriting them from a different source's spelling would move the row out
  * from under the key that found it.
  */
-function freshFields(p: NormalizedPosting): Record<string, unknown> {
+/**
+ * A JSON column merged leaf by leaf, so a thinner sighting cannot erase the detail in it.
+ *
+ * "Never replace something with nothing" was applied per COLUMN, and `term` and
+ * `compensation` are whole objects. The community list always produces a season and a year —
+ * its own text carries "Summer 2027" — so its `term` never counts as empty, and re-sighting a
+ * Greenhouse posting through it replaced `{season, year, start, end, durationWeeks}` with
+ * `{season, year}`. `term.start`/`end` are what the eligibility rule treats as the firm
+ * window, so a corroborated window silently degraded to a season-approximate one, on every
+ * run, for every posting the list also carries.
+ */
+function mergeLeaves(stored: unknown, fresh: unknown): unknown {
+  if (
+    typeof stored !== 'object' ||
+    stored === null ||
+    Array.isArray(stored) ||
+    typeof fresh !== 'object' ||
+    fresh === null ||
+    Array.isArray(fresh)
+  ) {
+    return fresh;
+  }
+  const out: Record<string, unknown> = { ...(stored as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(fresh as Record<string, unknown>)) {
+    if (!carriesNothing(value)) out[key] = value;
+  }
+  return out;
+}
+
+/** What the Ashby adapter stamps on a figure the employer published themselves. */
+const EMPLOYER_STATED = 'stated by the employer on the job board';
+
+function freshFields(
+  p: NormalizedPosting,
+  stored?: Record<string, unknown>,
+): Record<string, unknown> {
   const set: Record<string, unknown> = {};
   const put = (column: string, value: unknown): void => {
     if (carriesNothing(value)) return;
     set[column] = value;
+  };
+  const merge = (column: string, value: unknown): void => {
+    if (carriesNothing(value)) return;
+    set[column] = mergeLeaves(stored?.[column], value);
   };
 
   put('applyUrl', p.applyUrl);
@@ -313,9 +353,22 @@ function freshFields(p: NormalizedPosting): Record<string, unknown> {
   put('hybridDaysOnsite', p.hybridDaysOnsite);
   put('remoteEligibleIn', p.remoteEligibleIn);
   put('programFlags', p.programFlags);
-  put('term', p.term);
-  put('compensation', p.compensation);
-  put('requires', p.requires);
+  merge('term', p.term);
+  merge('requires', p.requires);
+
+  /**
+   * A figure the employer published outranks one a regex found, whichever arrives later.
+   *
+   * `ashbyPay` reads the band Ashby states and marks it; everything else is the text parser's
+   * best reading of prose. Replacing the first with the second is the exact harm that adapter
+   * was written to end — Ramp's internship states $11,700 a month, and a later, thinner
+   * sighting carrying a predicted $85,000 a year would have put it straight back. Within one
+   * run the order the sources happen to finish in decides which arrives last, so this cannot
+   * be left to chance.
+   */
+  const storedComp = stored?.['compensation'] as { raw?: string } | null | undefined;
+  const freshIsStated = (p.compensation as { raw?: string } | null)?.raw === EMPLOYER_STATED;
+  if (!(storedComp?.raw === EMPLOYER_STATED && !freshIsStated)) put('compensation', p.compensation);
   put('postedAt', p.postedAt);
   put('closesAt', p.closesAt);
   return set;
@@ -329,7 +382,7 @@ function freshFields(p: NormalizedPosting): Record<string, unknown> {
  * one indexed lookup; there is no reason to complain about it, because a source listing its
  * own closed roles will always name plenty we never saw open.
  */
-function closePostings(urls: string[]): number {
+function closePostings(urls: string[], seenOpen: Set<string>): number {
   let closed = 0;
   for (const url of new Set(urls)) {
     const rows = db
@@ -338,6 +391,18 @@ function closePostings(urls: string[]): number {
       .where(and(eq(schema.jobPosting.canonicalUrl, url), eq(schema.jobPosting.isOpen, true)))
       .all();
     for (const row of rows) {
+      /**
+       * The row, not the URL, is what "we also saw this open" has to be about.
+       *
+       * The caller used to hold back a closed URL only when the same run had fetched THAT
+       * URL open — and persistence merges by fingerprint as well as by URL, so the same job
+       * seen open on Greenhouse and closed on the community list is one stored row reached
+       * by two different addresses. The Greenhouse sighting re-opened the row, the list's
+       * closure then shut it, and a posting a student could still have applied to left the
+       * queue. Not a corner: the community list is the cold-start default, so a row first
+       * stored from it and later seen on a company board is the ordinary provenance.
+       */
+      if (seenOpen.has(row.id)) continue;
       db.update(schema.jobPosting)
         .set({ isOpen: false, lastSeenAt: new Date().toISOString() })
         .where(eq(schema.jobPosting.id, row.id))
@@ -390,13 +455,18 @@ function persist(unique: ReturnType<typeof dedupe>['unique']): PersistResult {
     const now = new Date().toISOString();
 
     if (existing[0]) {
+      const stored = db
+        .select()
+        .from(schema.jobPosting)
+        .where(eq(schema.jobPosting.id, existing[0].id))
+        .all()[0];
       db.update(schema.jobPosting)
         // The fingerprint is rewritten, not just the timestamps. Its definition became more
         // cautious — it used to erase the tokens that tell "Intern I" from "Intern II" —
         // and rows stored under the old key would otherwise keep matching two distinct
         // requisitions onto one row forever. Recomputing on every sighting means the table
         // heals itself as postings are seen again, with no data migration to get wrong.
-        .set({ lastSeenAt: now, isOpen: true, fingerprint: fp, ...freshFields(p) })
+        .set({ lastSeenAt: now, isOpen: true, fingerprint: fp, ...freshFields(p, stored) })
         .where(eq(schema.jobPosting.id, existing[0].id))
         .run();
       linkSources(existing[0].id, entry.sources, p.externalId);

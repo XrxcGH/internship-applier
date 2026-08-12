@@ -2,6 +2,24 @@ import { z } from 'zod';
 
 /** YYYY-MM */
 export const YearMonth = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected YYYY-MM');
+
+/**
+ * An address, or the empty string that means "not read off the resume yet".
+ *
+ * Exported, and the reason is the wall it removes. The G1 wizard has to refuse a malformed
+ * address BEFORE it tries to save, because the server answers a schema breach with "Profile
+ * did not match the expected shape" naming no field — and the wizard's own guard was a
+ * hand-written regex, deliberately "the loose shape the schema takes", which was looser than
+ * Zod's actual one. `rosa..dean@gmail.com` and `rosa@gmail.c` passed the client and failed
+ * the server, which is exactly the unnamed wall the guard exists to prevent. Two spellings
+ * of one rule is one spelling too many; this is the rule, and `isEmailShaped` below is how
+ * the client asks it.
+ */
+export const EmailAddress = z.union([z.string().email(), z.literal('')]);
+
+export function isEmailShaped(value: string): boolean {
+  return EmailAddress.safeParse(value.trim()).success;
+}
 /**
  * YYYY-MM-DD, and a real calendar day.
  *
@@ -170,7 +188,7 @@ export const CandidateProfile = z.object({
    */
   pronouns: z.string().nullable().default(null),
   /**
-   * Empty is a legal state, and a deliberate one.
+   * Empty is a legal state, and a deliberate one. See EmailAddress.
    *
    * A resume without a readable email address produces '', which `needsReview` flags so
    * G1 cannot be passed until the user supplies it. A bare `.email()` rejected that on
@@ -178,7 +196,7 @@ export const CandidateProfile = z.object({
    * empty string stored fine and then failed to parse on every read, locking the user out
    * of the very screen where they would have filled it in.
    */
-  email: z.union([z.string().email(), z.literal('')]),
+  email: EmailAddress,
   phone: z.string().optional(),
   /**
    * User-entered only — never extracted from a resume. Used for local eligibility

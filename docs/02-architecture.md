@@ -25,10 +25,11 @@ Playwright-controlled browser window. Nothing is hosted; there is no multi-tenan
 │        ┌─────────────────────┼──────────────────────┐               │
 │        ▼                     ▼                      ▼               │
 │  ┌───────────┐        ┌────────────┐         ┌────────────┐         │
-│  │ Job queue │        │  SQLite    │         │ LLM client │         │
-│  │ (in-proc, │        │  (Drizzle) │         │ (Anthropic)│         │
-│  │  SQLite-  │        │  app.db    │         │ opus/haiku │         │
-│  │  backed)  │        └────────────┘         └────────────┘         │
+│  │ Run log   │        │  SQLite    │         │ LLM client │         │
+│  │ (`task`   │        │  (Drizzle) │         │ (Anthropic)│         │
+│  │  table —  │        │  app.db    │         │ opus/haiku │         │
+│  │  finished │        └────────────┘         └────────────┘         │
+│  │ summaries)│                                                      │
 │  └───────────┘                                                      │
 └───────────────┬─────────────────────────────────────────────────────┘
                 │ CDP
@@ -47,7 +48,7 @@ Playwright-controlled browser window. Nothing is hosted; there is no multi-tenan
 | DB | SQLite via `better-sqlite3` + Drizzle ORM | Single file, zero-ops, synchronous, good enough for one user. Drizzle gives typed queries + migrations without a heavy runtime. |
 | Browser | Playwright (`playwright` npm) | Best-in-class selector engine, `getByLabel`/`getByRole` map directly onto form-field semantics, persistent contexts, tracing for debugging. |
 | Frontend | React 19 + Vite + TypeScript | Fast dev loop; the UI is form- and list-heavy, which React handles well. |
-| Styling | Tailwind 4, no component library | shadcn/ui and Radix were planned and not adopted: the interface turned out to need five components, all of them plain HTML controls, and a dependency that exists to supply a dialog and a combobox we never built is a dependency that only carries risk. |
+| Styling | Tailwind 4, no component library | shadcn/ui and Radix were planned and not adopted: the interface turned out to need six components, all of them plain HTML controls, and a dependency that exists to supply a dialog and a combobox we never built is a dependency that only carries risk. |
 | Data fetching | `fetch` in `lib/api.ts` | TanStack Query was planned and not adopted. The screens are few and each one owns a single `refresh()`; a cache layer would be more machinery than the thing it caches. |
 | Client state | React `useState` in `App.tsx` | Zustand was planned and not adopted. The only genuinely global state is which view is open, which is one `useState`. |
 | LLM | Anthropic TS SDK, `claude-opus-5` | Structured extraction, drafting, field classification. `claude-haiku-4-5` for high-volume cheap classification. |
@@ -107,9 +108,13 @@ Local text extraction (`mammoth` for DOCX, plain read for TXT/MD) exists as the 
 non-PDF formats and as a cheap re-run path when the raw text is already cached. Scanned
 PDFs work because Claude reads them as images.
 
-**No Redis, no external queue.** A `tasks` table plus an in-process async worker pool covers
-the concurrency needs (a few dozen HTTP fetches, a handful of LLM calls). Adding a broker
-would be the single biggest ops cost for no benefit at this scale.
+**No Redis, no external queue — and no internal one either.** This was planned as a `task`
+table plus an in-process async worker pool, and neither the pool nor the worker loop was ever
+built. § Concurrency below describes what actually runs: long work happens inside the request
+that asked for it, and the `task` table holds finished discovery-run summaries so
+`GET /api/discovery/runs/:id` can answer afterwards. Adding a broker would have been the
+single biggest ops cost for no benefit at this scale; the worker loop turned out to be
+unnecessary as well.
 
 **Headed browser by default.** The user should see the form being filled. Headless mode
 exists only for the test fixture site.
@@ -122,8 +127,8 @@ One command starts everything:
 npm run dev
 ```
 
-- `apps/server` — Fastify on `127.0.0.1:8787`, bound to loopback only. Owns the DB, the
-  task worker, and the Playwright browser.
+- `apps/server` — Fastify on `127.0.0.1:8787`, bound to loopback only. Owns the DB and the
+  Playwright browser.
 - `apps/web` — Vite dev server on `127.0.0.1:5173`, proxying `/api` to the server.
 - Playwright browser launches lazily on the first fill request and persists for the session.
 
@@ -219,9 +224,11 @@ internship-applier/
    per-dimension breakdown and a `rationale`.
 5. **G2 · Approve.** Matches land in the review queue. User approves, skips, or rejects with
    a reason (rejection reasons feed preference learning).
-6. **Draft.** On approval, the tool opens the application page, builds a `FormMap`, and for
-   each free-text question drafts an answer: retrieve relevant profile facts → generate in
-   the user's `StyleProfile` → `factGuard` verifies → `styleCritic` revises.
+6. **Draft.** Approving creates an application and nothing else — it opens no browser, drafts
+   nothing and submits nothing (docs/08 § Queue). Questions are added by the user or read off
+   the `FormMap` a fill run builds, and each answer is drafted on request, one call per
+   answer: retrieve relevant profile facts → generate in the user's `StyleProfile` →
+   `factGuard` verifies → `styleCritic` revises.
 7. **G3 · Review.** Answer workspace shows each question, the draft, the supporting profile
    evidence, and any unsupported-claim flags. User edits and approves each one.
 8. **Fill.** The visible browser fills the form field by field. Redlined fields

@@ -255,6 +255,7 @@ export interface EditorProps {
     prefix: string,
     fn: (p: CandidateProfile) => CandidateProfile,
     moved?: number[],
+    clears?: string,
   ) => void;
 }
 
@@ -485,7 +486,10 @@ export function SkillsEditor({ profile, flagged, edit, editList }: EditorProps) 
     // The corpus flag is cleared and re-raised by the value, not by the interaction: an
     // empty list is not an answer to "the reader found no skills", so `isAnswered` reads an
     // empty array as unanswered and deleting the last skill puts the flag back.
-    if (moved) editList('skills', put, moved);
+    // `'skills'` on both branches. A removal takes the `moved` path so the index-addressed
+    // flags follow the rows, and it must ALSO answer the corpus flag — otherwise adding a
+    // skill clears it and removing that skill leaves it cleared.
+    if (moved) editList('skills', put, moved, 'skills');
     else edit(put, 'skills');
   };
 

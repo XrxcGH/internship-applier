@@ -245,3 +245,87 @@ describe('wrongShape', () => {
     expect(summary.skipped.join(' ')).toMatch(/not a list of postings/i);
   });
 });
+
+describe('one job, two addresses', () => {
+  /**
+   * Persistence merges by fingerprint as well as by canonical URL, so the same job seen on a
+   * company board and on the community list is ONE stored row reachable by two addresses.
+   * The closure guard held back a closed URL only when the same run had fetched THAT URL
+   * open, so a Greenhouse sighting re-opened the row and the list's own closure then shut it
+   * again — a posting the student could still have applied to, gone from the queue. The
+   * community list is the cold-start default, so a row first stored from it and later seen on
+   * a board is the ordinary provenance, not a corner.
+   */
+  it('stays open when one source saw it open and another calls it closed', async () => {
+    const listUrl = 'https://simplify.jobs/p/acme-swe-intern';
+    const boardUrl = 'https://boards.greenhouse.io/acme/jobs/111';
+
+    stub({ postings: [posting({ canonicalUrl: listUrl, applyUrl: listUrl })] });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+    expect(stored()?.canonicalUrl).toBe(listUrl);
+
+    // Same company, same title, same city — so `dedupe`'s fingerprint merges it onto the row
+    // already stored under the list's address.
+    stub({
+      postings: [posting({ canonicalUrl: boardUrl, applyUrl: boardUrl })],
+      closed: [listUrl],
+    });
+    const summary = await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+
+    expect(db.select().from(schema.jobPosting).all()).toHaveLength(1);
+    expect(stored()?.isOpen).toBe(true);
+    expect(summary.closed).toBe(0);
+  });
+});
+
+describe('a JSON column a thinner source re-sights', () => {
+  it('keeps the term detail the new sighting does not carry', async () => {
+    // The community list always produces a season and a year — its own text says "Summer
+    // 2027" — so its `term` never counts as empty, and a per-column rule replaced a
+    // corroborated window with a season-approximate one. `term.start`/`end` are what the
+    // eligibility rule treats as the firm window.
+    stub({
+      postings: [
+        posting({
+          term: { season: 'summer', year: 2027, start: '2027-06', end: '2027-08' } as never,
+        }),
+      ],
+    });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+
+    stub({ postings: [posting({ term: term('summer', 2027) })] });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+
+    expect(stored()?.term).toMatchObject({
+      season: 'summer',
+      year: 2027,
+      start: '2027-06',
+      end: '2027-08',
+    });
+  });
+
+  it('does not let a parsed pay figure replace one the employer published', async () => {
+    // `ashbyPay` reads the band Ashby states; everything else is a regex over prose. Ramp's
+    // internship states $11,700 a month, and a later sighting carrying a predicted $85,000 a
+    // year would have put it straight back — the exact harm that adapter was written to end.
+    const stated = {
+      min: 11_700,
+      currency: 'USD',
+      period: 'month',
+      raw: 'stated by the employer on the job board',
+    };
+    stub({ postings: [posting({ compensation: stated })] });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+
+    stub({
+      postings: [posting({ compensation: { min: 85_000, currency: 'USD', period: 'year' } })],
+    });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+    expect(stored()?.compensation).toMatchObject({ min: 11_700, period: 'month' });
+
+    // And a NEWER employer-stated figure still lands, because the employer is the authority.
+    stub({ postings: [posting({ compensation: { ...stated, min: 12_500 } })] });
+    await runDiscovery([{ source: 'greenhouse', board: 'acme' }]);
+    expect(stored()?.compensation).toMatchObject({ min: 12_500 });
+  });
+});

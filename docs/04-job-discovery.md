@@ -182,7 +182,7 @@ interface JobSource {
 }
 ```
 
-`fetch` returns `{ postings: NormalizedPosting[]; notes: string[]; gaps?: string[] }` — one
+`fetch` returns `{ postings: NormalizedPosting[]; notes: string[]; gaps?: string[]; closed?: string[] }` — one
 call, one array, already normalized. Normalization is not a separate method: each adapter
 maps its own vendor payload inline, because the mapping is the only part that differs
 between sources and a second method would only be a place to forget to call.
@@ -201,6 +201,17 @@ The runner also marks a source degraded for a gap and repeats it in the run summ
 `skipped` list, which is where the UI gets "the search was incomplete" from. A plain note
 does neither, so a source that quietly returned its first fifty of eight hundred matches
 used to read as complete coverage.
+
+`closed` is a fourth channel, and a different kind of thing from the other three: canonical
+URLs the source itself says are no longer open. The community list marks a finished role
+`active: false`, and that row used to be skipped and forgotten — the best closure evidence in
+the pipeline, costing no request, thrown away, so a stored posting stayed open until the
+45-day staleness window expired it and the queue went on offering an application that could
+no longer be made. `runDiscovery` applies these after every source has been read, and a
+posting the same run also fetched OPEN stays open: the sighting is the stronger signal, and
+it is matched by stored row rather than by URL, because dedupe merges two addresses for one
+job onto one row. The count appears on the run summary as `closed` and on the Discover
+screen's headline.
 
 Normalization is deterministic parsing, not an LLM call: title/company/location/dates come
 straight from structured source fields. Discovery makes no model calls at all — requirement
@@ -312,7 +323,7 @@ targets out across **4** workers by default, so a run can't saturate the user's 
 
 Every discovery run produces a summary the UI shows: per source — postings found, how many
 were new, every error, the source's own notes, and whether it was degraded. Run totals carry
-found, new and duplicates, plus a `skipped` list naming each source that contributed less
+found, new, duplicates and `closed`, plus a `skipped` list naming each source that contributed less
 than it looks like it did. If a source was rate-limited, missing a key, or unknown to the
 runner, that is stated. Silent truncation would read as "we searched everywhere" when we
 didn't, which is exactly the failure mode that makes an automated search tool untrustworthy.

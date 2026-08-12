@@ -152,18 +152,34 @@ same transition check the status route does.
 `GET /api/events` — one long-lived stream, `text/event-stream`.
 
 ```ts
-type AppEvent =
-  | { type: 'extraction.progress'; documentId: string; stage: string; pct: number }
-  | { type: 'discovery.progress'; runId: string; source: string; found: number; new: number }
+type AppEvent =                                                              // publisher?
+  | { type: 'extraction.progress'; documentId: string; stage: string; pct: number }      // none
+  | { type: 'discovery.progress'; runId: string; source: string; found: number; new: number | null }
   | { type: 'discovery.source_failed'; runId: string; source: string; error: string }
-  | { type: 'discovery.done'; runId: string; summary: RunSummary }
-  | { type: 'match.new'; matchId: string; score: number }
+  | { type: 'discovery.done'; runId: string;
+      summary: { sources: number; found: number; new: number; duplicates: number;
+                 errors: number; skipped: string[] } }
+  | { type: 'match.new'; matchId: string; score: number }                                // none
   | { type: 'draft.progress'; applicationId: string; questionId: string; stage: string }
   | { type: 'fill.step'; applicationId: string; field: string; status: 'ok'|'mismatch'|'skipped'|'failed'; note?: string }
-  | { type: 'fill.needs_input'; applicationId: string; reason: 'login'|'captcha'|'unknown_field'; detail: string }  // 'unknown_field' is never sent — see below
+  | { type: 'fill.needs_input'; applicationId: string; reason: 'login'|'captcha'; detail: string }
   | { type: 'fill.done'; applicationId: string; filled: number; mismatched: number; failed: number; skipped: number }
-  | { type: 'task.failed'; taskId: string; kind: string; error: string };
+  | { type: 'task.failed'; taskId: string; kind: string; error: string };                // none
 ```
+
+Three of those members have **no publisher at all** — `extraction.progress`, `match.new` and
+`task.failed` are declared and nothing ever sends them; `packages/shared/src/events.ts` marks
+each one. Two more details the shape above now states rather than glosses: `discovery.progress`
+carries `new: number | null`, and null is the only value the runner currently sends, because
+how many are new is not known until every source has been fetched — zero has to keep meaning
+zero. And `discovery.done`'s `summary` is its own small object, **not** the `RunSummary` the
+`/runs` endpoints return, so a consumer reading `summary.bySource` or `summary.closed` off the
+stream gets `undefined`; the run summary proper comes back in the POST response.
+
+`fill.needs_input` has exactly two reasons. `unknown_field` was removed from the schema
+outright — `packages/shared/test/events.test.ts` asserts the schema rejects it — because the
+screen that renders these treats "not login" as "bot check", so a third reason would have told
+the user to solve a challenge that is not on the page.
 
 Each event carries a monotonic `seq`, and a heartbeat comment goes out every 20s to keep the
 connection alive. The stream is served and the events are published; **the frontend does not

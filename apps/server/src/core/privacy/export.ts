@@ -153,17 +153,43 @@ export async function deleteEverything(): Promise<DeleteResult> {
    * truncates it; VACUUM rewrites the file from live content only, dropping the free
    * pages entirely.
    */
+  const deletedPaths: string[] = [];
+  const failed: Array<{ path: string; reason: string }> = [];
+
   try {
     sqlite.pragma('wal_checkpoint(TRUNCATE)');
     sqlite.exec('VACUUM');
   } catch (err) {
-    logger.warn({ err }, 'could not compact the database after deleting; rows are gone regardless');
+    /**
+     * A failed compaction is a failure of the promise, not a footnote to it.
+     *
+     * This logged a warning and carried on, and the route's message keys on `failed` — so a
+     * VACUUM that threw (another process holding a read transaction, a full disk) produced
+     * "Everything has been deleted… no copy kept anywhere" over a database still holding the
+     * pre-delete page images this very block exists to destroy. The rows really are gone from
+     * the tables, which is what the old wording meant; what survives is the hex-editor
+     * scenario the comment above describes, on the one endpoint whose entire purpose is that
+     * it does not.
+     */
+    logger.warn({ err }, 'could not compact the database after deleting');
+    failed.push({
+      path: config.paths.database,
+      reason:
+        'The rows are gone, but the database file could not be compacted, so deleted text ' +
+        'may still be recoverable from it. Close anything else using it and delete again.',
+    });
   }
 
-  const deletedPaths: string[] = [];
-  const failed: Array<{ path: string; reason: string }> = [];
-
-  const targets = [config.paths.resumes, config.paths.artifacts, config.paths.browserProfile];
+  // `scratch` is where the CLI backend writes the prompt it hands the subprocess, which for
+  // drafting carries decrypted writing samples. Its own `finally` removes each directory, so
+  // this is for the copies a killed process left behind — the ones that outlive the run and
+  // would otherwise outlive the delete too.
+  const targets = [
+    config.paths.resumes,
+    config.paths.artifacts,
+    config.paths.browserProfile,
+    config.paths.scratch,
+  ];
 
   for (const target of targets) {
     try {
