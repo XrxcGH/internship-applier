@@ -252,6 +252,31 @@ export function saveManualPosting(posting: NormalizedPosting): string {
 }
 
 /**
+ * Whether a value carries any information at all, however deeply it is wrapped.
+ *
+ * A null test is not enough, and getting this wrong broke the very rule `freshFields` is
+ * written to keep. `term` is ALWAYS an object — a source that could read no season, year or
+ * duration still returns `{season: null, year: null, durationWeeks: null, multiTerm: false}`
+ * — and `requires` is `{}` when the description was empty. Both are non-null, so both sailed
+ * past a null check and overwrote a good stored term with nothing, which is exactly what
+ * happens when the community list, which carries neither, re-sights a Greenhouse posting.
+ *
+ * `false` counts as nothing and `0` counts as something, and that asymmetry is deliberate.
+ * Every boolean on a NormalizedPosting is a parser flag whose `false` means "no evidence of
+ * this" — `multiTerm` is literally `duration !== null && duration > 20` — while `0` is a real
+ * measurement: `hybridDaysOnsite: 0` says fully remote, and losing it would be losing a fact.
+ */
+function carriesNothing(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (typeof value === 'boolean') return value === false;
+  if (typeof value === 'number') return false;
+  if (Array.isArray(value)) return value.every(carriesNothing);
+  if (typeof value === 'object') return Object.values(value).every(carriesNothing);
+  return false;
+}
+
+/**
  * What a later sighting is allowed to change about a posting already on file.
  *
  * A row was written once and then never touched again except for its timestamps, so anything
@@ -275,9 +300,7 @@ export function saveManualPosting(posting: NormalizedPosting): string {
 function freshFields(p: NormalizedPosting): Record<string, unknown> {
   const set: Record<string, unknown> = {};
   const put = (column: string, value: unknown): void => {
-    if (value === null || value === undefined) return;
-    if (typeof value === 'string' && value.trim() === '') return;
-    if (Array.isArray(value) && value.length === 0) return;
+    if (carriesNothing(value)) return;
     set[column] = value;
   };
 
