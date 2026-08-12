@@ -2,8 +2,12 @@
 
 Where model calls go, and why the options are what they are.
 
-Two things in this app need a model: reading a resume into a structured profile (M1) and
-drafting an answer (M5). **Nothing else does.** Discovery, requirement extraction's regex
+Three things in this app can use a model: reading a resume into a structured profile (M1),
+drafting an answer (M5), and — **only when an `ANTHROPIC_API_KEY` is set** — the model pass
+in requirement extraction, which sends the text of a job description (`extractRequirements.ts`,
+gated on `hasApiKey()`; docs/05 § Stage 0 describes it, and the cost table below prices it).
+The CLI backend never runs that pass. Everything else is local: discovery, requirement
+extraction's regex
 pass, the twelve eligibility rules, scoring, FactGuard's deterministic layer, StyleCritic,
 and the tell-scrub are all pure functions running on this machine. An install with no model
 access is a reduced tool, not a broken one, and `GET /api/model-access` says exactly which

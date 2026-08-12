@@ -181,7 +181,7 @@ this posting), `seen_at`. Unique on `(posting_id, source_id)`.
 | `term` | json | `{season, year, start?, end?, durationWeeks, multiTerm}`; `season`/`year` null when the parser couldn't tell |
 | `compensation` | json | `{min?, max?, currency?, period?, unpaid?, academicCreditOnly?, raw?, …}` |
 | `posted_at` / `closes_at` | text | `closes_at` nullable |
-| `is_open` | integer | Refreshed by `refresh.ts` |
+| `is_open` | integer | Cleared by `refresh.ts`, and by a discovery run when a source itself reports the posting closed (docs/04 § SourceResult) |
 | `ats_vendor` | text | Detected: greenhouse/lever/ashby/workday/icims/taleo/smartrecruiters/workable/unknown |
 | `apply_effort` | json | `{steps, essayCount, requiresAccount, estMinutes}`. **Nothing writes it**: no adapter, no refresh and no manual-posting path sets it, so it is always null and the Application-effort dimension in docs/05 scores every posting the same neutral 0.6 |
 | `fingerprint` | text | `company \| normalized title \| primary city` — second dedupe key, indexed |
@@ -264,7 +264,10 @@ generation risk and keeps a consistent story across applications.
 
 ### Cross-cutting
 
-- **`task`** — `id`, `kind`, `payload` json, `status` (`queued`\|`running`\|`done`\|`failed`\|`cancelled`), `attempts`, `max_attempts`, `run_after`, `started_at`, `finished_at`, `error`, `progress` json. The queue is just this table plus a worker loop.
+- **`task`** — `id`, `kind`, `payload` json, `status` (`queued`\|`running`\|`done`\|`failed`\|`cancelled`), `attempts`, `max_attempts`, `run_after`, `started_at`, `finished_at`, `error`, `progress` json. **There is no queue and no worker loop** — neither was built. Only
+`kind: 'discovery_run'` rows are ever written, by `runDiscovery` after a run has finished, so
+`GET /api/discovery/runs/:id` can answer about it afterwards; every other column here is
+part of a design that was never used. See docs/02 § Concurrency.
 - **`llm_call`** — `id`, `purpose`, `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd`, `latency_ms`, `stop_reason`, `at`. Powers the cost panel and lets a bad prompt be traced to a bad output.
 - **`credential_ref`** — `id`, `domain`, `label`, `storage_state_path`, `last_used_at`. **Never stores passwords.** Points at a Playwright storage-state file the user created by logging in themselves.
 - **`filter_preset`** — `id`, `name` (unique), `description`, `filters` json, `is_default`, `created_at`, `updated_at`. The named, saved filter sets in docs/05 § Presets. The table and the starter set exist; **no feature reads or writes either yet** — the one thing that touches the table is the privacy export, which includes it so that "everything stored" means everything.

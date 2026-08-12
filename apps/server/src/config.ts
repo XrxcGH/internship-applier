@@ -123,6 +123,17 @@ export const config = {
     resumes: path.resolve(DATA_DIR, 'resumes'),
     artifacts: path.resolve(DATA_DIR, 'artifacts'),
     browserProfile: path.resolve(DATA_DIR, 'browser-profile'),
+    /**
+     * Scratch space for the CLI backend, under the root rather than in the OS temp directory.
+     *
+     * The prompt handed to the Claude Code CLI is written to a file, and for drafting that
+     * prompt carries the user's name, their city, the evidence facts, and up to three
+     * DECRYPTED writing samples. It went to `%TEMP%/ia-claude-*`, cleaned by a `finally` —
+     * so a process killed mid-generation stranded it, outside the one place "delete
+     * everything" looks. A wipe that promises no copy is kept anywhere would have left the
+     * user's own writing sitting in plaintext in a world-readable temp directory.
+     */
+    scratch: path.resolve(DATA_DIR, 'scratch'),
     masterKey: path.resolve(DATA_DIR, '.master.key'),
     migrations: path.resolve(REPO_ROOT, 'apps/server/drizzle'),
   },

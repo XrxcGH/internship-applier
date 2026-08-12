@@ -222,10 +222,13 @@ applications or missed ones.
 - **Per-item deletion** for resumes (`DELETE /api/resumes/:id`), writing samples
   (`DELETE /api/writing-samples/:id`), individual drafted answers
   (`DELETE /api/answers/:id`), and saved answer templates
-  (`DELETE /api/answer-library/:id`). **Not built:** deleting a single application. There is
-  no `DELETE /api/applications/:id`, and `schema.application` is never a delete target
-  anywhere in the server — the row and its answers survive until "delete everything" takes
-  the whole database. It is not a one-liner: an application delete has to cascade to its
+  (`DELETE /api/answer-library/:id`). **Not built:** deleting a single application on demand.
+  There is no `DELETE /api/applications/:id` — but `schema.application` IS a delete target in
+  one place: reversing a G2 approval deletes the application, its `application_answer` rows
+  and its `application_event` rows (`routes/matches.ts`), and refuses once the application has
+  reached a status the user owns. So an application the tool created and you then un-approve
+  is gone with its answers; anything you have taken past that survives until "delete
+  everything" takes the whole database. It is not a one-liner: an application delete has to cascade to its
   `application_answer` rows and its fill artifacts, or it leaves the answers behind, which
   is the PII the user was trying to remove.
 - A Settings → Privacy panel that states, in plain sentences, exactly what is stored where

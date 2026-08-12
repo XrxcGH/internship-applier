@@ -72,10 +72,29 @@ export async function uploadResume(file: File): Promise<{ documentId: string }> 
   return body as { documentId: string };
 }
 
+/**
+ * Reading a resume is a profile write, and it costs approvals like any other.
+ *
+ * The route answers with `withdrawnApprovals` — its own comment says the key "is spelled the
+ * same way PUT /api/profile spells it, on purpose: the wizard and the upload screen both need
+ * to say the same sentence to the user" — and this typed the response without it and returned
+ * two of the three fields. Re-extraction is the most violent profile write there is: it
+ * replaces every fact at once, so it withdraws the most. The student uploaded a corrected
+ * resume, was told nothing, went on believing their answers were approved, and found out at
+ * G4 when the fill refused.
+ *
+ * Third time for this exact shape of loss. `readProfileWrite` above was written for it on the
+ * profile endpoints, and `DeleteResult.failed` for it on delete-all. The client is not the
+ * place a fact goes missing.
+ */
 export const extractResume = (id: string) =>
-  request<{ profile: unknown; needsReview: string[] }>(`/api/resumes/${id}/extract`, {
-    method: 'POST',
-  }).then((r) => ({ profile: CandidateProfile.parse(r.profile), needsReview: r.needsReview }));
+  request<unknown>(`/api/resumes/${id}/extract`, { method: 'POST' }).then((body) => {
+    const r = body as { needsReview?: string[] } | null;
+    return {
+      ...readProfileWrite(body),
+      needsReview: r?.needsReview ?? [],
+    };
+  });
 
 export const getProfile = () =>
   request<unknown>('/api/profile')

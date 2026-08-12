@@ -260,14 +260,46 @@ describe('docs/04 — job discovery, § Sourcing policy and § Normalization', (
     );
   });
 
-  it('quotes the SourceResult shape the interface declares', () => {
-    expect(FLAT_DOC04).toMatch(
-      /`fetch` returns `\{ postings: NormalizedPosting\[\]; notes: string\[\]; gaps\?: string\[\] \}`/,
-    );
+  /**
+   * Both directions, which is the whole point and is what this check was missing.
+   *
+   * It used to read the field names OUT of the document and assert each one exists in
+   * `types.ts` — so it stayed green while `closed?: string[]` was added to the interface and
+   * the document went on quoting a three-field shape. That is the worst way for this
+   * particular fact to rot: an adapter author following the doc would throw away the closure
+   * evidence the field exists to carry, which is precisely the bug that field was added to
+   * fix. A quoted shape has to name every member the interface has.
+   */
+  it('quotes the SourceResult shape the interface declares, member for member', () => {
+    const quoted = /`fetch` returns `\{([^`]+)\}`/.exec(FLAT_DOC04)?.[1];
+    expect(quoted).toBeTruthy();
+
     const types = read('apps/server/src/core/discovery/sources/types.ts');
-    expect(types).toMatch(/postings: NormalizedPosting\[\];/);
-    expect(types).toMatch(/notes: string\[\];/);
-    expect(types).toMatch(/gaps\?: string\[\];/);
+    const body = /export interface SourceResult \{([\s\S]*?)\n\}/.exec(types)?.[1] ?? '';
+    const declared = [...body.matchAll(/^\s{2}(\w+)(\??):/gm)].map((m) => `${m[1]!}${m[2]!}`);
+    expect(declared.length).toBeGreaterThan(3);
+
+    for (const member of declared) {
+      expect({ member, quoted: quoted!.includes(`${member}:`) }).toEqual({ member, quoted: true });
+    }
+  });
+
+  /**
+   * The same shape of miss one section over: § Run reporting listed the totals a summary
+   * carries, `closed` landed on `RunSummary`, and nothing held the sentence to the type.
+   */
+  it('names every total the run summary actually carries', () => {
+    const listed = /Run totals carry ([^.]+?), plus a `skipped` list/.exec(FLAT_DOC04)?.[1] ?? '';
+    expect(listed).toBeTruthy();
+
+    const run = read('apps/server/src/core/discovery/run.ts');
+    const body = /export interface RunSummary \{([\s\S]*?)\n\}/.exec(run)?.[1] ?? '';
+    const counted = [...body.matchAll(/^\s{2}(\w+): number;/gm)].map((m) => m[1]!);
+    // `targets` is the size of the plan rather than a total about postings, and the sentence
+    // is about what a run turned up.
+    for (const total of counted.filter((c) => c !== 'targets')) {
+      expect({ total, listed: listed.includes(total) }).toEqual({ total, listed: true });
+    }
   });
 });
 

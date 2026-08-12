@@ -92,8 +92,10 @@ Gate G3 is enforced in `routes/answers.ts`, which re-verifies at approval time a
 409 while any claim is unsupported. There is no override parameter and no bulk-approve
 endpoint; `answers.test.ts` asserts both.
 
-**Not done:** drafting itself has never run against a live model — no `ANTHROPIC_API_KEY`
-is configured here. Everything downstream of generation is verified; generation is not.
+**Not done:** drafting itself has never run against a live model. The reason is no longer
+that there is no key: the Claude Code CLI backend exists and resume extraction and discovery
+have both been exercised live through it, so drafting could be run the same way. It simply
+has not been. Everything downstream of generation is verified; generation is not.
 
 ### M6 — Form automation (5 days — the long pole)
 

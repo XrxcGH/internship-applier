@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { bulletlessExperience, EducationLevel, lostTheEvidence } from '@ia/shared';
+import { bulletlessExperience, EducationLevel, isEmailShaped, lostTheEvidence } from '@ia/shared';
 import type { CandidateProfile, EducationEntry } from '@ia/shared';
 import * as api from '../lib/api';
 import {
@@ -282,20 +282,29 @@ export function tidyProfileLists(profile: CandidateProfile): CandidateProfile {
     ...(profile.skills && {
       skills: profile.skills.map((s) => ({ ...s, name: s.name.trim() })),
     }),
-    // Certifications and languages were left out of this, and both editors grow rows the
-    // same way every other list does. The schema takes a blank name for either, so an "Add
-    // certification" clicked and abandoned saved `{ name: '' }` onto the profile and stayed
-    // there: nothing named it, nothing dropped it, and the certification evidence line then
-    // quoted an empty name back to the user at G3 as a fact about them.
+    // Certifications and languages are TRIMMED here and never dropped, which is the
+    // difference between tidying and deleting. The first version of this filtered out any
+    // row whose name trimmed to empty, and that quietly destroyed data the user could not
+    // get back: clear a certification's name meaning to retype it, press Continue — which
+    // does not save — then Confirm, and the whole row went, issuer and date with it, with
+    // no message and no flag. It also shifted every later row's index while its flags stayed
+    // where they were, pointing the gate's amber at rows that had moved or gone.
+    //
+    // A blank name is named by `savingProblems` instead, the way every other required field
+    // is, so an abandoned "Add" row is something the user clears with Remove rather than
+    // something the save clears for them.
     ...(profile.certifications && {
-      certifications: profile.certifications
-        .map((c) => ({ ...c, name: c.name.trim(), issuer: c.issuer?.trim() }))
-        .filter((c) => c.name !== ''),
+      certifications: profile.certifications.map((c) => ({
+        ...c,
+        name: c.name.trim(),
+        issuer: c.issuer?.trim(),
+      })),
     }),
     ...(profile.languages && {
-      languages: profile.languages
-        .map((l) => ({ name: l.name.trim(), proficiency: l.proficiency.trim() }))
-        .filter((l) => l.name !== ''),
+      languages: profile.languages.map((l) => ({
+        name: l.name.trim(),
+        proficiency: l.proficiency.trim(),
+      })),
     }),
     ...(profile.links && {
       links: {
@@ -371,14 +380,26 @@ export function savingProblems(profile: CandidateProfile): string[] {
     if (s.name.trim() === '') out.push(`Skill ${i + 1} has no name.`);
   });
 
+  // Blank names, so the save no longer deletes the row on the user's behalf. See
+  // `tidyProfileLists`: it used to drop these, taking the issuer and the date with them.
   (profile.certifications ?? []).forEach((c, i) => {
+    if (c.name.trim() === '') out.push(`Certification ${i + 1} has no name.`);
     date(`Certification ${i + 1} earned`, c.date);
+  });
+
+  (profile.languages ?? []).forEach((l, i) => {
+    if (l.name.trim() === '') out.push(`Language ${i + 1} has no name.`);
   });
 
   // The schema takes an address or the empty string and nothing in between, and this box has
   // always stored raw text. A scraped address "fixed" to "rosa.dean (at) gmail.com" was the
   // same unnamed wall as the dates: every save button live, and a shape error naming no field.
-  if (profile.email !== undefined && profile.email.trim() !== '' && !EMAIL.test(profile.email)) {
+  //
+  // Asked of the shared schema rather than of a regex written here. This was a hand-rolled
+  // pattern described as "the loose shape the schema takes", and it was looser:
+  // `rosa..dean@gmail.com`, `rosa@gmail.c` and `#rosa@x.io` all passed it and failed Zod, which
+  // is precisely the wall this whole function exists to remove.
+  if (profile.email !== undefined && !isEmailShaped(profile.email)) {
     out.push(`"${profile.email}" is not an email address.`);
   }
 
@@ -389,9 +410,6 @@ export function savingProblems(profile: CandidateProfile): string[] {
 
   return out;
 }
-
-/** Deliberately the loose shape the schema takes, not a stricter one this screen invents. */
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * The withdrawals from two writes in a row, listed once each.
@@ -505,12 +523,25 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
    * gate that blocks until the list is empty.
    */
   const editList = useCallback(
-    (prefix: string, fn: (p: CandidateProfile) => CandidateProfile, moved?: number[]) => {
+    (
+      prefix: string,
+      fn: (p: CandidateProfile) => CandidateProfile,
+      moved?: number[],
+      clears?: string,
+    ) => {
       setProfile((prev) => {
         if (!prev) return prev;
         const next = fn(prev);
-        if (!moved) return next;
-        return { ...next, needsReview: remapListFlags(next.needsReview, prefix, moved) };
+        const remapped = moved ? remapListFlags(next.needsReview, prefix, moved) : next.needsReview;
+        // The clearing rule has to run on THIS path too, and it did not. `replaceAll` in the
+        // skills editor sends a removal down here and every other edit down `patch`, so the
+        // `skills` corpus flag — raised when an extraction came back with no skills at all —
+        // was cleared by "Add skill" (a one-row list is answered) and then never re-raised by
+        // "Remove skill", which is the obvious way out once `savingProblems` blocks the blank
+        // name. Net change nothing, flag gone, Confirm unlocked: the identical touch-and-undo
+        // hole `isAnswered([])` was widened to close, one code path over.
+        const needsReview = clears ? nextReviewFlags(remapped, clears, at(next, clears)) : remapped;
+        return { ...next, needsReview };
       });
     },
     [],
@@ -643,8 +674,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
       {step === 'upload' && (
         <UploadStep
-          onExtracted={(p) => {
+          onExtracted={(p, withdrawn) => {
             setProfile(p);
+            // What this read cost, said on the screen that cost it. Re-extraction replaces
+            // every fact at once, so it withdraws more approvals than any other write —
+            // and this was the one write path that read the list off the wire and dropped
+            // it. Assigned rather than merged: a new resume is a new profile, and a notice
+            // left over from an earlier save would be describing a profile that is gone.
+            setWithdrawn(withdrawn);
             // Whatever was typed into the old profile's GPA boxes belongs to the old
             // profile. Left in place, a second resume would show the first one's numbers
             // beside a school it never mentioned.
@@ -1014,7 +1051,7 @@ function UploadStep({
   setBusy,
   busy,
 }: {
-  onExtracted: (p: CandidateProfile) => void;
+  onExtracted: (p: CandidateProfile, withdrawn: api.WithdrawnApproval[]) => void;
   onError: (m: string) => void;
   setBusy: (m: string | null) => void;
   busy: string | null;
@@ -1033,8 +1070,8 @@ function UploadStep({
       setBusy('Storing the document…');
       const { documentId } = await api.uploadResume(file);
       setBusy('Reading it. This takes a few seconds…');
-      const { profile } = await api.extractResume(documentId);
-      onExtracted(profile);
+      const read = await api.extractResume(documentId);
+      onExtracted(read.profile, read.withdrawnApprovals);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {

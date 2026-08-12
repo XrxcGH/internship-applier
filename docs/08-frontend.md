@@ -18,8 +18,8 @@ components. What follows was read out of `apps/web/src`.
 | `@tanstack/react-virtual` | An ordinary list — the queue is hundreds, not thousands |
 
 None of these was a mistake to plan or a mistake to drop. They were sized for an app with
-routing, caching and a component library's worth of surface; this one has seven views and
-five components, and each dependency would have been more machinery than the thing it
+routing, caching and a component library's worth of surface; this one has eight views and
+six components, and each dependency would have been more machinery than the thing it
 manages.
 
 ## Design stance
