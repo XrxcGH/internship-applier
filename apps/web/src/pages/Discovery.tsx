@@ -45,7 +45,13 @@ import { Badge, Button, Empty, Notice, TextField } from '../components/Controls'
 /** How many company names one press of "Find their boards" will probe. */
 const RESOLVE_LIMIT = 8;
 
-export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
+export function Discovery({
+  onOpenQueue,
+  onBusy,
+}: {
+  onOpenQueue?: () => void;
+  onBusy?: (what: string | null) => void;
+}) {
   const [stats, setStats] = useState<{ total: number; open: number } | null>(null);
   const [sources, setSources] = useState<AvailableSource[] | null>(null);
   const [plan, setPlan] = useState<QueryPlan | null>(null);
@@ -90,6 +96,10 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
    * read had already succeeded.
    */
   const readSeq = useRef(0);
+
+  // The nav lives above this screen and unmounting it would throw the in-flight guard
+  // away, so what is running has to be visible up there. See the comment on `Nav`.
+  useEffect(() => onBusy?.(busy), [busy, onBusy]);
 
   const fail = useCallback((err: unknown) => {
     setError(err instanceof Error ? err.message : String(err));
@@ -212,7 +222,12 @@ export function Discovery({ onOpenQueue }: { onOpenQueue?: () => void }) {
       const r = await addManualPosting(manualUrl.trim());
       setManual(r);
       setManualUrl('');
-      void postingStats().then(setStats).catch(fail);
+      // Through `refresh` like every other read, and this was the fifth that was not: it
+      // called `postingStats` directly, so it neither bumped the sequence nor was checked
+      // against it. A slow "Rebuild" still in flight would land afterwards and paint the
+      // count as it stood BEFORE the posting was stored — the last-to-land-wins race the
+      // sequence guard exists to end, on the one read that had not been given it.
+      refresh(pinnedRef.current);
     });
 
   const blocked = whyCannotRun(targets);

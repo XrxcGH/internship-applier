@@ -252,6 +252,19 @@ async function open(input: StartInput): Promise<FillRun> {
     message: 'Opening the application page.',
     startedAt: new Date().toISOString(),
   };
+  /**
+   * Sessionless leftovers are swept before the new run is filed.
+   *
+   * `runs` only ever loses an entry to an explicit discard, a mark-submitted, or a restart of
+   * the same application — so a run that failed to open, or whose browser the user closed,
+   * stayed in the map for the life of the process. None of them holds anything (`browserHeldBy`
+   * skips a run with no session, and closes one whose page has gone), so this is slow bloat
+   * rather than a wedge; it is swept here because a start is the one moment that already knows
+   * the map is about to change.
+   */
+  for (const [id, other] of runs) {
+    if (id !== input.applicationId && !other.session) runs.delete(id);
+  }
   runs.set(input.applicationId, run);
 
   try {

@@ -12,7 +12,12 @@
  * and quote them; the judgement is plain TypeScript over structured fields.
  */
 import type { ConfirmedProfile, JobRequirement, RuleResult } from '@ia/shared';
-import { ageFrom, deriveYearsExperience, hasDualEnrollment } from '../ingestion/deriveFields';
+import {
+  ageFrom,
+  deriveYearsExperience,
+  hasDualEnrollment,
+  WEIGHTED_TYPES,
+} from '../ingestion/deriveFields';
 import { validateValue } from './requirementValues';
 
 export interface PostingFacts {
@@ -1170,6 +1175,31 @@ export function experienceCeiling({ profile, requirements, now }: RuleInput): Ru
   }
 
   if (lowest.min > ceiling) {
+    /**
+     * "You have about 0" has to mean nothing counted, not nothing was dated.
+     *
+     * `deriveYearsExperience` skips every entry with no start date — rightly, since guessing
+     * one turned an undated line into decades — and `experience.N.startDate` is a dismissible
+     * G1 flag, so a real multi-year job whose date the extractor could not read, or whose flag
+     * the user waved off, contributes zero. Failing on that told a qualified applicant
+     * "Requires 2 years of professional experience; you have about 0" on the strength of data
+     * the app knows it does not have, and a wrongly-ineligible posting is the worst outcome
+     * this file has. When the countable total is zero and there ARE weighted entries the dates
+     * are missing from, the honest answer is the tri-state's third branch.
+     */
+    const undated = profile.experience.filter(
+      (e) => !e.startDate && (WEIGHTED_TYPES as readonly string[]).includes(e.type),
+    );
+    if (mine === 0 && undated.length > 0) {
+      return unknown(
+        'experience_ceiling',
+        `This posting wants ${lowest.min} years of professional experience. ` +
+          `${undated.length === 1 ? 'One entry on your profile has' : `${undated.length} entries on your profile have`} ` +
+          'no start date, so how long you worked cannot be measured — fill the dates in at G1 ' +
+          'and this answers itself.',
+        { requirementId: lowest.req.id, profileRef: 'derived.yearsProfessionalExperience' },
+      );
+    }
     return fail(
       'experience_ceiling',
       `Requires ${lowest.min} years of professional experience; you have about ${mine}.`,

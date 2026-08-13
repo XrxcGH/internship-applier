@@ -58,6 +58,20 @@ const MILESTONES = [
 export function App() {
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [view, setView] = useState<View>('home');
+  /**
+   * What the open screen is in the middle of, so the nav can refuse to unmount it.
+   *
+   * Held here rather than on the screens because the nav is here. Each long operation is
+   * guarded by a `busyRef` inside the component that started it, and unmounting that
+   * component throws the guard away — see the comment on `Nav`. A screen with nothing in
+   * flight reports null and nothing is locked.
+   */
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // Whatever the last screen was doing, it is not doing it here. Without this a screen
+  // unmounted by anything other than the nav — the Home gate buttons, `onDone` — could
+  // leave the bar locked with no way to clear it but a reload.
+  useEffect(() => setBusy(null), [view]);
 
   const refresh = useCallback(() => {
     fetchHealth()
@@ -79,6 +93,7 @@ export function App() {
           // moment the request returned unmounted Onboarding in the same render, so the
           // "profile established" stamp — the one acknowledgement G1 gives the user for
           // the work they just did — was never on screen for a single frame.
+          onBusy={setBusy}
           onDone={() => {
             refresh();
             setView('queue');
@@ -87,12 +102,14 @@ export function App() {
       );
     }
     if (view === 'voice') return <Voice />;
-    if (view === 'discovery') return <Discovery onOpenQueue={() => setView('queue')} />;
+    if (view === 'discovery')
+      return <Discovery onOpenQueue={() => setView('queue')} onBusy={setBusy} />;
     if (view === 'queue') {
       return (
         <Matches
           onOpenApplications={() => setView('applications')}
           onOpenDiscovery={() => setView('discovery')}
+          onBusy={setBusy}
         />
       );
     }
@@ -104,7 +121,7 @@ export function App() {
 
   return (
     <>
-      <Nav view={view} onNavigate={setView} profileConfirmed={confirmed} />
+      <Nav view={view} onNavigate={setView} profileConfirmed={confirmed} busy={busy} />
       {body()}
     </>
   );

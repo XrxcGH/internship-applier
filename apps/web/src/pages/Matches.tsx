@@ -34,11 +34,22 @@ const BADGE: Record<string, { label: string; color: string }> = {
 export function Matches({
   onOpenApplications,
   onOpenDiscovery,
+  onBusy,
 }: {
   onOpenApplications?: () => void;
   onOpenDiscovery?: () => void;
+  onBusy?: (what: string | null) => void;
 }) {
   const [rows, setRows] = useState<MatchRow[]>([]);
+  /**
+   * Whether the first list has come back yet.
+   *
+   * `listMatches` walks up to twenty pages one round trip at a time, so on a full store the
+   * first answer takes seconds — and for every one of them `rows` is empty, which the empty
+   * state below read as "Nothing in the queue." The screen asserted the queue was empty and
+   * pointed the user at Discover, over a queue that was about to fill.
+   */
+  const [loaded, setLoaded] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [band, setBand] = useState<Band>('eligible_and_unknown');
   const [selected, setSelected] = useState<string | null>(null);
@@ -58,6 +69,11 @@ export function Matches({
   /** Approvals made this session, so triage never has to stop to go look at them. */
   const [approved, setApproved] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
+
+  // The nav lives above this screen and unmounting it would throw the in-flight guard away,
+  // so what is running has to be visible up there. Recompute is the expensive one: it
+  // re-extracts requirements with the model, at cost. See the comment on `Nav`.
+  useEffect(() => onBusy?.(busy), [busy, onBusy]);
 
   /**
    * Only the newest list is allowed to paint.
@@ -79,6 +95,7 @@ export function Matches({
     try {
       const r = await listMatches({ eligibility: band, minScore: 0, hideDecided: true });
       if (seq !== listSeq.current) return;
+      setLoaded(true);
       setRows(r.matches);
       setCounts(r.counts);
       // Validated against the rows that just arrived. Keeping a selection that is not in
@@ -89,6 +106,9 @@ export function Matches({
       );
     } catch (e) {
       if (seq !== listSeq.current) return;
+      // Loaded in the sense that matters here: the fetch is over, so the empty state is no
+      // longer speaking for a request still in flight. The error banner says what happened.
+      setLoaded(true);
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [band]);
@@ -237,9 +257,14 @@ export function Matches({
             ['all', 'Everything, incl. filtered'],
           ] as Array<[Band, string]>
         ).map(([value, label]) => (
+          /* `aria-pressed` because which band is showing was signalled by colour alone —
+             a tinted border and background, nothing else — against this repo's own standard
+             that colour is never the only signal. A screen-reader user could hear the three
+             options and not which one they were looking at. */
           <button
             key={value}
             onClick={() => setBand(value)}
+            aria-pressed={band === value}
             className={`u-data rounded-full border px-3.5 py-1.5 text-[0.75rem] tracking-wide uppercase transition-colors ${
               band === value
                 ? 'border-accent text-accent bg-accent/10'
@@ -281,7 +306,12 @@ export function Matches({
       </div>
 
       {error && <Notice tone="redline">{error}</Notice>}
-      {busy && <p className="u-data text-accent a-pulse mb-4">{busy}…</p>}
+      {/* A live region, as Discover has. Recompute takes as long as it takes and says
+          nothing while it runs, so a screen-reader user pressing it got no announcement that
+          anything had started or finished. */}
+      <div role="status" aria-live="polite">
+        {busy && <p className="u-data text-accent a-pulse mb-4">{busy}…</p>}
+      </div>
 
       {/* Approvals accumulate without interrupting triage — the link is there when wanted. */}
       {approved > 0 && (
@@ -304,7 +334,9 @@ export function Matches({
           queue back. It then said so plainly and quoted the two endpoints to POST by hand.
           Discover exists now, so this points at it — and at the other reason the queue can
           look empty, which is postings that are stored but have never been scored. */}
-      {rows.length === 0 && !error && (
+      {!loaded && !error && <p className="text-dim a-pulse">Reading the queue…</p>}
+
+      {loaded && rows.length === 0 && !error && (
         <Empty title="Nothing in the queue.">
           <p>
             Either nothing has been searched yet, or what is stored has not been scored. Discover
@@ -334,6 +366,7 @@ export function Matches({
               <li key={m.id} data-id={m.id}>
                 <button
                   onClick={() => setSelected(m.id)}
+                  aria-current={selected === m.id ? 'true' : undefined}
                   className={`relative w-full px-4 py-3.5 text-left transition-colors ${
                     selected === m.id ? 'bg-accent/10' : 'hover:bg-ink/[0.04]'
                   }`}

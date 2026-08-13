@@ -99,6 +99,10 @@ function input(over: Partial<RuleInput> = {}): RuleInput {
 const statusOf = (o: ReturnType<typeof evaluateEligibility>, rule: string) =>
   o.rules.find((r) => r.rule === rule)?.status;
 
+/** The sentence a rule gives for its verdict, which is what the user actually reads. */
+const becauseOf = (o: ReturnType<typeof evaluateEligibility>, rule: string) =>
+  o.rules.find((r) => r.rule === rule)?.because ?? '';
+
 // ────────────────────────────────────────────────────────────── golden fixtures
 
 describe('age_minimum', () => {
@@ -1085,6 +1089,61 @@ describe('experience_ceiling', () => {
     expect(statusOf(o, 'experience_ceiling')).toBe('pass');
   });
 
+  /**
+   * "You have about 0" has to mean nothing counted, not nothing was dated.
+   *
+   * `deriveYearsExperience` skips every entry with no start date — rightly, since guessing
+   * one turned an undated line into decades — and `experience.N.startDate` is a DISMISSIBLE
+   * G1 flag. So a real multi-year job whose date the extractor could not read contributes
+   * zero, and the rule hard-failed on it: "Requires 2 years of professional experience; you
+   * have about 0", built on data the app knows it does not have. A wrongly-ineligible
+   * posting is the worst outcome this file has, and the tri-state exists for exactly this.
+   */
+  it('asks rather than fails when the only experience on file has no dates', () => {
+    const o = evaluateEligibility(
+      input({
+        profile: profile({
+          experience: [{ organization: 'Acme', title: 'Analyst', type: 'job', bullets: [] }],
+          derived: { ...profile().derived, yearsProfessionalExperience: 0 },
+        }),
+        requirements: [req('experience_years', { min: 2 })],
+      }),
+    );
+    expect(statusOf(o, 'experience_ceiling')).toBe('unknown');
+    // And it says which screen fixes it, because the flag that would have caught this is
+    // one the user is allowed to wave off.
+    expect(becauseOf(o, 'experience_ceiling')).toMatch(/no start date/i);
+  });
+
+  it('still fails somebody who genuinely has no experience to date', () => {
+    // The other direction. An empty experience list is not missing data — it is an answer,
+    // and a posting demanding three years really does exclude that applicant.
+    const o = evaluateEligibility(
+      input({
+        profile: profile({
+          experience: [],
+          derived: { ...profile().derived, yearsProfessionalExperience: 0 },
+        }),
+        requirements: [req('experience_years', { min: 3 })],
+      }),
+    );
+    expect(statusOf(o, 'experience_ceiling')).toBe('fail');
+  });
+
+  it('does not let an undated CLUB stand in for missing professional experience', () => {
+    // Volunteer and club entries weigh zero toward professional years, so an undated one
+    // explains nothing about the shortfall and must not turn a fail into a question.
+    const o = evaluateEligibility(
+      input({
+        profile: profile({
+          experience: [{ organization: 'Chess Club', title: 'Member', type: 'club', bullets: [] }],
+          derived: { ...profile().derived, yearsProfessionalExperience: 0 },
+        }),
+        requirements: [req('experience_years', { min: 3 })],
+      }),
+    );
+    expect(statusOf(o, 'experience_ceiling')).toBe('fail');
+  });
   it('ignores experience listed as preferred', () => {
     const o = evaluateEligibility(
       input({ requirements: [req('experience_years', { min: 5 }, { necessity: 'preferred' })] }),

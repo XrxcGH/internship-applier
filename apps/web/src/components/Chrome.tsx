@@ -22,17 +22,38 @@ export function Nav({
   view,
   onNavigate,
   profileConfirmed,
+  busy,
 }: {
   view: View;
   onNavigate: (v: View) => void;
   profileConfirmed: boolean;
+  /** What the current screen is in the middle of, if anything. See below. */
+  busy?: string | null;
 }) {
-  const locked = profileConfirmed ? undefined : 'Confirm your profile first (gate G1).';
+  /**
+   * Leaving is locked while a screen is spending something, and this is not politeness.
+   *
+   * Every long operation in this app is guarded by a `busyRef` inside the component that
+   * started it — Discovery's search, the queue's Recompute, the resume upload — and the
+   * server has no lock of its own for any of them. Those guards disable their own buttons and
+   * Discovery's comment states the invariant outright: "a guard with a door beside it is not
+   * a guard." The nav bar was that door. It sits above every page, took no busy signal, and
+   * one click on it unmounts the component holding the guard; coming back mounts a fresh one
+   * with `busyRef` false, and the button is live again while the first run is still going.
+   * Two concurrent discovery runs over the same boards, or two Recomputes each re-extracting
+   * requirements at cost, from two clicks a second apart.
+   *
+   * The masthead is exempt: it navigates home, and someone who genuinely wants out needs a
+   * way that is not the browser's back button.
+   */
+  const running = busy ? `${busy} — wait for it to finish, or reload to abandon it.` : undefined;
+  const locked =
+    running ?? (profileConfirmed ? undefined : 'Confirm your profile first (gate G1).');
 
   const items: NavItem[] = [
-    { id: 'home', label: 'Overview' },
-    { id: 'setup', label: 'Profile' },
-    { id: 'voice', label: 'Voice' },
+    { id: 'home', label: 'Overview', blocked: running },
+    { id: 'setup', label: 'Profile', blocked: running },
+    { id: 'voice', label: 'Voice', blocked: running },
     // Ahead of the queue because it is what fills the queue, and locked with it: every
     // /api/discovery route answers 409 until a profile is confirmed, since eligibility
     // would have nothing to check a posting against.
@@ -40,7 +61,7 @@ export function Nav({
     { id: 'queue', label: 'Queue', blocked: locked },
     { id: 'applications', label: 'Applications', blocked: locked },
     { id: 'tracker', label: 'Tracker', blocked: locked },
-    { id: 'settings', label: 'Settings' },
+    { id: 'settings', label: 'Settings', blocked: running },
   ];
 
   return (

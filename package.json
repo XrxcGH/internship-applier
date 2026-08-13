@@ -28,6 +28,7 @@
     "audit:copy": "tsx scripts/audit-copy.ts",
     "guard:g4": "tsx scripts/g4-scan.ts",
     "audit:error-codes": "tsx scripts/audit-error-codes.ts",
+    "smoke:discovery": "tsx scripts/smoke-discovery.ts",
     "start": "npm run build && npm run start:server",
     "start:server": "npm run start -w @ia/server"
   },
