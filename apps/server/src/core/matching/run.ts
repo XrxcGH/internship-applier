@@ -7,7 +7,7 @@
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import type { ConfirmedProfile, JobRequirement } from '@ia/shared';
-import { db, schema } from '../../infra/db/client';
+import { db, schema, sqlite } from '../../infra/db/client';
 import { logger } from '../../infra/logger';
 import { deriveProfile } from '../ingestion/deriveFields';
 import { getProfile } from '../profile/repository';
@@ -65,7 +65,19 @@ function loadRequirements(postingId: string): JobRequirement[] {
     })) as JobRequirement[];
 }
 
-function saveRequirements(postingId: string, reqs: JobRequirement[]): void {
+/**
+ * All of a posting's requirements, or none of them.
+ *
+ * The delete and the inserts were separate statements, so a throw partway through left the
+ * posting holding SOME of its requirements — and on the re-extract path the cache stamp from
+ * the previous run survives, so every later run reads the partial set from cache and never
+ * looks again. The age patterns are why that matters: a hard 18+ floor is emitted followed by
+ * its 16-with-a-work-permit alternative, and a failure landing between the two leaves only the
+ * floor. A sixteen-year-old is then hard-failed on a posting written to admit them, which is
+ * the outcome this repo calls the worst thing it can do to somebody, from a partial write a
+ * transaction removes for free.
+ */
+const saveRequirements = sqlite.transaction((postingId: string, reqs: JobRequirement[]): void => {
   db.delete(schema.jobRequirement).where(eq(schema.jobRequirement.postingId, postingId)).run();
   for (const r of reqs) {
     db.insert(schema.jobRequirement)
@@ -81,7 +93,7 @@ function saveRequirements(postingId: string, reqs: JobRequirement[]): void {
       })
       .run();
   }
-}
+});
 
 export async function runMatching(
   opts: { limit?: number; reextract?: boolean; useModel?: boolean; now?: Date } = {},

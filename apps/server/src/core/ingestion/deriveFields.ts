@@ -18,6 +18,15 @@ import type {
  * research count at half weight, volunteer and club work at nothing, jobs and freelance in
  * full.
  */
+/**
+ * The experience types that count toward professional years at all.
+ *
+ * Derived from WEIGHTS below rather than written out again, so a type whose weight changes
+ * cannot leave a second list behind saying otherwise. Read by the experience-ceiling rule,
+ * which has to tell "nothing counted" from "nothing was dated".
+ */
+export const WEIGHTED_TYPES: readonly string[] = [];
+
 const WEIGHTS: Record<string, number> = {
   job: 1,
   internship: 0.5,
@@ -26,6 +35,13 @@ const WEIGHTS: Record<string, number> = {
   volunteer: 0,
   club: 0,
 };
+
+// Filled from the table above, which is the only place a weight is stated.
+(WEIGHTED_TYPES as string[]).push(
+  ...Object.entries(WEIGHTS)
+    .filter(([, w]) => w > 0)
+    .map(([t]) => t),
+);
 
 /**
  * Nobody has been working since before they could hold a job.

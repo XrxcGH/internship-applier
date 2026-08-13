@@ -9,7 +9,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { adzuna, usajobs } from '../src/core/discovery/sources/aggregators';
-import { greenhouse, parseLocation } from '../src/core/discovery/sources/ats';
+import { ashbyPay, greenhouse, parseLocation } from '../src/core/discovery/sources/ats';
 import { decodeEntities, stripHtml } from '../src/core/discovery/sources/types';
 
 describe('parseLocation', () => {
@@ -177,5 +177,118 @@ describe('reading a description out of a feed', () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+/**
+ * The pay Ashby states, which the adapter asks for and did not read for the whole of M2.
+ *
+ * No test covered any of this when it landed — it was checked once against the live board and
+ * never pinned — and the rule it turns on is one the code itself calls worse than the regex if
+ * it goes wrong: a bonus or an equity figure landing in `min` is a number the queue would sort
+ * on and a student would decide against a posting with.
+ */
+describe('ashbyPay', () => {
+  const job = (components: unknown[]) =>
+    ({ compensation: { summaryComponents: components } }) as never;
+
+  it('reads the salary band and the interval it is quoted at', () => {
+    // Ramp's Android internship, verbatim from the live board: the case that exposed the
+    // bug, where the text parser found an unrelated "$10,000 per year" further down the page.
+    expect(
+      ashbyPay(
+        job([
+          {
+            compensationType: 'Salary',
+            interval: '1 MONTH',
+            currencyCode: 'USD',
+            minValue: 11700,
+            maxValue: 11700,
+          },
+        ]),
+      ),
+    ).toMatchObject({ min: 11700, period: 'month', currency: 'USD' });
+  });
+
+  it('does not print a range when both ends are the same figure', () => {
+    // "$11,700–$11,700/mo" reads as a range somebody forgot to finish.
+    const pay = ashbyPay(
+      job([
+        {
+          compensationType: 'Salary',
+          interval: '1 MONTH',
+          currencyCode: 'USD',
+          minValue: 11700,
+          maxValue: 11700,
+        },
+      ]),
+    );
+    expect(pay).not.toHaveProperty('max');
+  });
+
+  it('keeps a real band', () => {
+    expect(
+      ashbyPay(
+        job([
+          {
+            compensationType: 'Salary',
+            interval: '1 YEAR',
+            currencyCode: 'USD',
+            minValue: 211400,
+            maxValue: 290600,
+          },
+        ]),
+      ),
+    ).toMatchObject({ min: 211400, max: 290600, period: 'year' });
+  });
+
+  it('never reads equity, bonus or commission as pay', () => {
+    // Every one of these is a real number answering a different question. The live board
+    // returns all four types alongside Salary.
+    for (const type of ['EquityPercentage', 'EquityCashValue', 'Commission', 'Bonus']) {
+      expect(
+        ashbyPay(
+          job([
+            { compensationType: type, interval: '1 YEAR', currencyCode: 'USD', minValue: 50000 },
+          ]),
+        ),
+        type,
+      ).toBeNull();
+    }
+  });
+
+  it('picks the salary out of a list that leads with equity', () => {
+    expect(
+      ashbyPay(
+        job([
+          { compensationType: 'EquityPercentage', interval: 'NONE', minValue: null },
+          {
+            compensationType: 'Salary',
+            interval: '1 YEAR',
+            currencyCode: 'GBP',
+            minValue: 60000,
+            maxValue: 70000,
+          },
+        ]),
+      ),
+    ).toMatchObject({ min: 60000, currency: 'GBP', period: 'year' });
+  });
+
+  it('says nothing rather than guessing when the interval is one it cannot map', () => {
+    // "NONE" is what the live board sends for a component with no period. A figure with no
+    // period would be shown against the wrong one, which is worse than showing none.
+    expect(
+      ashbyPay(
+        job([
+          { compensationType: 'Salary', interval: 'NONE', currencyCode: 'USD', minValue: 5000 },
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it('says nothing when there is no compensation block at all', () => {
+    expect(ashbyPay({} as never)).toBeNull();
+    expect(ashbyPay({ compensation: {} } as never)).toBeNull();
+    expect(ashbyPay({ compensation: { summaryComponents: 'nope' } } as never)).toBeNull();
   });
 });

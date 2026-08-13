@@ -344,7 +344,7 @@ function skipReason(r: FieldResult): 'redline' | 'unclassified' | 'no_match' | '
  * list too — typed as `ApiErrorCode` so adding one without declaring it fails the build
  * rather than waiting for scripts/audit-error-codes.ts to notice.
  */
-const RUN_CONFLICTS: Array<{ startsWith: string; code: ApiErrorCode }> = [
+export const RUN_CONFLICTS: Array<{ startsWith: string; code: ApiErrorCode }> = [
   { startsWith: 'This application is already being filled', code: 'FILL_IN_PROGRESS' },
   { startsWith: 'No open fill run for this application', code: 'NO_RUN' },
   // Raised by `startRun` and by `continueRun`, both from `claimBrowser`. A 502 here would be
@@ -445,7 +445,21 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
           resumePath: loaded.data.resumePath,
         });
 
-        if (run.state === 'done' && run.result) {
+        /**
+         * A run that typed NOTHING has not filled the form, whatever state it ended in.
+         *
+         * This keyed on `state === 'done'` alone. A page that navigates after the first field
+         * marks every remaining action `failed` and still ends `done`, so an application with
+         * 0 filled and 18 failed was walked through `filled` to `awaiting_submit` and got a
+         * `filled` event — the tracker telling the user the form was ready to submit over a
+         * form nothing had been typed into. The message and `skippedFields` were honest all
+         * along; the status and the event were not.
+         *
+         * `filled > 0` rather than "no failures", because a run that fills fourteen fields and
+         * loses four to a widget genuinely did fill the form, and the review screen is where
+         * the four are dealt with. Zero is the case that means nothing happened.
+         */
+        if (run.state === 'done' && run.result && run.result.filled > 0) {
           const skipped = run.result.results
             .filter((r) => r.status !== 'ok')
             .map((r) => ({

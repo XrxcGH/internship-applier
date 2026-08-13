@@ -427,7 +427,13 @@ export function mergeWithdrawn(
   return [...first, ...second.filter((w) => !seen.has(w.answerId))];
 }
 
-export function Onboarding({ onDone }: { onDone: () => void }) {
+export function Onboarding({
+  onDone,
+  onBusy,
+}: {
+  onDone: () => void;
+  onBusy?: (what: string | null) => void;
+}) {
   const [step, setStep] = useState<Step>('upload');
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -446,6 +452,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
    * when a save costs nothing, so this never describes a write two writes ago.
    */
   const [withdrawn, setWithdrawn] = useState<api.WithdrawnApproval[]>([]);
+
+  // The nav lives above this screen. Reading a resume takes a model call and the better part
+  // of a minute, and unmounting mid-read loses the extraction with no way to know it happened.
+  // See the comment on `Nav`.
+  useEffect(() => onBusy?.(busy), [busy, onBusy]);
 
   /**
    * Picks up the profile that already exists, if there is one.

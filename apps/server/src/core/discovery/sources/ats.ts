@@ -184,7 +184,7 @@ export const lever: JobSource = {
 
 // ---------------------------------------------------------------- Ashby
 
-interface AshbyJob {
+export interface AshbyJob {
   id: string;
   title: string;
   jobUrl: string;
@@ -227,7 +227,9 @@ const ASHBY_INTERVAL: Record<string, 'hour' | 'week' | 'month' | 'year'> = {
  * answer a different question, and one of them landing in `min` would be worse than the
  * regex ever was. A component with no interval is skipped rather than guessed at.
  */
-function ashbyPay(job: AshbyJob): Record<string, unknown> | null {
+// Exported for its tests. The Salary-vs-equity rule is one this file itself calls worse
+// than the regex if it goes wrong, and it had no test at all.
+export function ashbyPay(job: AshbyJob): Record<string, unknown> | null {
   const components = job.compensation?.summaryComponents;
   if (!Array.isArray(components)) return null;
 

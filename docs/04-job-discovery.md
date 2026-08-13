@@ -327,3 +327,25 @@ found, new, duplicates and `closed`, plus a `skipped` list naming each source th
 than it looks like it did. If a source was rate-limited, missing a key, or unknown to the
 runner, that is stated. Silent truncation would read as "we searched everywhere" when we
 didn't, which is exactly the failure mode that makes an automated search tool untrustworthy.
+
+## Checking it against the real internet
+
+```bash
+npm run smoke:discovery
+```
+
+`scripts/smoke-discovery.ts` points the real adapters at the real endpoints and prints what
+came back: per source, how many postings, how many look student-facing, and how many carry a
+location, a term year and a pay figure. It writes nothing — no database, no `source` rows, no
+`job_posting` rows — and it exits non-zero if a source that should have been reachable was
+not.
+
+It exists because every other check in this repo runs against a fixture, and a fixture cannot
+answer the question that actually matters: whether these endpoints are still there, still
+shaped the way `normalize.ts` expects, and still returning postings a student could apply to.
+It is not part of `npm test` or `npm run check` — it depends on somebody else's servers being
+up, and a suite that goes red when Greenhouse has a bad afternoon teaches people to ignore
+it. Run it when an adapter changes, or when the results look wrong.
+
+A keyed source with no key reports itself skipped and does not count as a failure; that is
+the same honesty the run summary owes the user.
