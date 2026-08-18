@@ -42,7 +42,7 @@ import {
   parseWorkArrangement,
   parseYear,
 } from '../normalize';
-import { parseLocation } from './ats';
+import { internshipShaped, parseLocation } from './ats';
 import {
   decodeEntities,
   stripHtml,
@@ -127,6 +127,24 @@ function readableRows<T>(value: unknown): { rows: T[]; unusable: number; sent: n
  */
 function textField(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/**
+ * A row whose TITLE is not text cannot be judged internship-shaped at all.
+ *
+ * `textField` turns such a title into an empty string, the internship filter reads nothing
+ * in it, and the row was dropped and then counted in the note as one of the rows "that are
+ * not internships" — a statement about a posting nobody could read. One row is noise; a feed
+ * that changed the type of its title field would drop every row in the source and the run
+ * would still report a complete search of it. So these are separated out before the filter
+ * runs and reported as what they are.
+ */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function titleUnreadable(value: unknown): boolean {
+  return value !== undefined && value !== null && typeof value !== 'string';
 }
 
 /**
@@ -515,17 +533,18 @@ const ARBEITNOW_MAX_PAGES = 3;
 const ARBEITNOW_API = 'https://www.arbeitnow.com/api/job-board-api';
 
 /**
- * What counts as internship-shaped, in the words this feed and Remotive actually use.
+ * What counts as internship-shaped is decided in ONE place for the whole discovery path.
  *
- * The English side is `Intern` / `internship` / `Internships` as whole words, so
- * "Internal Auditor" and "International Sales" do not pass. Arbeitnow is a German board,
- * and on the German half of it the internship posting is titled "Praktikum" or
- * "Praktikant/Praktikantin" with the word "intern" nowhere in it — an English-only filter
- * silently drops the very rows a German-heavy source is best at. The stem is spelled out
- * to its real forms because a bare `praktik` prefix also matches "praktisch" (practical),
- * an ordinary adjective in prose titles.
+ * This file used to carry its own definition and the repo held two answers to one question:
+ * the ATS side read sixteen words across six languages while this side read three, so a
+ * Werkstudent, a Stagiaire, a Praktikum's Spanish and Portuguese cousins and every co-op
+ * were "not an internship" here and an internship one file over. Whichever source happened
+ * to find the row decided whether the student ever saw it.
+ *
+ * `internshipShaped` lives in ./ats because that is where the detail-fetch budget it also
+ * gates is spent. This file already imports parseLocation from there and ats.ts imports
+ * nothing back, so there is no cycle.
  */
-const INTERNSHIP_WORD = /\bintern(?:ship)?s?\b|\bpraktik(?:um|a|ant)/i;
 
 function arbeitnowIsInternship(j: ArbeitnowJob): boolean {
   // Anything that is not an array of strings contributes nothing to the check rather than
@@ -533,8 +552,8 @@ function arbeitnowIsInternship(j: ArbeitnowJob): boolean {
   // object, and the title test below still gets its say.
   const types = Array.isArray(j.job_types) ? j.job_types : [];
   return (
-    types.some((t) => typeof t === 'string' && INTERNSHIP_WORD.test(t)) ||
-    INTERNSHIP_WORD.test(j.title ?? '')
+    types.some((t) => typeof t === 'string' && internshipShaped(t)) ||
+    internshipShaped(j.title ?? '')
   );
 }
 
@@ -611,8 +630,20 @@ export const arbeitnow: JobSource = {
     // a `null` entry into arbeitnowIsInternship, which read `.job_types` off it and threw
     // the entire three-page walk away; and counting an unreadable row as "dropped, not an
     // internship" would state as fact something nobody could have known about it.
-    const { rows: usable, unusable: notARow } = readableRows<ArbeitnowJob>(rows);
+    const { rows: allRows, unusable: notARow } = readableRows<ArbeitnowJob>(rows);
     let unusable = notARow;
+
+    // Separated before the filter, so a row nobody could read is never counted as a row that
+    // is "not an internship". See `titleUnreadable`.
+    const usable = allRows.filter((j) => !titleUnreadable(j.title));
+    const badTitles = allRows.length - usable.length;
+    if (badTitles > 0) {
+      gaps.push(
+        `arbeitnow: ${badTitles} rows arrived with a title that is not text, so nothing ` +
+          'could be judged about them and they are missing from these results. The feed ' +
+          'format may have changed.',
+      );
+    }
 
     const kept = usable.filter(arbeitnowIsInternship);
     // The filter count is the proof the source was consulted: a feed of everything at every
@@ -684,7 +715,7 @@ export const arbeitnow: JobSource = {
         // The feed's own label fills the gap only where the title heuristic read nothing —
         // a row kept because job_types says "Intern" can still have a title that never
         // says so.
-        if (!p.positionType && types.some((t) => INTERNSHIP_WORD.test(t))) {
+        if (!p.positionType && types.some((t) => internshipShaped(t))) {
           p.positionType = 'internship';
         }
         postings.push(p);
@@ -759,7 +790,7 @@ function remotiveLocation(raw: unknown): { country?: string; remote: true } {
  * A parameter the server discards is not a search, and leaving it on the URL made the
  * request match a SECOND rule in remotive.com/robots.txt ("Disallow: /*search=") on top of
  * "Disallow: /api/*" for no coverage at all. Whatever the board sends is filtered here, by
- * INTERNSHIP_WORD, which is the only filter that has ever actually run on this source.
+ * `internshipShaped`, which is the only filter that has ever actually run on this source.
  */
 const REMOTIVE_API = 'https://remotive.com/api/remote-jobs';
 
@@ -790,11 +821,25 @@ export const remotive: JobSource = {
 
     // Readable rows first, for the same reason as Arbeitnow: a null entry in `jobs` reached
     // `j.job_type` in the filter below and threw the whole board away.
-    const { rows: jobs, unusable: notARow, sent } = readableRows<RemotiveJob>(data.jobs);
+    const { rows: allJobs, unusable: notARow, sent } = readableRows<RemotiveJob>(data.jobs);
     let unusable = notARow;
+    const gaps: string[] = [];
+
+    // Separated before the filter, for the same reason as Arbeitnow: a title that is not
+    // text cannot be judged internship-shaped, and counting it among the rows that "are not
+    // internships" states something about a posting nobody could read.
+    const jobs = allJobs.filter((j) => !titleUnreadable(j.title));
+    const badTitles = allJobs.length - jobs.length;
+    if (badTitles > 0) {
+      gaps.push(
+        `remotive: ${badTitles} rows arrived with a title that is not text, so nothing ` +
+          'could be judged about them and they are missing from these results. The feed ' +
+          'format may have changed.',
+      );
+    }
 
     const kept = jobs.filter(
-      (j) => j.job_type === 'internship' || INTERNSHIP_WORD.test(textField(j.title)),
+      (j) => j.job_type === 'internship' || internshipShaped(textField(j.title)),
     );
     // "read", not "matched": nothing was matched server-side, so saying so would describe a
     // search that never ran.
@@ -864,7 +909,6 @@ export const remotive: JobSource = {
       }
     }
 
-    const gaps: string[] = [];
     /**
      * The truncation check, over both counts the body carries rather than one.
      *
@@ -962,9 +1006,27 @@ export const githubList: JobSource = {
     const closed: string[] = [];
     let unreadable = 0;
     for (const row of data) {
+      /**
+       * The row-level guards the two feeds above got, which this source never did — and it
+       * carries more postings than every other source combined.
+       *
+       * A `null` entry read `.active` off nothing and threw the whole list away. A row whose
+       * `url` is a number went through `String(...)`, failed the http test, and vanished
+       * without a word: `continue` on its own is a posting the run silently does not have,
+       * and if the list changed the type of that field every row would leave the same way
+       * while the run reported a clean, complete read of the community list.
+       */
+      if (!isRecord(row)) {
+        unreadable++;
+        continue;
+      }
       const active = row['active'];
-      const link = String(row['url'] ?? '');
-      if (!link.startsWith('http')) continue;
+      const rawUrl = row['url'];
+      const link = typeof rawUrl === 'string' ? rawUrl : '';
+      if (!link.startsWith('http')) {
+        unreadable++;
+        continue;
+      }
       /**
        * `active: false` is the list saying this role has closed, and it was thrown away.
        *

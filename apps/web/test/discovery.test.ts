@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SourceKind } from '@ia/shared';
 import {
   alreadyStored,
@@ -265,6 +268,56 @@ describe('the source table', () => {
       );
     }
     expect(needsBoard('something_new')).toBe(false);
+  });
+});
+
+describe('the resolve response', () => {
+  const read = (rel: string) =>
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), rel), 'utf8');
+
+  /**
+   * The server returns `{ name, matches, notes }` and the notes are half the answer: an empty
+   * `matches` reads as "no vendor has a board under this name", and the server says in a note
+   * that it cannot make that claim for SmartRecruiters, which answers a name it has never
+   * heard of exactly as it answers a real company with nothing posted. The client typed the
+   * response as `{ name, matches }` and `findBoards` kept only those two, so the sentence that
+   * qualifies the result never reached the screen and the screen stated the strong claim.
+   */
+  it('keeps the notes the server sends', () => {
+    const lib = read('../src/lib/discovery.ts');
+    expect(lib).toMatch(/resolveCompany[\s\S]{0,200}notes: string\[\]/);
+
+    const page = read('../src/pages/Discovery.tsx');
+    // Carried through the state that backs the list, not just typed at the boundary.
+    expect(page).toMatch(/notes: r\.notes/);
+    expect(page).toMatch(/notes\.map\(/);
+  });
+
+  /**
+   * Rendered in both branches. The server pushes the SmartRecruiters note whenever that
+   * vendor was found under no slug candidate, which happens just as often on a name that
+   * resolved somewhere else, so hanging the notes off the empty branch alone would drop them
+   * exactly when another board answered.
+   */
+  it('does not hide the notes behind the empty-result branch', () => {
+    // Scoped to the resolution card. The page renders `plan.notes` and `manual.notes`
+    // elsewhere, and an unscoped search finds one of those instead.
+    const card = read('../src/pages/Discovery.tsx').slice(
+      read('../src/pages/Discovery.tsx').indexOf('matches.length === 0 ? ('),
+    );
+    const emptyBranch = card.slice(0, card.indexOf(') : ('));
+    expect(emptyBranch).not.toMatch(/notes\.map\(/);
+
+    const notesAt = card.indexOf('notes.map(');
+    const closesList = card.indexOf('</ul>', card.indexOf('matches.map('));
+    expect(notesAt).toBeGreaterThan(closesList);
+  });
+
+  /** And the empty branch may not claim more than the probes can prove. */
+  it('does not say that none of the vendors has a board', () => {
+    const page = read('../src/pages/Discovery.tsx');
+    expect(page).not.toMatch(/None of the six vendors/);
+    expect(page).toMatch(/No board answered under that name/);
   });
 });
 

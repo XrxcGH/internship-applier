@@ -59,9 +59,9 @@ export function Discovery({
   const [runs, setRuns] = useState<RunSummary[]>([]);
 
   const [companies, setCompanies] = useState('');
-  const [resolutions, setResolutions] = useState<Array<{ name: string; matches: Resolution[] }>>(
-    [],
-  );
+  const [resolutions, setResolutions] = useState<
+    Array<{ name: string; matches: Resolution[]; notes: string[] }>
+  >([]);
   const [resolveNote, setResolveNote] = useState<string | null>(null);
 
   const [targets, setTargets] = useState<RunTarget[]>([]);
@@ -184,14 +184,14 @@ export function Discovery({
               `${RESOLVE_LIMIT}.`
           : null,
       );
-      const found: Array<{ name: string; matches: Resolution[] }> = [];
+      const found: Array<{ name: string; matches: Resolution[]; notes: string[] }> = [];
       // One name at a time. Each resolution already probes six vendors across up to three
       // slug candidates — five keyless boards by GET, plus a bounded Workday probe that
       // spends up to six POSTs of its own per candidate — and the fetcher rate-limits per
       // host, so firing them together buys nothing and looks to Greenhouse like a burst.
       for (const name of pinned.slice(0, RESOLVE_LIMIT)) {
         const r = await resolveCompany(name);
-        found.push({ name, matches: r.matches });
+        found.push({ name, matches: r.matches, notes: r.notes });
         setResolutions([...found]);
       }
     });
@@ -439,7 +439,7 @@ export function Discovery({
 
         {resolutions.length > 0 && (
           <ul className="mt-5 space-y-3">
-            {resolutions.map(({ name, matches }) => (
+            {resolutions.map(({ name, matches, notes }) => (
               <li key={name} className="u-card-flat px-5 py-4">
                 <div className="flex flex-wrap items-baseline justify-between gap-3">
                   <span className="text-[1.0625rem]">{name}</span>
@@ -451,9 +451,9 @@ export function Discovery({
                 </div>
                 {matches.length === 0 ? (
                   <p className="text-faint u-prose mt-2 text-[0.9375rem]">
-                    None of the six vendors above has a board under that name. The company may use
-                    one this tool does not read, iCIMS and Taleo among them, in which case paste the
-                    posting URL in section 05.
+                    No board answered under that name. The company may use a vendor this tool does
+                    not read, iCIMS and Taleo among them, in which case paste the posting URL in
+                    section 05.
                   </p>
                 ) : (
                   <ul className="mt-3 space-y-2">
@@ -487,6 +487,19 @@ export function Discovery({
                     ))}
                   </ul>
                 )}
+                {/*
+                  Shown in BOTH branches, because the caveat is not only about finding
+                  nothing: the server pushes the SmartRecruiters note whenever that vendor
+                  was found under no slug candidate, which happens just as often on a name
+                  that resolved somewhere else. Dropping it let the screen state that no
+                  vendor has a board under the name, which is a stronger claim than the
+                  probes can make.
+                */}
+                {notes.map((note) => (
+                  <p key={note} className="text-faint u-prose mt-2 text-[0.875rem]">
+                    {note}
+                  </p>
+                ))}
               </li>
             ))}
           </ul>

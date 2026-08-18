@@ -164,11 +164,16 @@ const SOURCE_FACTS: Record<SourceKind, SourceFacts> = {
     needsBoard: false,
     addReason: 'the Arbeitnow feed, no company and no key needed',
   },
+  // Remotive's own robots.txt asks automated clients to stay off the address this adapter
+  // uses, so the adapter asks, is refused, and reports the refusal. Saying it is "searched
+  // by keyword" was doubly untrue: the endpoint discards every parameter it is given, and
+  // the fetch does not happen at all. The student should not press a button expecting
+  // postings from a source that will tell them at run time it read nothing.
   remotive: {
     label: 'Remotive',
-    board: 'not used — Remotive is searched by keyword',
+    board: 'not used — Remotive takes no company and no keyword',
     needsBoard: false,
-    addReason: 'the Remotive remote-jobs feed, searched by keyword',
+    addReason: 'the Remotive feed, which currently declines automated reads',
   },
   github_list: {
     label: 'Community list',
@@ -433,8 +438,17 @@ export const availableSources = () => request<AvailableSource[]>('/api/sources/a
 
 export const postingStats = () => request<{ total: number; open: number }>('/api/discovery/stats');
 
+/**
+ * The `notes` are half the answer and were being thrown away here.
+ *
+ * An empty `matches` reads as "this company has no board at any vendor we asked", and the
+ * server says in a note that it cannot make that claim for SmartRecruiters, which answers a
+ * name it has never heard of exactly as it answers a real company with nothing posted. The
+ * response type stopped at `matches`, so the sentence that qualifies it never reached the
+ * screen.
+ */
 export const resolveCompany = (name: string) =>
-  request<{ name: string; matches: Resolution[] }>('/api/companies/resolve', {
+  request<{ name: string; matches: Resolution[]; notes: string[] }>('/api/companies/resolve', {
     method: 'POST',
     headers: json,
     body: JSON.stringify({ name }),

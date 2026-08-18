@@ -1127,8 +1127,34 @@ export const smartrecruiters: JobSource = {
 
     const readable = rows.filter(isSrRow);
     if (readable.length < rows.length) {
+      /**
+       * Counted as DISTINCT rows, not as row reads.
+       *
+       * Up to six searches run over one board and they overlap heavily, so the same row comes
+       * back several times. Readable duplicates are collapsed a few lines below, by id — but
+       * an unreadable row has no id to collapse on, so it was counted once per search that
+       * saw it: one bad row on a two-row board was reported to the student as six, and a
+       * board with a hundred would have claimed six hundred. That number reaches the run
+       * summary as a statement about how far this board has drifted from its own API.
+       *
+       * Serialising is sound here because these rows came out of JSON.parse a moment ago, so
+       * they carry no cycles and no functions. An unserialisable row falls back to being
+       * counted on its own, which is the old behaviour for that one row rather than for all
+       * of them.
+       */
+      const distinctBad = new Set(
+        rows
+          .filter((r) => !isSrRow(r))
+          .map((r, i) => {
+            try {
+              return JSON.stringify(r) ?? `undefined:${String(i)}`;
+            } catch {
+              return `unserialisable:${String(i)}`;
+            }
+          }),
+      ).size;
       gaps.push(
-        `smartrecruiters: skipped ${rows.length - readable.length} rows the board answered ` +
+        `smartrecruiters: skipped ${String(distinctBad)} rows the board answered ` +
           'with no id or title. The API may have changed.',
       );
     }

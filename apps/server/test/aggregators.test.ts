@@ -26,6 +26,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGGREGATOR_SOURCES, arbeitnow, remotive } from '../src/core/discovery/sources/aggregators';
+import { internshipShaped } from '../src/core/discovery/sources/ats';
 import type { JobSource } from '../src/core/discovery/sources/types';
 
 const realFetch = globalThis.fetch;
@@ -319,6 +320,47 @@ describe('a row that cannot be read', () => {
     expect(gaps?.join(' ')).not.toMatch(/were not seen/);
   });
 
+  /**
+   * A title that is not text cannot be judged internship-shaped at all, and the row was
+   * being dropped by the filter and then counted in the note as one of the rows "that are
+   * not internships" — a statement about a posting nobody could read. One row is noise; a
+   * feed that changed the type of its title field would empty the source while the run
+   * reported a complete read of it.
+   */
+  it('arbeitnow: a title that is not text is reported, not called "not an internship"', async () => {
+    const source = await freshSource('arbeitnow');
+    serve([
+      [
+        (u) => u.startsWith(API),
+        arbeitnowPage(
+          [arbeitnowRow({ slug: 'a', title: 7 }), arbeitnowRow({ slug: 'b', title: {} })],
+          null,
+        ),
+      ],
+    ]);
+    const { postings, notes, gaps } = await source.fetch({ board: '' });
+
+    expect(postings).toEqual([]);
+    expect(gaps?.join(' ')).toMatch(/2 rows arrived with a title that is not text/);
+    // Neither row reached the internship filter, so neither is counted by it.
+    expect(notes.join(' ')).toMatch(/read 0 jobs/);
+    expect(notes.join(' ')).toMatch(/dropped 0/);
+  });
+
+  it('remotive: a title that is not text is reported the same way', async () => {
+    const source = await freshSource('remotive');
+    serve([
+      [
+        (u) => u.startsWith(REMOTIVE_API),
+        remotiveBody([remotiveJob({ id: 1, title: 7 }), remotiveJob({ id: 2 })], 2),
+      ],
+    ]);
+    const { postings, gaps } = await source.fetch({ board: '' });
+
+    expect(postings.map((p) => p.externalId)).toEqual(['2']);
+    expect(gaps?.join(' ')).toMatch(/1 rows arrived with a title that is not text/);
+  });
+
   it('arbeitnow: a non-text description or location keeps the posting and says so', async () => {
     const source = await freshSource('arbeitnow');
     serve([
@@ -373,7 +415,10 @@ describe('a row that cannot be read', () => {
     const { postings, gaps } = await source.fetch({ board: '' });
 
     expect(postings).toEqual([]);
-    expect(gaps?.join(' ')).toMatch(/skipped 1 row that could not be read/);
+    // Still skipped and still reported as a gap. The sentence changed because the reason is
+    // now known: a title that is not text is separated out BEFORE the internship filter, so
+    // it is no longer counted among the rows the filter dropped as "not internships".
+    expect(gaps?.join(' ')).toMatch(/1 rows arrived with a title that is not text/);
   });
 
   it('adzuna: a null result loses that result only', async () => {
@@ -683,6 +728,71 @@ describe('robots.txt', () => {
 });
 
 // ---------------------------------------------------------------- the keyless promise
+
+describe('one definition of "internship shaped"', () => {
+  /**
+   * This file used to carry its own three-word filter while ats.ts read sixteen words across
+   * six languages, so the same posting was an internship or not depending on which source
+   * happened to find it — and a German-heavy feed, the one most likely to carry them, had
+   * the narrower answer. The property that matters is not which words are in the list, it is
+   * that there is only one list.
+   */
+  it('reads the same words the ATS side reads, in every language it names', () => {
+    for (const title of [
+      'Praktikum im Marketing',
+      'Werkstudent (m/w/d) Data Science',
+      'Praxissemester Vertrieb',
+      'Stagiaire Developpeur',
+      'Alternance Data',
+      'Prácticas de Verano',
+      'Becario de Marketing',
+      'Pasante Legal',
+      'Estágio em TI',
+      'Tirocinio Curriculare',
+      'Co-op Student',
+      'Software Engineering Intern',
+    ]) {
+      expect(internshipShaped(title), title).toBe(true);
+    }
+
+    // The boundaries are the harder half, and they come along with the shared definition.
+    for (const title of [
+      'Internal Audit Manager',
+      'International Sales Lead',
+      'Stage Manager',
+      'Early Stage Sales',
+      'Senior Staff Engineer',
+    ]) {
+      expect(internshipShaped(title), title).toBe(false);
+    }
+  });
+
+  /**
+   * A bare job_type label, not a title: both adapters test the feed's own labels with the
+   * same function, so it has to read "internship" standing alone and leave "full_time" and
+   * "contract" out.
+   */
+  it('reads a feed label as well as a title', () => {
+    expect(internshipShaped('internship')).toBe(true);
+    expect(internshipShaped('Working student')).toBe(true);
+    for (const label of ['full_time', 'part_time', 'contract', 'freelance', 'temporary']) {
+      expect(internshipShaped(label), label).toBe(false);
+    }
+  });
+
+  /** The definition may not be re-declared here, or the two can drift apart again. */
+  it('declares no filter of its own', () => {
+    const src = readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../src/core/discovery/sources/aggregators.ts',
+      ),
+      'utf8',
+    );
+    expect(src).toMatch(/import \{[^}]*internshipShaped[^}]*\} from '\.\/ats'/);
+    expect(src).not.toMatch(/const INTERNSHIP_\w+ =/);
+  });
+});
 
 describe('the keyless promise', () => {
   it('both adapters are registered, keyless, and always configured', () => {
