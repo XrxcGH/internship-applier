@@ -153,11 +153,12 @@ const PROBES: Array<{
       if (total > 0) return { kind: 'board', jobCount: total };
       return {
         kind: 'unproven',
+        // The fact, without the advice. What the reader should DO about it depends on
+        // whether anything else answered, so the caller adds that half — see `notes` below.
         note:
           'SmartRecruiters answers a name it has no company for exactly as it answers a ' +
           'company with nothing posted today, so no SmartRecruiters board is listed above ' +
-          'for this name. If you know this company hires through SmartRecruiters, open its ' +
-          'board yourself and paste one of its job URLs.',
+          'for this name.',
       };
     },
   },
@@ -329,11 +330,31 @@ export async function resolveCompany(name: string): Promise<ResolveResult> {
     if (found.some((f) => f.jobCount > 0)) break;
   }
 
+  /**
+   * The note states a fact; the sentence after it depends on what else was found.
+   *
+   * SmartRecruiters answers 200 with `totalFound: 0` for every id there is, so this note is
+   * on essentially every resolve — and it used to end by telling the reader to go and open
+   * the company's board and paste a URL. That is the right thing to do when nothing answered
+   * and quite wrong when the same response has just handed them a Greenhouse board with 233
+   * openings on it.
+   *
+   * Dropping the note whenever something answered was the other tempting fix, and it gives up
+   * something real: one board found is not "and nowhere else", and a reader has no way to know
+   * a vendor went unchecked unless told. So the fact is always said, and only the advice moves.
+   */
   const notes: string[] = [];
   for (const [source, note] of unproven) {
     // A vendor that answered for one slug candidate and proved nothing for another has been
     // checked, so its note would be noise. The note is for the vendor found nowhere at all.
-    if (!found.some((f) => f.source === source)) notes.push(note);
+    if (found.some((f) => f.source === source)) continue;
+    notes.push(
+      found.length === 0
+        ? `${note} If you know this company hires through SmartRecruiters, open its board ` +
+            'yourself and paste one of its job URLs.'
+        : `${note} The boards above are what could be confirmed, not everywhere this ` +
+            'company posts.',
+    );
   }
 
   return { matches: found.sort((a, b) => b.jobCount - a.jobCount), notes };

@@ -299,12 +299,16 @@ by not spending a request on them.
 
 A Workday or SmartRecruiters list row carries no description text at all, so a description
 costs one request per posting, and `internshipShaped` decides which postings earn one. It is
-a single exported function that everything in the discovery path asks — the smoke script
-below still carries a copy, which is the one place left in the repo where this question is
-answered twice. It was answered twice here as well: `ats.ts` tested an English-only pattern
-while `aggregators.ts` tested a German-aware one, so the repo held a right and a wrong
-answer to the same question at once, and the English-only half wrote a note stating as fact
-that a Praktikum is a title that does not look internship shaped.
+a single exported function that everything in the discovery path asks, the smoke script
+included.
+
+It used to be answered three times over. `ats.ts` tested one pattern, `aggregators.ts`
+tested a narrower one, and the smoke script carried a third, so whichever source happened
+to find a row decided whether the student ever saw it — and the narrowest answer belonged
+to the German-heavy feed, which is exactly where the words it could not read actually live.
+Unifying them took Arbeitnow from 24 internship postings to 65 on the same feed, and the
+half that lost used to write a note stating as fact that a Praktikum is a title which does
+not look internship shaped.
 
 The vocabulary is multilingual because these boards are. SmartRecruiters is Europe-heavy —
 one real board answers `?q=Praktikum` with 202 matches — and `\bstudent\b` cannot see itself

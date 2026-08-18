@@ -610,7 +610,12 @@ function searchShare(remaining: number, searchesLeft: number, page: number): num
  * how much there was. A board where every search was read to the end returns null and says
  * nothing, because there is nothing that was not covered.
  */
-function coverageGap(source: string, coverage: SearchCoverage[], boardCap: number): string | null {
+function coverageGap(
+  source: string,
+  coverage: SearchCoverage[],
+  boardCap: number,
+  perSearchCap = boardCap,
+): string | null {
   const short = coverage.filter((c) => c.ran && c.stated !== null && c.stated > c.read);
   // A walk that stopped at its ceiling on a board that never stated a total. Nothing can be
   // compared against, so `short` cannot see it, and without this it is a silent truncation:
@@ -637,10 +642,26 @@ function coverageGap(source: string, coverage: SearchCoverage[], boardCap: numbe
         'per-board ceiling was already reached.',
     );
   }
+  /**
+   * The ceiling QUOTED has to be the ceiling that bound this run, and the advice has to be
+   * advice.
+   *
+   * A board searched with one planned keyword stops at the per-search cap, and the sentence
+   * quoted the whole-board cap regardless: a run that stopped at 200 told the student it
+   * reads up to 600, so it appeared to have given up 400 rows inside its own budget for no
+   * reason. The closing line was backwards in the same case — planning a keyword is what
+   * reduced the board to one search, so "narrow the plan's keywords" was advice to do more
+   * of what had just cost the coverage.
+   */
+  const effective = Math.min(boardCap, coverage.length * perSearchCap);
+  const advice =
+    coverage.length > 1
+      ? "Narrow the plan's keywords to see the rest."
+      : 'This run searched once, for the keyword the plan named. Searching for something ' +
+        'narrower is what reads further into a board this size.';
   return (
     `${source}: this board has more matches than one run reads. ${sentences.join(' ')} ` +
-    `A run reads at most ${boardCap} rows per board across every search. Narrow the plan's ` +
-    'keywords to see the rest.'
+    `A run reads at most ${String(effective)} rows per board across every search. ${advice}`
   );
 }
 
@@ -1104,7 +1125,7 @@ export const smartrecruiters: JobSource = {
     }
     if (unreadable.length > 0) gaps.push(unreadableSearchGap('smartrecruiters', unreadable));
 
-    const shortfall = coverageGap('smartrecruiters', coverage, SR_MAX_ROWS);
+    const shortfall = coverageGap('smartrecruiters', coverage, SR_MAX_ROWS, SR_MAX_ROWS_PER_SEARCH);
     if (shortfall) gaps.push(shortfall);
 
     if (rows.length === 0) {

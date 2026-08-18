@@ -554,8 +554,17 @@ export function planQueries(
   const dropped = capped.length - room;
 
   if (dropped > 0) {
+    /**
+     * Names the cap and what fell outside it, not the final size.
+     *
+     * It used to interpolate `targets.length`, which is the number AFTER the exempt targets
+     * are added back — so beside the over-cap note below the pair read as a contradiction:
+     * "Plan truncated to 53 targets" on one line and "53 targets, more than the usual cap of
+     * 40" on the next. Both were true and together they were nonsense.
+     */
     notes.push(
-      `Plan truncated to ${targets.length} targets (${dropped} dropped). Raise the cap or narrow the filters.`,
+      `${String(dropped)} targets did not fit the cap of ${String(max)} and were dropped. ` +
+        'Raise the cap or narrow the filters.',
     );
   }
   // And the other side of the same cap, which nothing said at all: what survives it is

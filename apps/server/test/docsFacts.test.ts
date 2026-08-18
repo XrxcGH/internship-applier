@@ -34,8 +34,17 @@ import { slugCandidates } from '../src/core/discovery/resolveCompany';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
+/**
+ * Line endings normalised on the way in.
+ *
+ * Several checks below parse structure rather than prose: a fenced block opened with a
+ * newline, a declaration matched across lines. This repo is developed on Windows, where an
+ * ordinary edit can rewrite a file from LF to CRLF without changing a word of it, and a pin
+ * that goes red because a line ending changed is a false alarm. False alarms are how a suite
+ * of documentation checks stops being read.
+ */
 function read(rel: string): string {
-  return readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+  return readFileSync(path.join(REPO_ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
 }
 
 /**
@@ -911,12 +920,19 @@ describe('docs/04 — job discovery, § Checking it against the real internet', 
     }
   });
 
-  it('is right that the smoke script still answers "internship shaped" on its own', () => {
-    const ownPattern = !SMOKE.includes('internshipShaped');
-    expect({ ownPattern, said: /still carries a copy/.test(FLAT_DOC04) }).toEqual({
-      ownPattern: true,
-      said: true,
-    });
+  /**
+   * The claim flipped, so the pin flips with it: the smoke script was the last place the
+   * question was answered twice, and it now asks the shared function like everything else.
+   * Pinned in both directions — the document must say so, and the script must actually do
+   * it — because a document claiming a unification that quietly came apart is how the
+   * original three-way split went unnoticed.
+   */
+  it('is right that the smoke script asks the shared function', () => {
+    expect(SMOKE).toContain('internshipShaped');
+    // No second definition hiding beside the import.
+    expect(SMOKE).not.toMatch(/const INTERN\w* = \//);
+    expect(FLAT_DOC04).toMatch(/everything in the discovery path asks, the smoke script/);
+    expect(FLAT_DOC04).not.toMatch(/still carries a copy/);
   });
 });
 

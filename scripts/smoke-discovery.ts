@@ -17,6 +17,7 @@
  */
 import { ALL_SOURCES } from '../apps/server/src/core/discovery/run';
 import { resolveCompany } from '../apps/server/src/core/discovery/resolveCompany';
+import { internshipShaped } from '../apps/server/src/core/discovery/sources/ats';
 import type { NormalizedPosting } from '../apps/server/src/core/discovery/sources/types';
 
 /** Boards picked because they are large, public, and have run internship programs for years. */
@@ -30,10 +31,19 @@ const TARGETS: Array<{ source: string; board: string }> = [
   { source: 'usajobs', board: '' },
 ];
 
-const INTERNISH = /\b(intern|internship|co-?op|new grad|university|student|apprentice)\b/i;
+/**
+ * "Look student-facing" is decided by the same function the adapters gate their detail
+ * fetches on, not by a copy.
+ *
+ * This script carried its own English-only regex, the last place in the repo where the
+ * question was answered twice. On a German or French board that understates it: the adapters
+ * keep a Werkstudent and a Stagiaire, and the line reporting how many postings "look
+ * student-facing" would have said they do not — on the one script whose whole job is to say
+ * whether the real internet still works the way the adapters expect.
+ */
 
 function summarize(postings: NormalizedPosting[]): string {
-  const interns = postings.filter((p) => INTERNISH.test(p.title));
+  const interns = postings.filter((p) => internshipShaped(p.title));
   const dated = postings.filter((p) => p.term.year !== null).length;
   const paid = postings.filter((p) => p.compensation !== null).length;
   const located = postings.filter((p) => p.locations.length > 0).length;
@@ -70,7 +80,7 @@ async function main(): Promise<void> {
         location: 'San Francisco',
       });
       console.log(`✓ ${name}: ${summarize(result.postings)}`);
-      const first = result.postings.find((p) => INTERNISH.test(p.title));
+      const first = result.postings.find((p) => internshipShaped(p.title));
       if (first) console.log(`    e.g. "${first.title}" — ${first.applyUrl}`);
       for (const note of [...result.notes, ...(result.gaps ?? [])]) console.log(`    ${note}`);
       reachable++;

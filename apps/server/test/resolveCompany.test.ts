@@ -240,6 +240,46 @@ describe('the SmartRecruiters and Workable probes', () => {
   });
 
   /**
+   * SmartRecruiters answers 200 with totalFound:0 for every id there is, so this note rides
+   * on essentially every resolve. It used to end by telling the reader to go and open the
+   * company's board and paste a URL — right when nothing answered, and quite wrong when the
+   * same response had just handed them a board with openings on it. The fact is always said;
+   * only the advice moves.
+   */
+  it('tells the reader what to do about the unchecked vendor, and it depends', async () => {
+    install((url) =>
+      url === 'https://boards-api.greenhouse.io/v1/boards/foundco/jobs'
+        ? json({ jobs: [{ id: 1 }, { id: 2 }] })
+        : url.includes('api.smartrecruiters.com')
+          ? srNothing()
+          : url.includes('myworkdayjobs')
+            ? unprocessable()
+            : notFound(),
+    );
+    const found = await resolveCompany('Foundco');
+    expect(found.matches.length).toBeGreaterThan(0);
+    const said = found.notes.join(' ');
+    // The fact still gets said: one board found is not "and nowhere else".
+    expect(said).toMatch(/SmartRecruiters/);
+    expect(said).toMatch(/not everywhere this company posts/);
+    // And not the advice meant for a reader who has nothing.
+    expect(said).not.toMatch(/paste one of its job URLs/);
+  });
+
+  it('keeps the paste-a-URL advice when nothing answered at all', async () => {
+    install((url) =>
+      url.includes('api.smartrecruiters.com')
+        ? srNothing()
+        : url.includes('myworkdayjobs')
+          ? unprocessable()
+          : notFound(),
+    );
+    const found = await resolveCompany('Missingco');
+    expect(found.matches).toEqual([]);
+    expect(found.notes.join(' ')).toMatch(/paste one of its job URLs/);
+  });
+
+  /**
    * A 200 whose body is not a board at all is drift, not a board with zero jobs. Every
    * count used to end in `?? 0`, so an Ashby deprecation notice served with a 200 was
    * reported to the user as "this company's ATS is Ashby, with nothing posted".

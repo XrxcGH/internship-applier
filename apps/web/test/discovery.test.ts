@@ -358,11 +358,25 @@ describe('keylessTargets', () => {
     expect(list.map((t) => t.source)).toEqual(['github_list', 'arbeitnow']);
   });
 
-  it('gives a source it has never heard of a reason rather than a blank one', () => {
-    const [only] = keylessTargets([source('some_new_feed')]).filter(
-      (t) => t.source === 'some_new_feed',
-    );
-    expect(only?.reason).toBe('some_new_feed, searched without a company');
+  /**
+   * Not offered at all, which is stronger than the blank-reason guard this replaced.
+   *
+   * `needsBoard` answers false for a name the table has never heard of — the right way to be
+   * wrong when LABELLING something, and wrong as a filter: an unrecognised source got a
+   * one-press button, was added with an empty board, passed the run guard, and reached the
+   * adapter's own "no board was supplied" path, under a reason line inventing that it is
+   * "searched without a company". A source this file cannot describe is one it cannot
+   * honestly offer in a single press.
+   */
+  it('does not offer a one-press button for a source it has never heard of', () => {
+    const offered = keylessTargets([source('some_new_feed'), source('arbeitnow')]);
+    expect(offered.map((t) => t.source)).toEqual(['github_list', 'arbeitnow']);
+  });
+
+  /** It still appears everywhere the fallback label is the honest answer. */
+  it('still labels an unknown source rather than blanking it', () => {
+    expect(sourceLabel('some_new_feed')).toBe('some_new_feed');
+    expect(boardMeaning('some_new_feed')).toBe('a board name');
   });
 
   it('produces targets the Run button accepts', () => {

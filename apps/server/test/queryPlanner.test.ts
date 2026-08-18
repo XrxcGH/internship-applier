@@ -505,7 +505,7 @@ describe('pinned companies', () => {
     expect(plan.targets.filter((t) => t.reason.startsWith('company you pinned'))).toHaveLength(5);
     // The guesses and the defaults survive; the cap falls entirely on the known boards.
     expect(plan.targets.filter((t) => t.reason === 'known')).toHaveLength(0);
-    expect(plan.notes.join(' ')).toMatch(/truncated/i);
+    expect(plan.notes.join(' ')).toMatch(/\d+ targets did not fit the cap of \d+/);
   });
 });
 
@@ -634,7 +634,7 @@ describe('the keyless defaults', () => {
       expect(plan.targets.filter((t) => t.source === source)).toHaveLength(1);
     }
     expect(plan.targets).toHaveLength(40);
-    expect(plan.notes.join(' ')).toMatch(/truncated/i);
+    expect(plan.notes.join(' ')).toMatch(/\d+ targets did not fit the cap of \d+/);
   });
 });
 

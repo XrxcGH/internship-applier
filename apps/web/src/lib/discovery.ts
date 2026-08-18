@@ -233,7 +233,26 @@ export function keylessTargets(sources: AvailableSource[] | null): RunTarget[] {
   const names = [
     ALWAYS_OFFERED,
     ...(sources ?? [])
-      .filter((s) => !s.requiresKey && !needsBoard(s.name) && s.name !== ALWAYS_OFFERED)
+      .filter(
+        (s) =>
+          !s.requiresKey &&
+          s.name !== ALWAYS_OFFERED &&
+          /**
+           * KNOWN and board-free, not merely "not known to need a board".
+           *
+           * `needsBoard` answers false for a name this table has never heard of, which is the
+           * right way to be wrong when labelling something — but as a filter it turned that
+           * fallback into an offer: an unrecognised source got a one-press button, was added
+           * with an empty board, passed the run guard, and reached the adapter's own
+           * "no board was supplied" path. That is the reading-as-complete failure `needsBoard`
+           * exists to prevent, under a reason line inventing that the source is "searched
+           * without a company". A source this file cannot describe is not a source it can
+           * offer in one press; it still appears everywhere else, where the fallback label is
+           * the honest answer.
+           */
+          s.name in FACTS &&
+          !needsBoard(s.name),
+      )
       .map((s) => s.name),
   ];
   return names.map((name) => ({
