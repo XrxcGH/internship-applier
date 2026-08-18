@@ -1,3 +1,4 @@
+import type { SourceKind } from '@ia/shared';
 import { request } from './api';
 
 /**
@@ -94,45 +95,147 @@ export interface RunTarget {
 
 // ─────────────────────────────────────────────────────────────────── source facts
 
-const SOURCE_LABEL: Record<string, string> = {
-  greenhouse: 'Greenhouse',
-  lever: 'Lever',
-  ashby: 'Ashby',
-  adzuna: 'Adzuna',
-  usajobs: 'USAJOBS',
-  github_list: 'Community list',
-};
-
-export function sourceLabel(name: string): string {
-  return SOURCE_LABEL[name] ?? name;
-}
-
-/** What the board field means for each source, so an empty box is never a mystery. */
-const BOARD_MEANING: Record<string, string> = {
-  greenhouse: 'the company token in its Greenhouse board URL',
-  lever: 'the company slug in its Lever URL',
-  ashby: 'the company name in its Ashby job board URL',
-  adzuna: 'not used — Adzuna is searched by keyword',
-  usajobs: 'not used — USAJOBS is searched by keyword',
-  github_list: 'a GitHub repo. Left empty it reads the list for the upcoming season',
-};
-
-export function boardMeaning(source: string): string {
-  return BOARD_MEANING[source] ?? 'a board name';
+interface SourceFacts {
+  /** The vendor's own spelling of itself, for a chip, a report line, or a button. */
+  label: string;
+  /** What the board box holds for this source, so an empty one is never a mystery. */
+  board: string;
+  /**
+   * Whether the adapter fetches nothing at all without a board.
+   *
+   * True for exactly the six ATS vendors whose fetch opens with `noBoard(...)` in
+   * sources/ats.ts. Each of them answers an empty board with a note rather than an error,
+   * so a target added without one costs a slot in the run, reports zero found, and looks
+   * from the outside like a company with no openings. Cheaper to refuse it here.
+   */
+  needsBoard: boolean;
+  /**
+   * The reason shown beside a one-press add, for the sources that need neither a key nor a
+   * board. Absent means this source is not offered as a button — see `keylessTargets`.
+   */
+  addReason?: string;
 }
 
 /**
- * The three sources that fetch nothing without one.
+ * Everything the interface knows about each source, in one table keyed by the shared enum.
  *
- * Each of their adapters answers an empty board with a note rather than an error — "no
- * board token supplied" — so a target added without one costs a slot in the run, reports
- * zero found, and looks from the outside like a company with no openings. Cheaper to refuse
- * it here.
+ * `Record<SourceKind, …>` rather than three loose lookups, because three loose lookups is
+ * what this was and all three stopped at six sources through the change that shipped five
+ * more. A resolved Workday board rendered as the raw word "workday", its board box offered
+ * "a board name" for an address that has to be written tenant@host/site, and `needsBoard`
+ * waved through the three vendors whose adapters refuse an empty board. Adding a kind to
+ * SourceKind now fails the web typecheck until this table has an answer for it.
  */
-const NEEDS_BOARD = new Set(['greenhouse', 'lever', 'ashby']);
+const SOURCE_FACTS: Record<SourceKind, SourceFacts> = {
+  greenhouse: {
+    label: 'Greenhouse',
+    board: 'the company token in its Greenhouse board URL',
+    needsBoard: true,
+  },
+  lever: { label: 'Lever', board: 'the company slug in its Lever URL', needsBoard: true },
+  ashby: { label: 'Ashby', board: 'the company name in its Ashby job board URL', needsBoard: true },
+  workday: {
+    label: 'Workday',
+    // Not a slug, which is why the planner never guesses one: a Workday board is a tenant,
+    // a host and a site name the company chose freely, and the resolver hands the whole
+    // address over in this shape.
+    board: 'the board address, written tenant@host/site',
+    needsBoard: true,
+  },
+  smartrecruiters: {
+    label: 'SmartRecruiters',
+    board: 'the company identifier in its SmartRecruiters URL',
+    needsBoard: true,
+  },
+  workable: {
+    label: 'Workable',
+    board: 'the account name in its Workable URL',
+    needsBoard: true,
+  },
+  usajobs: {
+    label: 'USAJOBS',
+    board: 'not used — USAJOBS is searched by keyword',
+    needsBoard: false,
+  },
+  adzuna: { label: 'Adzuna', board: 'not used — Adzuna is searched by keyword', needsBoard: false },
+  arbeitnow: {
+    label: 'Arbeitnow',
+    board: 'not used — Arbeitnow is searched without a company',
+    needsBoard: false,
+    addReason: 'the Arbeitnow feed, no company and no key needed',
+  },
+  remotive: {
+    label: 'Remotive',
+    board: 'not used — Remotive is searched by keyword',
+    needsBoard: false,
+    addReason: 'the Remotive remote-jobs feed, searched by keyword',
+  },
+  github_list: {
+    label: 'Community list',
+    board: 'a GitHub repo. Left empty it reads the list for the upcoming season',
+    needsBoard: false,
+    addReason: 'the community list for the upcoming season',
+  },
+  web_search: {
+    label: 'Web search',
+    board: 'not used — no web search source is built yet',
+    needsBoard: false,
+  },
+  manual: {
+    label: 'Pasted by URL',
+    board: 'not used — a pasted address is the whole target',
+    needsBoard: false,
+  },
+};
+
+/**
+ * The same table, widened so a name off the wire can be looked up in it.
+ *
+ * Every one of these three readers takes whatever string the server sent. The server is
+ * ahead of this file often enough — a source can ship there and reach a run report before
+ * anyone touches the interface — that an unknown name has to degrade rather than throw.
+ */
+const FACTS: Record<string, SourceFacts> = SOURCE_FACTS;
+
+export function sourceLabel(name: string): string {
+  return FACTS[name]?.label ?? name;
+}
+
+export function boardMeaning(source: string): string {
+  return FACTS[source]?.board ?? 'a board name';
+}
 
 export function needsBoard(source: string): boolean {
-  return NEEDS_BOARD.has(source);
+  return FACTS[source]?.needsBoard ?? false;
+}
+
+/** The community list, which a fresh install has before it has anything else. */
+const ALWAYS_OFFERED = 'github_list';
+
+/**
+ * The sources one button can add whole: no key to configure, no board to type.
+ *
+ * Read off what the server says it has rather than listed here, because a hand-written list
+ * is what this row was and it stayed at the community list alone through the change that
+ * shipped Arbeitnow and Remotive. Both are keyless, both need no company, and neither could
+ * be added on its own: the only way to run them was to take the whole plan. A user who
+ * builds their run by hand was quietly searching two feeds fewer than the tool has.
+ *
+ * The community list is offered before `/api/sources/available` answers, and again if that
+ * read fails, so the one source a fresh install depends on is never behind a fetch.
+ */
+export function keylessTargets(sources: AvailableSource[] | null): RunTarget[] {
+  const names = [
+    ALWAYS_OFFERED,
+    ...(sources ?? [])
+      .filter((s) => !s.requiresKey && !needsBoard(s.name) && s.name !== ALWAYS_OFFERED)
+      .map((s) => s.name),
+  ];
+  return names.map((name) => ({
+    source: name,
+    board: '',
+    reason: FACTS[name]?.addReason ?? `${sourceLabel(name)}, searched without a company`,
+  }));
 }
 
 // ─────────────────────────────────────────────────────────────────── the run list
@@ -183,8 +286,9 @@ export function mergeTargets(existing: RunTarget[], incoming: RunTarget[]): RunT
  * Company names as a person types them: commas, semicolons, or one per line.
  *
  * Deduplicated case-insensitively, keeping the spelling first written, because the planner
- * turns each name into three unverified board guesses — so a list holding both "Stripe" and
- * "stripe" costs six targets out of a cap of forty to search one company.
+ * turns each name into five unverified board guesses — Greenhouse, Lever, Ashby,
+ * SmartRecruiters and Workable — so a list holding both "Stripe" and "stripe" costs ten
+ * targets out of a cap of forty to search one company.
  */
 export function splitCompanies(raw: string): string[] {
   const out: string[] = [];
@@ -212,7 +316,7 @@ const MAX_TARGETS = 200;
  */
 export function whyCannotRun(targets: RunTarget[]): string | null {
   if (targets.length === 0) {
-    return 'Nothing to search yet. Add the community list, or resolve a company below.';
+    return 'Nothing to search yet. Add one of the keyless feeds, or resolve a company in section 03.';
   }
   const blank = targets.find((t) => needsBoard(t.source) && boardOf(t).trim() === '');
   if (blank) {

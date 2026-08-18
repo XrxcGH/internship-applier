@@ -81,14 +81,24 @@ async function main(): Promise<void> {
   }
 
   console.log('');
+  // `resolveCompany` returns `{ matches, notes }`: the notes carry the vendors that could
+  // not be checked at all, which an empty `matches` would otherwise report as "no board
+  // anywhere". Reading the result as a bare array left this line printing a failure for
+  // every company, on a script whose whole job is to say whether the real internet still
+  // answers the way the adapters expect.
   const resolved = await resolveCompany('Figma');
   console.log(
-    resolved.length > 0
-      ? `✓ company resolution: Figma → ${resolved
-          .map((r) => `${r.source}/${r.board} (${r.jobCount} open)`)
+    resolved.matches.length > 0
+      ? `✓ company resolution: Figma → ${resolved.matches
+          .map(
+            (r) =>
+              `${r.source}/${r.board} (${String(r.jobCount)} open` +
+              `${r.fromFullName ? '' : ', first word only'})`,
+          )
           .join(', ')}`
       : '✗ company resolution: nothing answered for Figma',
   );
+  for (const note of resolved.notes) console.log(`  note: ${note}`);
 
   console.log('');
   console.log(`${reachable} sources reachable, ${unreachable} not`);

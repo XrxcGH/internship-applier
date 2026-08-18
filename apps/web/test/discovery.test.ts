@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { SourceKind } from '@ia/shared';
 import {
   alreadyStored,
   boardMeaning,
   durationLabel,
+  keylessTargets,
   mergeTargets,
   needsBoard,
   runHeadline,
@@ -11,6 +13,7 @@ import {
   targetKey,
   whenLabel,
   whyCannotRun,
+  type AvailableSource,
   type RunSummary,
   type RunTarget,
 } from '../src/lib/discovery';
@@ -90,8 +93,8 @@ describe('splitCompanies', () => {
   });
 
   it('drops a repeat regardless of case, keeping the spelling first written', () => {
-    // The planner turns each unresolved name into three unverified board guesses, so a
-    // list holding both spellings spends six of a forty-target cap on one company.
+    // The planner turns each unresolved name into five unverified board guesses, so a
+    // list holding both spellings spends ten of a forty-target cap on one company.
     expect(splitCompanies('Stripe, stripe, STRIPE')).toEqual(['Stripe']);
   });
 
@@ -108,10 +111,18 @@ describe('whyCannotRun', () => {
   });
 
   it('refuses a company board with no board name', () => {
-    // Greenhouse, Lever and Ashby each answer an empty board with a note rather than an
-    // error — "no board token supplied" — so the target costs a slot, reports zero found,
-    // and looks from the outside like a company with nothing open.
-    for (const source of ['greenhouse', 'lever', 'ashby']) {
+    // All six ATS vendors answer an empty board with a note rather than an error — "no
+    // board token supplied" — so the target costs a slot, reports zero found, and looks
+    // from the outside like a company with nothing open. Workday, SmartRecruiters and
+    // Workable were waved through for the whole of the change that added them.
+    for (const source of [
+      'greenhouse',
+      'lever',
+      'ashby',
+      'workday',
+      'smartrecruiters',
+      'workable',
+    ]) {
       expect(needsBoard(source)).toBe(true);
       expect(whyCannotRun([target({ source, board: '' })])).toMatch(/no board name/);
       expect(whyCannotRun([target({ source, board: '   ' })])).toMatch(/no board name/);
@@ -119,7 +130,7 @@ describe('whyCannotRun', () => {
   });
 
   it('allows the sources that never take one', () => {
-    for (const source of ['github_list', 'adzuna', 'usajobs']) {
+    for (const source of ['github_list', 'adzuna', 'usajobs', 'arbeitnow', 'remotive']) {
       expect(needsBoard(source)).toBe(false);
       expect(whyCannotRun([target({ source, board: '' })])).toBeNull();
     }
@@ -203,16 +214,105 @@ describe('whenLabel', () => {
 });
 
 describe('the source table', () => {
-  it('names every source the runner knows, and passes an unknown one through', () => {
+  /**
+   * Derived from the shared enum, never from a list written here.
+   *
+   * The version of this block that named three sources by hand was titled "names every
+   * source the runner knows" and stayed green through the change that shipped Workday,
+   * SmartRecruiters, Workable, Arbeitnow and Remotive — five sources with no label and no
+   * board meaning, one of them rendering as the raw word "workday" in the Sources card of
+   * section 01, which lists whatever /api/sources/available returns. A test that asserts a
+   * fallback rather than the registry lets the next new source through the same way.
+   */
+  const KINDS = SourceKind.options;
+
+  it('names every source kind the product has, and passes an unknown one through', () => {
+    for (const kind of KINDS) {
+      expect(sourceLabel(kind), `${kind} has no label`).not.toBe(kind);
+    }
     expect(sourceLabel('github_list')).toBe('Community list');
     expect(sourceLabel('usajobs')).toBe('USAJOBS');
-    expect(sourceLabel('greenhouse')).toBe('Greenhouse');
+    expect(sourceLabel('smartrecruiters')).toBe('SmartRecruiters');
     expect(sourceLabel('something_new')).toBe('something_new');
   });
 
-  it('says what the board field means, so an empty box is never a mystery', () => {
+  it('says what the board field means for every kind, so an empty box is never a mystery', () => {
+    for (const kind of KINDS) {
+      expect(boardMeaning(kind), `${kind} has no board meaning`).not.toBe('a board name');
+    }
     expect(boardMeaning('greenhouse')).toMatch(/Greenhouse board URL/);
     expect(boardMeaning('adzuna')).toMatch(/not used/);
     expect(boardMeaning('github_list')).toMatch(/upcoming season/);
+    // Not "a board name": a Workday board is a tenant, a host and a site name, and a box
+    // that says "a board name" for that address invites a slug that fetches nothing.
+    expect(boardMeaning('workday')).toMatch(/tenant@host\/site/);
+  });
+
+  it('guards exactly the vendors whose adapters refuse an empty board', () => {
+    // The six fetches in sources/ats.ts that open with noBoard(). Every other kind either
+    // searches by keyword or carries its address some other way.
+    const refuses = new Set([
+      'greenhouse',
+      'lever',
+      'ashby',
+      'workday',
+      'smartrecruiters',
+      'workable',
+    ]);
+    for (const kind of KINDS) {
+      expect(needsBoard(kind), `needsBoard disagrees with the ${kind} adapter`).toBe(
+        refuses.has(kind),
+      );
+    }
+    expect(needsBoard('something_new')).toBe(false);
+  });
+});
+
+describe('keylessTargets', () => {
+  const source = (name: string, requiresKey = false): AvailableSource => ({
+    name,
+    requiresKey,
+    configured: true,
+  });
+
+  it('offers every source that needs neither a key nor a board', () => {
+    // The hard-coded version of this row offered the community list alone and went on
+    // doing so after Arbeitnow and Remotive shipped, so a run built by hand searched two
+    // keyless feeds fewer than the tool had and said nothing about it.
+    const list = keylessTargets([
+      source('greenhouse'),
+      source('workday'),
+      source('adzuna', true),
+      source('usajobs', true),
+      source('arbeitnow'),
+      source('remotive'),
+      source('github_list'),
+    ]);
+    expect(list.map((t) => t.source)).toEqual(['github_list', 'arbeitnow', 'remotive']);
+    expect(list.every((t) => t.board === '')).toBe(true);
+    expect(list.every((t) => t.reason !== '')).toBe(true);
+  });
+
+  it('offers the community list before the source read lands, and if it fails', () => {
+    // A fresh install has nothing else, and the button that adds it must not wait on a
+    // fetch that may never answer.
+    expect(keylessTargets(null).map((t) => t.source)).toEqual(['github_list']);
+    expect(keylessTargets([]).map((t) => t.source)).toEqual(['github_list']);
+  });
+
+  it('does not offer the community list twice when the server also reports it', () => {
+    const list = keylessTargets([source('github_list'), source('arbeitnow')]);
+    expect(list.map((t) => t.source)).toEqual(['github_list', 'arbeitnow']);
+  });
+
+  it('gives a source it has never heard of a reason rather than a blank one', () => {
+    const [only] = keylessTargets([source('some_new_feed')]).filter(
+      (t) => t.source === 'some_new_feed',
+    );
+    expect(only?.reason).toBe('some_new_feed, searched without a company');
+  });
+
+  it('produces targets the Run button accepts', () => {
+    expect(whyCannotRun(keylessTargets([source('arbeitnow'), source('remotive')]))).toBeNull();
   });
 });

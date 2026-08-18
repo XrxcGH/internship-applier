@@ -5,6 +5,17 @@
 import { describe, expect, it } from 'vitest';
 import type { ConfirmedProfile, SearchFilters } from '@ia/shared';
 import { inferRoleFamilies, planQueries } from '../src/core/discovery/queryPlanner';
+import { AGGREGATOR_SOURCES } from '../src/core/discovery/sources/aggregators';
+
+/**
+ * The keyless, no-board sources a plan carries by default. Computed from the registry
+ * rather than written out, because the planner itself gates on the registry: a default
+ * only enters a plan when the runner actually has its adapter, so the expectation here
+ * has to move with the registry the same way the plan does.
+ */
+const DEFAULT_KEYLESS = (['github_list', 'arbeitnow', 'remotive'] as const).filter(
+  (k) => k in AGGREGATOR_SOURCES,
+);
 
 function profile(over: Record<string, unknown> = {}): ConfirmedProfile {
   return {
@@ -444,7 +455,7 @@ describe('pinned companies', () => {
    * deleted. A company on Lever, or one whose Greenhouse token is hyphenated, produced a
    * target that 404s — for the one company the user asked for by name.
    */
-  it('tries every keyless vendor when the board has not been resolved', () => {
+  it('tries every guessable vendor when the board has not been resolved', () => {
     const plan = planQueries(
       profile(),
       filters({
@@ -455,22 +466,22 @@ describe('pinned companies', () => {
     expect(sources).toContain('greenhouse');
     expect(sources).toContain('lever');
     expect(sources).toContain('ashby');
+    expect(sources).toContain('smartrecruiters');
+    expect(sources).toContain('workable');
     expect(plan.notes.join(' ')).toMatch(/no resolved board yet/i);
   });
 
-  it('uses an already-resolved board instead of guessing', () => {
+  it('uses an already-resolved board instead of guessing, and names its vendor', () => {
     const plan = planQueries(
       profile(),
       filters({ company: { onlyCompanies: ['Acme'], excludeCompanies: [] } }),
       [{ source: 'lever', board: 'acme', reason: 'resolved' }],
     );
-    // One board for the company, and the community list, which every plan carries until a
-    // run has resolved it as a source of its own. The whole list is asserted rather than
-    // just the first entry, because "guessed as well as resolved" is the failure this test
-    // is for and a `toContainEqual` would not see it.
-    expect(plan.targets).toEqual([
-      { source: 'github_list', board: '', reason: expect.stringContaining('community') },
-      { source: 'lever', board: 'acme', reason: 'company you pinned' },
+    // One board for the company beside the boardless defaults every plan carries. The
+    // whole non-default list is asserted rather than one entry, because "guessed as well
+    // as resolved" is the failure this test is for and a `toContainEqual` would not see it.
+    expect(plan.targets.filter((t) => t.board !== '')).toEqual([
+      { source: 'lever', board: 'acme', reason: 'company you pinned (its Lever board)' },
     ]);
     expect(plan.notes.join(' ')).not.toMatch(/no resolved board yet/i);
   });
@@ -491,9 +502,48 @@ describe('pinned companies', () => {
       known,
       { maxTargets: 4 },
     );
-    expect(plan.targets.filter((t) => t.reason.startsWith('company you pinned'))).toHaveLength(3);
-    expect(plan.targets).toHaveLength(4);
+    expect(plan.targets.filter((t) => t.reason.startsWith('company you pinned'))).toHaveLength(5);
+    // The guesses and the defaults survive; the cap falls entirely on the known boards.
+    expect(plan.targets.filter((t) => t.reason === 'known')).toHaveLength(0);
     expect(plan.notes.join(' ')).toMatch(/truncated/i);
+  });
+});
+
+describe('Workday and the plan', () => {
+  /**
+   * The one vendor a slug cannot be guessed for. A Workday board is (tenant, host, site)
+   * and the site name is arbitrary, so a "guessed" target would be a blind walk over
+   * hosts and site names inside a discovery run — the crawl the bounded resolver probe
+   * exists to avoid. A Workday target may only enter the plan through a resolution.
+   */
+  it('never guesses a Workday target for a pinned company', () => {
+    const plan = planQueries(
+      profile(),
+      filters({ company: { onlyCompanies: ['Guessless'], excludeCompanies: [] } }),
+    );
+    expect(plan.targets.filter((t) => t.source === 'workday')).toEqual([]);
+    // ...and the note says so, because five guesses that all 404 would otherwise read as
+    // "this company is nowhere" to a user whose company hires through Workday.
+    expect(plan.notes.join(' ')).toMatch(/Workday board cannot be guessed/);
+  });
+
+  it('promotes a resolved Workday board to the pinned company that owns its tenant', () => {
+    const plan = planQueries(
+      profile(),
+      filters({ company: { onlyCompanies: ['Acme'], excludeCompanies: [] } }),
+      [{ source: 'workday', board: 'acme@wd1/External', reason: 'already resolved' }],
+    );
+    // The board is "tenant@host/site", so matching it to the pinned name has to compare
+    // the tenant, not the whole address — otherwise the resolved board sat unpromoted
+    // while the planner emitted five guesses beside it.
+    expect(plan.targets.filter((t) => t.board !== '')).toEqual([
+      {
+        source: 'workday',
+        board: 'acme@wd1/External',
+        reason: 'company you pinned (its Workday board)',
+      },
+    ]);
+    expect(plan.notes.join(' ')).not.toMatch(/no resolved board yet/i);
   });
 });
 
@@ -506,31 +556,111 @@ describe('pinned companies', () => {
  * nor a key, and which returns more postings than everything else here combined. The plan
  * could only start working after a run the plan itself could not have produced.
  */
-describe('the community list', () => {
-  it('is in the plan for somebody who has run nothing and pinned nobody', () => {
+describe('the keyless defaults', () => {
+  it('are all in the plan for somebody who has run nothing and pinned nobody', () => {
     const plan = planQueries(profile(), filters());
-    expect(plan.targets).toEqual([
-      { source: 'github_list', board: '', reason: expect.stringContaining('community') },
-    ]);
+    expect(plan.targets.map((t) => t.source).sort()).toEqual([...DEFAULT_KEYLESS].sort());
+    expect(plan.targets.every((t) => t.board === '')).toBe(true);
+    const list = plan.targets.find((t) => t.source === 'github_list');
+    expect(list?.reason).toContain('community');
     expect(plan.notes.join(' ')).not.toMatch(/no company boards resolved/i);
   });
 
-  it('is not planned twice once a run has resolved it as a source', () => {
-    const plan = planQueries(profile(), filters(), [
-      { source: 'github_list', board: '', reason: 'already resolved from a previous run' },
-    ]);
-    expect(plan.targets.filter((t) => t.source === 'github_list')).toHaveLength(1);
+  it('none is planned twice once a run has resolved it as a source', () => {
+    for (const source of DEFAULT_KEYLESS) {
+      const plan = planQueries(profile(), filters(), [
+        { source, board: '', reason: 'already resolved from a previous run' },
+      ]);
+      expect(plan.targets.filter((t) => t.source === source)).toHaveLength(1);
+    }
   });
 
-  it('survives truncation, because dropping it drops the whole plan of a new user', () => {
+  it('survive truncation, because dropping them drops the whole plan of a new user', () => {
     const known = Array.from({ length: 10 }, (_, i) => ({
       source: 'greenhouse' as const,
       board: `board${String(i)}`,
       reason: 'known',
     }));
     const plan = planQueries(profile(), filters(), known, { maxTargets: 3 });
-    expect(plan.targets).toHaveLength(3);
-    expect(plan.targets[0]).toMatchObject({ source: 'github_list' });
+    for (const source of DEFAULT_KEYLESS) {
+      expect(plan.targets.filter((t) => t.source === source)).toHaveLength(1);
+    }
+    expect(plan.targets.length).toBeGreaterThanOrEqual(3);
+  });
+
+  /**
+   * The half of "survive the cap" that was false, and the one a real user reaches.
+   *
+   * A keyless default only gets a target built for it while it is ABSENT from knownBoards.
+   * After one ordinary run it has a `source` row, so it arrives as a known board instead,
+   * falls into the capped remainder, and eight pinned companies were enough to cut all
+   * three — the community list, which returns more postings than everything else here
+   * combined, silently left the plan of anyone who had both used it once and pinned eight
+   * companies. The test above never saw it because it passes no source rows for them.
+   */
+  it('survive the cap once a run has given them source rows, not only before', () => {
+    const asSourceRows = DEFAULT_KEYLESS.map((source) => ({
+      source,
+      board: '',
+      reason: 'already resolved',
+    }));
+    const pinnedNames = Array.from({ length: 8 }, (_, i) => `Company${String(i)}`);
+    const plan = planQueries(
+      profile(),
+      filters({ company: { onlyCompanies: pinnedNames, excludeCompanies: [] } }),
+      asSourceRows,
+    );
+    for (const source of DEFAULT_KEYLESS) {
+      expect(plan.targets.filter((t) => t.source === source)).toHaveLength(1);
+    }
+  });
+
+  /**
+   * ...and they survive it wherever the source table happens to list them. With no pinned
+   * companies the old code kept them only because those rows came back before the company
+   * boards and the slice reached them first, which is ordering luck, not a promise.
+   */
+  it('survive the cap when their source rows come last in the table', () => {
+    const known = [
+      ...Array.from({ length: 40 }, (_, i) => ({
+        source: 'greenhouse' as const,
+        board: `board${String(i)}`,
+        reason: 'known',
+      })),
+      ...DEFAULT_KEYLESS.map((source) => ({ source, board: '', reason: 'known' })),
+    ];
+    const plan = planQueries(profile(), filters(), known);
+    for (const source of DEFAULT_KEYLESS) {
+      expect(plan.targets.filter((t) => t.source === source)).toHaveLength(1);
+    }
+    expect(plan.targets).toHaveLength(40);
+    expect(plan.notes.join(' ')).toMatch(/truncated/i);
+  });
+});
+
+/**
+ * The other side of a cap that everything important is exempt from: the plan can exceed it,
+ * and nothing said so. Ten pinned companies plan fifty-three targets against a documented
+ * cap of forty, and every one of those is a request the user did not ask for by number.
+ */
+describe('a plan that goes over its own cap', () => {
+  it('says so, rather than quietly ignoring the number it documents', () => {
+    const plan = planQueries(
+      profile(),
+      filters({
+        company: {
+          onlyCompanies: Array.from({ length: 10 }, (_, i) => `Company${String(i)}`),
+          excludeCompanies: [],
+        },
+      }),
+    );
+    expect(plan.targets.length).toBeGreaterThan(40);
+    expect(plan.notes.join(' ')).toMatch(/more than the usual cap of 40/);
+  });
+
+  it('says nothing when it is inside the cap', () => {
+    const plan = planQueries(profile(), filters());
+    expect(plan.notes.join(' ')).not.toMatch(/more than the usual cap/);
   });
 });
 
@@ -547,7 +677,8 @@ describe('a company name no board slug can be built from', () => {
       profile(),
       filters({ company: { onlyCompanies: ['삼성전자'], excludeCompanies: [] } }),
     );
-    expect(plan.targets.filter((t) => t.source !== 'github_list')).toEqual([]);
+    // Only the boardless defaults remain: no vendor guess was minted for the name.
+    expect(plan.targets.filter((t) => t.board !== '')).toEqual([]);
     expect(plan.notes.join(' ')).toMatch(/cannot be guessed/i);
   });
 

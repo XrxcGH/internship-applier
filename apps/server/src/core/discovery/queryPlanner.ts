@@ -9,12 +9,18 @@
  * curated taxonomy, so a bad inference can't send forty queries for a role the user has
  * no evidence for.
  */
-import type { ConfirmedProfile, SearchFilters } from '@ia/shared';
-import type { AtsSourceName } from './sources/ats';
+import type { ConfirmedProfile, SearchFilters, SourceKind } from '@ia/shared';
+import { AGGREGATOR_SOURCES } from './sources/aggregators';
 import { slugCandidates } from './resolveCompany';
 
 export interface PlannedTarget {
-  source: AtsSourceName | 'adzuna' | 'usajobs' | 'github_list';
+  /**
+   * Any source the runner can be pointed at. Written against the shared SourceKind rather
+   * than the registries' key types, because the registries and this file are routinely
+   * extended in separate changes; only the two kinds that are not runnable targets —
+   * `web_search` (designed, not built) and `manual` (the paste-a-URL path) — are excluded.
+   */
+  source: Exclude<SourceKind, 'web_search' | 'manual'>;
   board: string;
   /** Why this target is in the plan — shown next to each chip in the UI. */
   reason: string;
@@ -334,6 +340,31 @@ export function termTokens(filters: SearchFilters): string[] {
   return [...new Set(out)];
 }
 
+/**
+ * The vendors a pinned company's slug is guessed on: exactly those whose board address IS
+ * a slug. Workday is deliberately absent, and it is not an oversight to fix — a Workday
+ * board is addressed by (tenant, host, site) and the site name is chosen freely by the
+ * company, so there is no address to build from a name. A "guessed" Workday target would
+ * be a blind walk over hosts and site names inside a discovery run, which is the crawl the
+ * bounded probe in resolveCompany exists to avoid. A Workday target enters the plan only
+ * through an actual resolution, which arrives here in `knownBoards` because
+ * `routes/discovery.ts` writes each resolution down as a `source` row. It did not for a
+ * while: `ensureSource` fires once per persisted posting inside a run, so nothing built a
+ * row from a resolution, and this sentence described a route into the plan that no Workday
+ * board could take.
+ */
+const GUESSABLE_VENDORS = ['greenhouse', 'lever', 'ashby', 'smartrecruiters', 'workable'] as const;
+
+/** How the reason strings spell each vendor, since the kind is a lowercase identifier. */
+const VENDOR_NAMES: Partial<Record<PlannedTarget['source'], string>> = {
+  greenhouse: 'Greenhouse',
+  lever: 'Lever',
+  ashby: 'Ashby',
+  smartrecruiters: 'SmartRecruiters',
+  workable: 'Workable',
+  workday: 'Workday',
+};
+
 /** One target per `source:board`, keeping the first reason given for it. */
 function dedupeTargets(targets: PlannedTarget[]): PlannedTarget[] {
   const seen = new Set<string>();
@@ -382,18 +413,34 @@ export function planQueries(
    * whose Greenhouse token is hyphenated, produced a target that 404s — and the user, who
    * had explicitly asked for that company, got nothing back and no explanation.
    *
-   * A board already resolved for that company is used as-is; otherwise every slug
-   * candidate is tried across the three keyless vendors, and a note says the guess was
-   * unverified so the resolve endpoint can be pointed at it.
+   * A board already resolved for that company is used as-is; otherwise the first slug
+   * candidate is tried across the five vendors whose board address is just a slug, and a
+   * note says the guess was unverified so the resolve endpoint can be pointed at it.
    */
   const pinned: PlannedTarget[] = [];
   const promoted = new Set<PlannedTarget>();
   for (const c of filters.company.onlyCompanies) {
     const slugs = slugCandidates(c);
-    const already = knownBoards.filter((b) => slugs.includes(b.board.toLowerCase()));
+    const already = knownBoards.filter((b) => {
+      // A Workday board is addressed "tenant@host/site", so the company it belongs to is
+      // the tenant before the "@", not the whole address — without this split, a pinned
+      // company whose Workday board HAD been resolved fell through to the guess branch
+      // and the one vendor that cannot be guessed was the one that needed the promotion.
+      // Every other vendor's board has no "@" and passes through the split unchanged.
+      const tenant = b.board.toLowerCase().split('@')[0] ?? '';
+      return slugs.includes(tenant);
+    });
     if (already.length > 0) {
       for (const b of already) promoted.add(b);
-      pinned.push(...already.map((b) => ({ ...b, reason: 'company you pinned' })));
+      // The reason names the vendor, because the chip is a promise about where the run
+      // will look and "company you pinned" alone left the user unable to tell a resolved
+      // Lever board from a guess three chips over.
+      pinned.push(
+        ...already.map((b) => ({
+          ...b,
+          reason: `company you pinned (its ${VENDOR_NAMES[b.source] ?? b.source} board)`,
+        })),
+      );
       continue;
     }
     /**
@@ -417,39 +464,58 @@ export function planQueries(
       );
       continue;
     }
-    for (const source of ['greenhouse', 'lever', 'ashby'] as const) {
-      pinned.push({ source, board: slug, reason: 'company you pinned (board unverified)' });
+    for (const source of GUESSABLE_VENDORS) {
+      pinned.push({
+        source,
+        board: slug,
+        reason: `company you pinned (board "${slug}" unverified, guessed on ${VENDOR_NAMES[source] ?? source})`,
+      });
     }
     notes.push(
       `"${c}" has no resolved board yet, so its name was guessed as "${slug}" on ` +
-        'Greenhouse, Lever and Ashby. Resolve it in Discover to search the right one.',
+        'Greenhouse, Lever, Ashby, SmartRecruiters and Workable. A Workday board cannot be ' +
+        'guessed from a name, so if this company hires through Workday, resolve it in ' +
+        'Discover to find the right board.',
     );
   }
 
   /**
-   * The community list, which needs no board and no key, planned by default.
+   * The sources that need no board and no key, planned by default.
    *
-   * This was the cold start, and it made "the plan" a misnomer for every new user: targets
-   * came only from pinned companies and from boards a PREVIOUS run had already resolved, so
-   * a fresh install planned nothing, and the note it printed sent the user to look for
-   * companies and paste URLs without mentioning the one source that is a single click and
-   * covers more postings than everything else here combined. It only ever healed after a run
-   * that this plan could not have produced.
+   * The community list came first, and it was the cold start: targets used to come only
+   * from pinned companies and from boards a PREVIOUS run had already resolved, so a fresh
+   * install planned nothing, and the note it printed sent the user to look for companies
+   * and paste URLs without mentioning the one source that is a single click and covers
+   * more postings than everything else here combined. It only ever healed after a run that
+   * this plan could not have produced. Arbeitnow and Remotive sit under the same policy —
+   * keyless, no company needed — so they are planned by default for the same reason, not
+   * under a new one.
    *
-   * `github_list` with an empty board reads the list for the upcoming season (aggregators.ts).
-   * A run already resolved as a source row is not planned twice, because it arrives in
-   * `knownBoards` and would otherwise be fetched once per copy.
+   * An empty board reads the whole source: the list for the upcoming season, the feeds by
+   * keyword (aggregators.ts). A source already resolved as a source row is not planned
+   * twice, because it arrives in `knownBoards` and would otherwise be fetched once per
+   * copy. And each entry is planned only when the runner actually has its adapter — a plan
+   * that names a source the run endpoint would reject is a plan that cannot be run as
+   * shown, which defeats the point of showing it.
    */
-  const listPlanned = knownBoards.some((b) => b.source === 'github_list');
-  const community: PlannedTarget[] = listPlanned
-    ? []
-    : [
-        {
-          source: 'github_list',
-          board: '',
-          reason: 'the community internship list — no company or key needed',
-        },
-      ];
+  const KEYLESS_DEFAULTS: ReadonlyArray<{ source: PlannedTarget['source']; reason: string }> = [
+    {
+      source: 'github_list',
+      reason: 'the community internship list — no company or key needed',
+    },
+    {
+      source: 'arbeitnow',
+      reason: 'the Arbeitnow public job feed, keyless and searched without a company',
+    },
+    {
+      source: 'remotive',
+      reason: 'the Remotive remote-jobs feed, keyless and searched by keyword',
+    },
+  ];
+  const keylessSources = new Set<PlannedTarget['source']>(KEYLESS_DEFAULTS.map((d) => d.source));
+  const community: PlannedTarget[] = KEYLESS_DEFAULTS.filter(
+    (d) => d.source in AGGREGATOR_SOURCES && !knownBoards.some((b) => b.source === d.source),
+  ).map((d) => ({ source: d.source, board: '', reason: d.reason }));
 
   // Pinned targets survive truncation, because the comment above is a promise: the user
   // asked for those by name. Slicing the concatenated list dropped them silently once the
@@ -458,7 +524,22 @@ export function planQueries(
   const max = opts.maxTargets ?? 40;
   // A board promoted into the pinned list is not searched twice.
   const rest = knownBoards.filter((b) => !promoted.has(b));
-  const kept = [...community, ...pinned];
+  /**
+   * A keyless default that a run has already turned into a `source` row is still a keyless
+   * default, and survives the cap as one.
+   *
+   * The list above only builds a target for a keyless source that is NOT yet in
+   * knownBoards, so that a source is not planned twice. Once a run had created its row it
+   * arrived as an ordinary known board instead, fell into the capped remainder, and eight
+   * pinned companies were enough to cut all three: the community list, the
+   * highest-coverage source in the product, silently left the plan the moment the user had
+   * both used it once and pinned eight companies. It survived the case with no pinned
+   * companies only by ordering luck, because the source table happened to list those rows
+   * before the company boards.
+   */
+  const keylessKnown = rest.filter((b) => keylessSources.has(b.source));
+  const capped = rest.filter((b) => !keylessSources.has(b.source));
+  const kept = [...community, ...keylessKnown, ...pinned];
   const room = Math.max(0, max - kept.length);
   /**
    * One target per board, whatever put it there.
@@ -469,12 +550,24 @@ export function planQueries(
    * and filed as a duplicate of itself; on the Discover screen the two chips also collided
    * on their React key.
    */
-  const targets = dedupeTargets([...kept, ...rest.slice(0, room)]);
-  const dropped = rest.length - room;
+  const targets = dedupeTargets([...kept, ...capped.slice(0, room)]);
+  const dropped = capped.length - room;
 
   if (dropped > 0) {
     notes.push(
       `Plan truncated to ${targets.length} targets (${dropped} dropped). Raise the cap or narrow the filters.`,
+    );
+  }
+  // And the other side of the same cap, which nothing said at all: what survives it is
+  // exempt from it, so pinning ten companies plans fifty-three targets against a stated cap
+  // of forty. Every one of those is a request the user did not ask for by number, and a
+  // plan that quietly ignores its own documented bound is not the inspectable plan this
+  // file promises.
+  if (targets.length > max) {
+    notes.push(
+      `This plan has ${targets.length} targets, more than the usual cap of ${max}. Companies ` +
+        'you pinned and the sources that need no board are never dropped, so the cap gave ' +
+        'way to them. Pin fewer companies to bring it down.',
     );
   }
   if (targets.length === 0) {

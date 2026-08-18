@@ -5,6 +5,7 @@ import {
   boardMeaning,
   durationLabel,
   getPlan,
+  keylessTargets,
   listRuns,
   mergeTargets,
   postingStats,
@@ -184,9 +185,10 @@ export function Discovery({
           : null,
       );
       const found: Array<{ name: string; matches: Resolution[] }> = [];
-      // One name at a time. Each resolution already probes three vendors across up to three
-      // slug candidates, and the fetcher rate-limits per host, so firing them together buys
-      // nothing and looks to Greenhouse like a burst.
+      // One name at a time. Each resolution already probes six vendors across up to three
+      // slug candidates — five keyless boards by GET, plus a bounded Workday probe that
+      // spends up to six POSTs of its own per candidate — and the fetcher rate-limits per
+      // host, so firing them together buys nothing and looks to Greenhouse like a burst.
       for (const name of pinned.slice(0, RESOLVE_LIMIT)) {
         const r = await resolveCompany(name);
         found.push({ name, matches: r.matches });
@@ -356,7 +358,7 @@ export function Discovery({
             {plan.targets.length === 0 ? (
               <Empty title="The plan has no boards in it.">
                 It only knows boards a previous run resolved, plus any company you pin below. The
-                community list needs neither — add it in section 04 and the queue has something in
+                keyless feeds need neither, so add one in section 04 and the queue has something in
                 it a minute later.
               </Empty>
             ) : (
@@ -425,10 +427,12 @@ export function Discovery({
         </div>
 
         <p className="text-faint u-prose mt-4 text-[0.9375rem]">
-          Rebuilding the plan guesses each name as a slug on Greenhouse, Lever and Ashby, and says
-          in a note that it guessed. Finding the boards asks all three which one the company really
-          uses, and how many jobs it has open today. The second is slower and it is the one that
-          gives you a target worth running.
+          Rebuilding the plan guesses each name as a slug on Greenhouse, Lever, Ashby,
+          SmartRecruiters and Workable, and says in a note that it guessed. Finding the boards asks
+          those five, and Workday as well, which one the company really uses and how many jobs it
+          has open today. Workday is never guessed, because its address is a tenant and a site name
+          the company chose rather than anything you can build from a company name. The second
+          button is slower and it is the one that gives you a target worth running.
         </p>
 
         {resolveNote && <Notice tone="caution">{resolveNote}</Notice>}
@@ -447,9 +451,9 @@ export function Discovery({
                 </div>
                 {matches.length === 0 ? (
                   <p className="text-faint u-prose mt-2 text-[0.9375rem]">
-                    None of the three keyless vendors has a board under that name. The company may
-                    use one this tool does not read — Workday and Taleo among them — in which case
-                    paste the posting URL in section 05.
+                    None of the six vendors above has a board under that name. The company may use
+                    one this tool does not read, iCIMS and Taleo among them, in which case paste the
+                    posting URL in section 05.
                   </p>
                 ) : (
                   <ul className="mt-3 space-y-2">
@@ -491,19 +495,15 @@ export function Discovery({
 
       <Section n="04" title="The run" step={6}>
         <div className="mb-5 flex flex-wrap items-center gap-3">
-          <Button
-            onClick={() =>
-              addTargets([
-                {
-                  source: 'github_list',
-                  board: '',
-                  reason: 'the community list for the upcoming season',
-                },
-              ])
-            }
-          >
-            + Community list
-          </Button>
+          {/* Every source that needs no key and no board, read off what the server reports.
+              This used to be one hard-coded Community list button, and it stayed that way
+              when Arbeitnow and Remotive shipped: two keyless feeds the user could only run
+              by taking the whole plan, which is a quieter way of searching less. */}
+          {keylessTargets(sources).map((t) => (
+            <Button key={t.source} onClick={() => addTargets([t])}>
+              + {sourceLabel(t.source)}
+            </Button>
+          ))}
           {(sources ?? [])
             .filter((s) => s.requiresKey && s.configured)
             .map((s) => (
@@ -533,8 +533,8 @@ export function Discovery({
 
         {targets.length === 0 ? (
           <Empty title="Nothing queued to search.">
-            Add the community list above, or a company board from section 03, or take the plan from
-            section 02 whole.
+            Add one of the keyless feeds above, or a company board from section 03, or take the plan
+            from section 02 whole.
           </Empty>
         ) : (
           <ul className="u-card divide-rule/50 divide-y">

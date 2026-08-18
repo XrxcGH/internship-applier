@@ -81,6 +81,15 @@ export interface FetchOptions {
   isDocumentedApi?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * A JSON request body, which makes the request a POST. Workday's board endpoint is the
+   * one public board API that answers only to POST — the same query every visitor's browser
+   * sends to render the company's own careers page — and this option exists for that shape
+   * alone. A request with a body is never served from the response cache and never stored
+   * in it, because the cache is keyed by URL and two different queries to one URL would
+   * otherwise read as the same page.
+   */
+  jsonBody?: unknown;
 }
 
 /**
@@ -300,7 +309,9 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
     }
   }
 
-  const hit = readCache(url);
+  // A POST is a query, not a page: the cache is keyed by URL alone, so serving or storing
+  // one would hand every later query the first query's answer.
+  const hit = opts.jsonBody === undefined ? readCache(url) : undefined;
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.body;
 
   let lastErr: unknown;
@@ -317,8 +328,13 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
       if (hit?.etag) headers['if-none-match'] = hit.etag;
       if (hit?.lastModified) headers['if-modified-since'] = hit.lastModified;
 
+      if (opts.jsonBody !== undefined) headers['content-type'] = 'application/json';
+
       const res = await fetch(url, {
         headers,
+        ...(opts.jsonBody !== undefined
+          ? { method: 'POST', body: JSON.stringify(opts.jsonBody) }
+          : {}),
         signal: opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? 20_000),
       });
 
@@ -362,13 +378,15 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
       if (!res.ok) throw new HttpError(`${res.status} ${res.statusText}`, res.status, url);
 
       const body = await res.text();
-      rememberResponse(url, {
-        body,
-        etag: res.headers.get('etag') ?? undefined,
-        lastModified: res.headers.get('last-modified') ?? undefined,
-        at: Date.now(),
-        status: res.status,
-      });
+      if (opts.jsonBody === undefined) {
+        rememberResponse(url, {
+          body,
+          etag: res.headers.get('etag') ?? undefined,
+          lastModified: res.headers.get('last-modified') ?? undefined,
+          at: Date.now(),
+          status: res.status,
+        });
+      }
       return body;
     } catch (err) {
       lastErr = err;

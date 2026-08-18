@@ -109,3 +109,64 @@ describe('a robots.txt that states a rule', () => {
     expect(await politeFetch(`${origin}/jobs/x`)).toBe('page /jobs/x');
   });
 });
+
+describe('a request that carries a body', () => {
+  /**
+   * `jsonBody` exists for exactly one endpoint family: Workday's board API answers only to
+   * POST, with the same query every visitor's browser sends to render the company's own
+   * careers page. Two properties matter and both are held here.
+   */
+  it('sends a POST with the JSON body and the right content type', async () => {
+    let seen: { method?: string; type?: string; body?: string } = {};
+    const server = createServer((req, res) => {
+      if (req.url === '/robots.txt') {
+        res.writeHead(404).end();
+        return;
+      }
+      let chunks = '';
+      req.on('data', (c: Buffer) => (chunks += c.toString()));
+      req.on('end', () => {
+        seen = { method: req.method, type: req.headers['content-type'], body: chunks };
+        res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
+      });
+    });
+    running.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    const origin = `http://127.0.0.1:${String(address.port)}`;
+
+    await politeFetch(`${origin}/wday/cxs/acme/External/jobs`, {
+      isDocumentedApi: true,
+      jsonBody: { appliedFacets: {}, limit: 1, offset: 0, searchText: 'intern' },
+    });
+    expect(seen.method).toBe('POST');
+    expect(seen.type).toBe('application/json');
+    expect(JSON.parse(seen.body ?? '{}')).toMatchObject({ searchText: 'intern' });
+  });
+
+  /**
+   * The response cache is keyed by URL alone. Two different queries POST to one URL, so a
+   * cached answer would hand the second query the first query's postings; a body request
+   * must neither read the cache nor write it.
+   */
+  it('never serves a POST from the cache a GET filled, and never fills it', async () => {
+    let calls = 0;
+    const origin = await host((url) => {
+      if (url === '/robots.txt') return { status: 404, body: '' };
+      calls++;
+      return { status: 200, body: `answer ${String(calls)}` };
+    });
+
+    // A GET primes the cache; the POSTs must not see it, and must each hit the server.
+    expect(await politeFetch(`${origin}/jobs`, { isDocumentedApi: true })).toBe('answer 1');
+    expect(
+      await politeFetch(`${origin}/jobs`, { isDocumentedApi: true, jsonBody: { offset: 0 } }),
+    ).toBe('answer 2');
+    expect(
+      await politeFetch(`${origin}/jobs`, { isDocumentedApi: true, jsonBody: { offset: 20 } }),
+    ).toBe('answer 3');
+    // And the POSTs must not have poisoned the cache for the next GET.
+    expect(await politeFetch(`${origin}/jobs`, { isDocumentedApi: true })).toBe('answer 1');
+  });
+});

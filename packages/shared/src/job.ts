@@ -5,6 +5,7 @@ export const SourceKind = z.enum([
   'greenhouse',
   'lever',
   'ashby',
+  'workday',
   'smartrecruiters',
   'workable',
   'usajobs',

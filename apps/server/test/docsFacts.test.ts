@@ -28,6 +28,9 @@ import type { ConfirmedProfile, SearchFilters } from '@ia/shared';
 import { ROLE_TAXONOMY, planQueries } from '../src/core/discovery/queryPlanner';
 import { ALL_SOURCES } from '../src/core/discovery/run';
 import { canonicalUrl, fingerprintTitle, normalizeTitle } from '../src/core/discovery/normalize';
+import { ATS_SOURCES, internshipShaped } from '../src/core/discovery/sources/ats';
+import { AGGREGATOR_SOURCES } from '../src/core/discovery/sources/aggregators';
+import { slugCandidates } from '../src/core/discovery/resolveCompany';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -74,6 +77,26 @@ const WORD_NUMBERS: Record<string, number> = {
   eleven: 11,
   twelve: 12,
 };
+
+/**
+ * Does this stretch of prose name that source kind?
+ *
+ * Most kinds are ordinary words in the document — "Arbeitnow", "SmartRecruiters" — and the
+ * kind is the word lowercased. The community list is the exception: it is named for the
+ * people who maintain it rather than for its kind, so the document writes the identifier in
+ * backticks beside the name and that spelling counts too.
+ */
+function namesSource(text: string, kind: string): boolean {
+  return new RegExp(`\\b${kind.replace('_', '[ _]')}\\b|\`${kind}\``, 'i').test(text);
+}
+
+/** The items of a written list — "Greenhouse, Lever and Ashby" — as three strings. */
+function listedItems(prose: string): string[] {
+  return prose
+    .split(/,| and /)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 describe('README.md', () => {
   /**
@@ -223,6 +246,103 @@ describe('docs/04 — job discovery, § Query planning', () => {
   });
 
   /**
+   * The cap is a promise about how many requests a run costs, and two kinds of target are
+   * exempt from it — so the number alone is only half the fact. Pinning the exemption
+   * behaviourally is the only way to keep the sentence honest: the check above plans
+   * nothing but resolved boards, which is exactly the path that stays under the cap, and it
+   * stayed green while eight pinned companies pushed a plan to fifty-three targets.
+   */
+  it('is right about what the cap gives way to, and about a plan going over it', () => {
+    const claimed = Number(/capped at (\d+)/.exec(FLAT_DOC04)?.[1]);
+    const pins = Array.from({ length: claimed }, (_, i) => `Company ${i}`);
+    const plan = planQueries(
+      profileFixture(),
+      filtersFixture({ company: { onlyCompanies: pins, excludeCompanies: [] } }),
+    );
+    expect(plan.targets.length).toBeGreaterThan(claimed);
+    // And the plan says so itself rather than quietly overrunning its own documented bound.
+    expect(plan.notes.some((n) => n.includes(String(claimed)))).toBe(true);
+  });
+
+  /**
+   * The sources that need no board are the whole plan on a fresh install, and the document
+   * promises they survive the cap. They did not: the planner skipped building a default
+   * target for a keyless source that a previous run had already written a `source` row for,
+   * so it arrived as an ordinary known board instead and eight pinned companies cut all
+   * three — including the community list, the highest-coverage source in the product. The
+   * set is read out of a plan rather than written down here, so adding a fourth keyless
+   * default cannot leave this test checking three.
+   */
+  it('is right that the sources needing no board survive the cap, resolved or not', () => {
+    const fresh = planQueries(profileFixture(), filtersFixture()).targets.filter(
+      (t) => t.board === '',
+    );
+    expect(fresh.length).toBeGreaterThan(0);
+
+    const claimed = Number(/capped at (\d+)/.exec(FLAT_DOC04)?.[1]);
+    const pins = Array.from({ length: claimed }, (_, i) => `Company ${i}`);
+    // Exactly what routes/discovery.ts builds from the `source` table once a run has used
+    // them, which is the state the promise used to be false in.
+    const known = fresh.map((t) => ({ ...t, reason: 'a board already resolved' }));
+    const plan = planQueries(
+      profileFixture(),
+      filtersFixture({ company: { onlyCompanies: pins, excludeCompanies: [] } }),
+      known,
+    );
+    for (const t of fresh) {
+      expect({ source: t.source, kept: plan.targets.some((k) => k.source === t.source) }).toEqual({
+        source: t.source,
+        kept: true,
+      });
+    }
+
+    const listed =
+      /keyless sources that need no board at all — ([^—]+) — are planned by default/.exec(
+        FLAT_DOC04,
+      )?.[1] ?? '';
+    expect(listedItems(listed)).toHaveLength(fresh.length);
+    for (const t of fresh) {
+      expect({ source: t.source, named: namesSource(listed, t.source) }).toEqual({
+        source: t.source,
+        named: true,
+      });
+    }
+  });
+
+  /**
+   * The vendors a pinned name is guessed on went from three to five in one change. Reading
+   * them off a plan rather than off the constant also pins the half of the sentence that
+   * matters most: Workday is not among them, because its board address is not a slug and a
+   * guessed one would be a blind walk over hosts and site names inside a run.
+   */
+  it('names the vendors a pinned company is actually guessed on, and no others', () => {
+    const plan = planQueries(
+      profileFixture(),
+      filtersFixture({ company: { onlyCompanies: ['Acme Widget'], excludeCompanies: [] } }),
+    );
+    const guessed = [
+      ...new Set(plan.targets.filter((t) => /unverified/.test(t.reason)).map((t) => t.source)),
+    ];
+    expect(guessed.length).toBeGreaterThan(0);
+    expect(guessed).not.toContain('workday');
+
+    const sentence =
+      /guessed on the (\w+) vendors whose board address is just a slug — ([^—]+) —/.exec(
+        FLAT_DOC04,
+      );
+    expect(sentence).toBeTruthy();
+    expect(WORD_NUMBERS[sentence![1]!.toLowerCase()]).toBe(guessed.length);
+    expect(listedItems(sentence![2]!)).toHaveLength(guessed.length);
+    for (const source of guessed) {
+      expect({ source, named: namesSource(sentence![2]!, source) }).toEqual({
+        source,
+        named: true,
+      });
+    }
+    expect(FLAT_DOC04).toMatch(/Workday is never guessed/);
+  });
+
+  /**
    * The document quotes the whole-word threshold as a number of characters. It is a
    * module-private constant in an expression, so the declaration is what gets matched.
    */
@@ -240,6 +360,104 @@ describe('docs/04 — job discovery, § Sourcing policy and § Normalization', (
   it('counts the sources that ship as the runner counts them', () => {
     const claimed = /(\w+) of those ship today/.exec(FLAT_DOC04)?.[1]?.toLowerCase() ?? '';
     expect(WORD_NUMBERS[claimed]).toBe(Object.keys(ALL_SOURCES).length);
+  });
+
+  /**
+   * The total alone was not enough. Five adapters landed in one change, the sentence that
+   * names them also says which FILE each lives in, and a count of eleven stays green while
+   * a source moves between the two files or is named on the wrong side. Both halves are
+   * measured against their own registry, and each registered kind has to be named on its
+   * own side and nowhere near the other.
+   */
+  it('splits the shipping sources between the two adapter files the way the registries do', () => {
+    const halves =
+      /of those ship today: (.+?) in `sources\/ats\.ts`, and (.+?) in `sources\/aggregators\.ts`/.exec(
+        FLAT_DOC04,
+      );
+    expect(halves).toBeTruthy();
+    const [ats, aggregators] = [halves![1]!, halves![2]!];
+
+    expect(listedItems(ats)).toHaveLength(Object.keys(ATS_SOURCES).length);
+    expect(listedItems(aggregators)).toHaveLength(Object.keys(AGGREGATOR_SOURCES).length);
+
+    for (const kind of Object.keys(ATS_SOURCES)) {
+      expect({
+        kind,
+        ats: namesSource(ats, kind),
+        aggregators: namesSource(aggregators, kind),
+      }).toEqual({ kind, ats: true, aggregators: false });
+    }
+    for (const kind of Object.keys(AGGREGATOR_SOURCES)) {
+      expect({
+        kind,
+        ats: namesSource(ats, kind),
+        aggregators: namesSource(aggregators, kind),
+      }).toEqual({ kind, ats: false, aggregators: true });
+    }
+  });
+
+  /**
+   * Which adapters let robots.txt answer for the host, and which opt out of asking.
+   *
+   * § Sourcing policy makes three claims a reader would act on: that the two keyless feed
+   * adapters ask, that Remotive is refused when it does, and that SmartRecruiters is still
+   * reading a host whose robots.txt disallows every agent but LinkedInBot. The third is an
+   * admission, and an admission has to die with the bug it describes — if the adapter is
+   * fixed and this test goes red, the paragraph comes out rather than the assertion.
+   *
+   * The host files themselves cannot be checked here: a unit test that fetched robots.txt
+   * would be a network test, and this suite has none. What is checkable is which side of
+   * the switch each adapter sits on.
+   */
+  it('is right about which adapters ask robots.txt and which opt out of asking', () => {
+    const source = [
+      read('apps/server/src/core/discovery/sources/ats.ts'),
+      read('apps/server/src/core/discovery/sources/aggregators.ts'),
+    ].join('\n');
+    const asks = new Set(
+      [...source.matchAll(/export const (\w+): JobSource = \{([\s\S]*?)\n\};/g)]
+        .filter(([, , body]) => /isDocumentedApi: false/.test(body!))
+        .map(([, name]) => name!.toLowerCase()),
+    );
+
+    expect(asks).toContain('arbeitnow');
+    expect(asks).toContain('remotive');
+    expect(FLAT_DOC04).toMatch(/the two keyless feed adapters pass `isDocumentedApi: false`/);
+    expect(asks.size).toBe(2);
+
+    // The refusal is reported rather than thrown, which is what makes it a coverage gap the
+    // student reads instead of a source error.
+    expect(source).toMatch(/robotsRefusal\('remotive', err\)/);
+    expect(FLAT_DOC04).toMatch(/Not actually read — its robots\.txt refuses us/);
+
+    // ...and the outstanding one. Remove the paragraph when this stops being true.
+    expect(asks.has('smartrecruiters')).toBe(false);
+    expect(FLAT_DOC04).toMatch(/\*\*SmartRecruiters is not yet held to that rule\.\*\*/);
+  });
+
+  /**
+   * The Tier A table quotes an endpoint shape per row, and that is the part of the table a
+   * reader would act on. A host nothing fetches is either a source that was never built or
+   * one that has moved, and both read from the table as "this ships and this is where it
+   * goes". Placeholders are stripped first, because `{tenant}.{host}.myworkdayjobs.com` is
+   * a shape rather than a name.
+   */
+  it('quotes endpoint hosts that an adapter actually fetches', () => {
+    const tierA = DOC04.slice(0, DOC04.indexOf('**Tier B'));
+    const adapters = [
+      read('apps/server/src/core/discovery/sources/ats.ts'),
+      read('apps/server/src/core/discovery/sources/aggregators.ts'),
+    ].join('\n');
+
+    const hosts = new Set<string>();
+    for (const [, cell] of tierA.matchAll(/`([^`]+)`/g)) {
+      const host = /([a-z0-9{}.-]*[a-z0-9-]+\.(?:com|io|co|gov|org))/i.exec(cell!)?.[1];
+      if (host) hosts.add(host.replace(/^.*\}/, ''));
+    }
+    expect(hosts.size).toBeGreaterThan(0);
+    for (const host of hosts) {
+      expect({ host, fetched: adapters.includes(host) }).toEqual({ host, fetched: true });
+    }
   });
 
   /**
@@ -285,6 +503,101 @@ describe('docs/04 — job discovery, § Sourcing policy and § Normalization', (
   });
 
   /**
+   * The § Normalization rule for which channel a shortfall goes down, executed rather than
+   * read. Ten of thirty internships came back as empty shells with `gaps` empty and the run
+   * summary clean, because the detail-page cap was reported as a plain note — and the
+   * identical empty posting from a FAILED detail fetch was already a gap. The document now
+   * states the rule; these are the two branches it is a rule about.
+   */
+  it('is right about which channel a detail-fetch shortfall goes down', () => {
+    const ats = read('apps/server/src/core/discovery/sources/ats.ts');
+    const channels = (condition: RegExp) =>
+      [
+        ...ats.matchAll(
+          new RegExp(`if \\(${condition.source}\\) \\{(?:\\s*//[^\\n]*)*\\s*(\\w+)\\.push`, 'g'),
+        ),
+      ].map((m) => m[1]!);
+
+    // The internships that were left without a description: coverage not obtained.
+    const capped = channels(/wanted\.length > toFetch\.length/);
+    expect(capped.length).toBeGreaterThan(0);
+    expect([...new Set(capped)]).toEqual(['gaps']);
+
+    // The rows that are not internships: a status line, and nothing the student came for.
+    const filtered = channels(/usable\.length > wanted\.length/);
+    expect(filtered.length).toBeGreaterThan(0);
+    expect([...new Set(filtered)]).toEqual(['notes']);
+
+    const claimed = Number(/fetch at most (\d+) detail pages per board/.exec(FLAT_DOC04)?.[1]);
+    expect(claimed).toBeGreaterThan(0);
+    for (const name of ['WORKDAY_MAX_DETAILS', 'SR_MAX_DETAILS']) {
+      expect(ats).toMatch(new RegExp(`const ${name} = ${claimed};`));
+    }
+  });
+
+  /**
+   * The vocabulary, run rather than quoted. The document lists the words that pass and the
+   * phrases that must not, and both halves matter: an English-only pattern dropped every
+   * Praktikum on a Europe-heavy board, and a pattern loose enough to keep them would fill
+   * the queue with "International Sales Lead". Reading the list out of the prose is what
+   * stops the document from listing a language the function no longer reads.
+   */
+  it('is right about the words `internshipShaped` reads and the phrases it refuses', () => {
+    const sentence = /([^.]+) all pass, alongside ([^.]+)\./.exec(FLAT_DOC04);
+    expect(sentence).toBeTruthy();
+    const passing = [...listedItems(sentence![1]!), ...listedItems(sentence![2]!)];
+    expect(passing.length).toBeGreaterThan(10);
+    for (const word of passing) {
+      expect({ word, shaped: internshipShaped(word) }).toEqual({ word, shaped: true });
+    }
+
+    const boundaries = /The boundaries cut both ways[^.]+\./.exec(FLAT_DOC04)?.[0] ?? '';
+    const refused = [...boundaries.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect(refused.length).toBeGreaterThan(2);
+    for (const phrase of refused) {
+      expect({ phrase, shaped: internshipShaped(phrase) }).toEqual({ phrase, shaped: false });
+    }
+  });
+
+  /**
+   * "Deliberately shorter than the filter reads" is the sentence that keeps somebody from
+   * turning the whole vocabulary into searches, which would cost one request per word per
+   * board per run. Both lists are module-private, so their declarations are counted.
+   */
+  it('is right that fewer terms are searched for than are recognised', () => {
+    const ats = read('apps/server/src/core/discovery/sources/ats.ts');
+    const searched = [
+      ...(/const INTERNSHIP_SEARCHES = \[([\s\S]*?)\] as const;/.exec(ats)?.[1] ?? '').matchAll(
+        /'[^']+'/g,
+      ),
+    ].length;
+    const recognised = [
+      ...(/const INTERNSHIP_TITLE: RegExp\[\] = \[([\s\S]*?)\n\];/.exec(ats)?.[1] ?? '').matchAll(
+        /^\s*(?:\/[^\n]*|[A-Z_]+),$/gm,
+      ),
+    ].length;
+    expect(searched).toBeGreaterThan(0);
+    expect(recognised).toBeGreaterThan(searched);
+    expect(FLAT_DOC04).toMatch(/search list is deliberately shorter than the filter reads/);
+
+    /**
+     * The document says only SmartRecruiters spends the vocabulary on searches, and that
+     * Workday sends one. That is a claim about behaviour, so it is pinned to behaviour.
+     *
+     * The previous pin counted `[...INTERNSHIP_SEARCHES]` occurrences and demanded two — a
+     * literal duplication count, not a fact anyone documented. When Workday was measured and
+     * reverted to a single search (its `searchText` is fuzzy, so the vocabulary read FEWER
+     * internships than "intern" alone), a correct, evidence-backed change turned the suite
+     * red and the only way to satisfy the pin was to undo it.
+     */
+    expect([...ats.matchAll(/\[\.\.\.INTERNSHIP_SEARCHES\]/g)]).toHaveLength(1);
+    expect(FLAT_DOC04).toMatch(/Only SmartRecruiters searches that vocabulary server-side/);
+    expect(FLAT_DOC04).toMatch(/Workday deliberately does not/);
+    // And the reason has to be the one the code acts on, not a restatement of the rule.
+    expect(FLAT_DOC04).toMatch(/`searchText` is fuzzy/);
+  });
+
+  /**
    * The same shape of miss one section over: § Run reporting listed the totals a summary
    * carries, `closed` landed on `RunSummary`, and nothing held the sentence to the type.
    */
@@ -300,6 +613,148 @@ describe('docs/04 — job discovery, § Sourcing policy and § Normalization', (
     for (const total of counted.filter((c) => c !== 'targets')) {
       expect({ total, listed: listed.includes(total) }).toEqual({ total, listed: true });
     }
+  });
+});
+
+/**
+ * The resolver is the part of this document that has drifted hardest: the probe list grew
+ * from three vendors to six inside one change, and the prose that describes the walk, its
+ * order and its request bound is prose a reader has no way to check. Every claim here is
+ * measured against `resolveCompany.ts` rather than against a memory of it.
+ */
+describe('docs/04 — job discovery, § Company target list', () => {
+  const RESOLVER = read('apps/server/src/core/discovery/resolveCompany.ts');
+
+  /** The GET probe declarations, as one block, so the Workday probe below cannot leak in. */
+  const PROBES = /const PROBES[\s\S]*?\n\];/.exec(RESOLVER)?.[0] ?? '';
+  const WORKDAY_PROBE = /async function probeWorkday[\s\S]*?\n\}\n/.exec(RESOLVER)?.[0] ?? '';
+
+  /** The hosts the resolver probes, in probe order, with slug and host placeholders as `*`. */
+  function probedHosts(): string[] {
+    const gets = [...PROBES.matchAll(/url: \([a-z]\) =>\s*`https:\/\/([^/`]+)/g)].map((m) => m[1]!);
+    const workday = /const url = `https:\/\/([^/`]+)/.exec(WORKDAY_PROBE)?.[1];
+    return [...gets, ...(workday === undefined ? [] : [workday])].map((h) =>
+      h.replace(/\$\{[A-Za-z.]+\}/g, '*'),
+    );
+  }
+
+  /** The same list as the § Company target list code block writes it, in written order. */
+  function documentedHosts(): string[] {
+    const block = /```\nacme →[\s\S]*?\n```/.exec(DOC04)?.[0] ?? '';
+    return [...block.matchAll(/(?:try|POST) ([^\s/]+)/g)].map((m) =>
+      m[1]!.replace(/\{[^}]*\}/g, '*').replace(/\bacme\b/g, '*'),
+    );
+  }
+
+  /** Two hosts × three site names — the two halves of the Workday budget, from the code. */
+  const workdayHosts = [
+    ...(/const WORKDAY_HOSTS = \[([^\]]*)\]/.exec(RESOLVER)?.[1] ?? '').matchAll(/'[^']+'/g),
+  ].length;
+  const workdaySites = listedItems(
+    /function workdaySiteCandidates[\s\S]*?new Set\(\[([^\]]*)\]/.exec(RESOLVER)?.[1] ?? '',
+  ).length;
+
+  it('lists the endpoints the resolver probes, in the order it probes them', () => {
+    expect(probedHosts().length).toBeGreaterThan(1);
+    expect(documentedHosts()).toEqual(probedHosts());
+  });
+
+  it('states how many vendors are asked about one slug before the next slug is tried', () => {
+    const claimed = /All (\w+) vendors are tried for one slug candidate/.exec(FLAT_DOC04)?.[1];
+    expect(WORD_NUMBERS[claimed?.toLowerCase() ?? '']).toBe(probedHosts().length);
+  });
+
+  it('states the Workday probe budget the code actually spends', () => {
+    expect(workdayHosts).toBeGreaterThan(0);
+    expect(workdaySites).toBeGreaterThan(0);
+    const hosts = /the (\w+) hosts that hold the bulk of tenants/.exec(FLAT_DOC04)?.[1];
+    const sites = /and (\w+) site candidates/.exec(FLAT_DOC04)?.[1];
+    const posts = /at most (\w+) POSTs per slug candidate/.exec(FLAT_DOC04)?.[1];
+    expect(WORD_NUMBERS[hosts?.toLowerCase() ?? '']).toBe(workdayHosts);
+    expect(WORD_NUMBERS[sites?.toLowerCase() ?? '']).toBe(workdaySites);
+    expect(WORD_NUMBERS[posts?.toLowerCase() ?? '']).toBe(workdayHosts * workdaySites);
+  });
+
+  /**
+   * The finding this block was written for. The document named two answers the Workday
+   * probe passes over in silence; the code has three, and the missing one — a plain 404 —
+   * is what a real tenant returns for every site name that is not its own. A reader
+   * auditing the probe's manners against the document would have found an undocumented
+   * silent branch and no way to tell whether it was deliberate.
+   */
+  it('names every answer the Workday probe passes over without a word', () => {
+    const statuses = [...WORKDAY_PROBE.matchAll(/err\.status === (\d{3})/g)].map((m) => m[1]!);
+    const skipsDeadHost = /isAbsentHost\(err\)\) break;/.test(WORKDAY_PROBE);
+    expect(statuses.length).toBeGreaterThan(0);
+    expect(skipsDeadHost).toBe(true);
+
+    const sentence =
+      /(\w+) answers count as the ordinary "not Workday" and pass without comment: ([^.]+)\./.exec(
+        FLAT_DOC04,
+      );
+    expect(sentence).toBeTruthy();
+    expect(WORD_NUMBERS[sentence![1]!.toLowerCase()]).toBe(statuses.length + 1);
+    for (const status of statuses) {
+      expect({ status, named: sentence![2]!.includes(status) }).toEqual({ status, named: true });
+    }
+    expect(sentence![2]).toMatch(/DNS/);
+  });
+
+  /**
+   * A claim of absence next to a claim of presence, and the pair is the point. The document
+   * said for a long time that a resolution reaches the planner, and separately that nothing
+   * wrote one down; both sentences were in the file at once and the route between them did
+   * not exist. `ensureSource` is private to run.ts and fires per persisted posting, so the
+   * only other writer is the resolve route itself.
+   */
+  it('is right that the resolve route writes a resolution down and the resolver does not', () => {
+    expect(RESOLVER).not.toMatch(/insert\(schema\.source\)/);
+    const routes = read('apps/server/src/routes/discovery.ts');
+    const handler = /app\.post\('\/api\/companies\/resolve'[\s\S]*?\n {2}\}\);/.exec(routes)?.[0];
+    expect(handler).toBeTruthy();
+    // The insert lives in a helper the handler calls, so the write is looked for in the file
+    // and the call to it in the handler — a handler that stopped calling it is the failure.
+    expect(routes).toMatch(/insert\(schema\.source\)/);
+    expect(handler).toMatch(/rememberResolvedBoards/);
+  });
+
+  /**
+   * The request bound, arithmetic and all. It is the sentence that makes this a resolver
+   * rather than a crawler, so every number in it is derived from the probes the code
+   * declares — and the candidate count is measured by running `slugCandidates`, including a
+   * name that reaches the ceiling so the document cannot claim a looser bound than it has.
+   */
+  it('states a request bound that matches the probes the code makes', () => {
+    const gets = [...PROBES.matchAll(/source: '[a-z]+'/g)].length;
+    const posts = workdayHosts * workdaySites;
+    const perCandidate = gets + posts;
+
+    const worst =
+      /worst case for one resolve is (\w+) requests per slug candidate — (\w+) GETs and (\w+) Workday POSTs/.exec(
+        FLAT_DOC04,
+      );
+    expect(worst).toBeTruthy();
+    expect(WORD_NUMBERS[worst![2]!.toLowerCase()]).toBe(gets);
+    expect(WORD_NUMBERS[worst![3]!.toLowerCase()]).toBe(posts);
+    expect(WORD_NUMBERS[worst![1]!.toLowerCase()]).toBe(perCandidate);
+
+    const candidates =
+      WORD_NUMBERS[
+        /`slugCandidates` yields at most (\w+) candidates/.exec(FLAT_DOC04)?.[1]?.toLowerCase() ??
+          ''
+      ] ?? 0;
+    expect(candidates).toBeGreaterThan(0);
+    for (const name of ['Acme', 'Acme Widget Co', 'One Two Three Four Five Inc', 'Foo-Bar Baz']) {
+      expect({ name, count: slugCandidates(name).length <= candidates }).toEqual({
+        name,
+        count: true,
+      });
+    }
+    // ...and the bound is tight, so it cannot be inflated to make the arithmetic work.
+    expect(slugCandidates('Acme Widget Co')).toHaveLength(candidates);
+
+    const total = Number(/a resolve tops out at (\d+) probes/.exec(FLAT_DOC04)?.[1]);
+    expect(total).toBe(perCandidate * candidates);
   });
 });
 
@@ -407,11 +862,61 @@ describe('docs/04 — job discovery, § Freshness and § Politeness', () => {
     expect(fetcher).toContain(`const USER_AGENT = '${quoted}'`);
   });
 
+  /**
+   * The POST exception, in both directions. A body has to bypass the cache on the way in
+   * AND on the way out: reading it back would serve one Workday offset's page for every
+   * other offset, and writing it would poison the entry for whatever GETs that URL next.
+   * The document is where a reader learns the cache is keyed on URL, so it owes them the
+   * one request shape that key cannot describe.
+   */
+  it('is right that a request with a body neither reads nor writes the response cache', () => {
+    expect(FLAT_DOC04).toMatch(/neither served from the response cache nor stored in it/);
+    expect(fetcher).toMatch(/opts\.jsonBody === undefined \? readCache\(url\) : undefined/);
+    expect(fetcher).toMatch(/if \(opts\.jsonBody === undefined\) \{\s*rememberResponse\(/);
+    expect(fetcher).toMatch(/method: 'POST', body: JSON\.stringify\(opts\.jsonBody\)/);
+  });
+
   it('states the status a robots.txt-disallowed path raises', () => {
     const claimed = /A disallowed path raises a (\d{3})/.exec(FLAT_DOC04)?.[1];
     expect(fetcher).toMatch(
       new RegExp(`robots\\.txt disallows \\$\\{u\\.pathname\\}\`, ${claimed}`),
     );
+  });
+});
+
+/**
+ * The one check in this repo that talks to the real internet, and therefore the only thing
+ * that can notice an endpoint moving. Its target list is hand-written and five adapters
+ * landed without being added to it, so the document says which sources it does not watch —
+ * and both assertions below are written to die the moment that stops being true.
+ */
+describe('docs/04 — job discovery, § Checking it against the real internet', () => {
+  const SMOKE = read('scripts/smoke-discovery.ts');
+
+  it('names exactly the shipping sources the smoke run does not reach', () => {
+    const covered = new Set([...SMOKE.matchAll(/\{ source: '(\w+)'/g)].map((m) => m[1]!));
+    expect(covered.size).toBeGreaterThan(0);
+    const missing = Object.keys(ALL_SOURCES).filter((k) => !covered.has(k));
+
+    const sentence = /Five of the shipping sources — ([^—]+) — are not in it/.exec(FLAT_DOC04);
+    if (missing.length === 0) {
+      // Somebody finished the job. The paragraph is now a lie in the other direction.
+      expect(sentence).toBeNull();
+      return;
+    }
+    expect(sentence).toBeTruthy();
+    expect(listedItems(sentence![1]!)).toHaveLength(missing.length);
+    for (const kind of missing) {
+      expect({ kind, named: namesSource(sentence![1]!, kind) }).toEqual({ kind, named: true });
+    }
+  });
+
+  it('is right that the smoke script still answers "internship shaped" on its own', () => {
+    const ownPattern = !SMOKE.includes('internshipShaped');
+    expect({ ownPattern, said: /still carries a copy/.test(FLAT_DOC04) }).toEqual({
+      ownPattern: true,
+      said: true,
+    });
   });
 });
 

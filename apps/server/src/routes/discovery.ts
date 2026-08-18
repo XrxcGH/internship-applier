@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { desc, eq, sql } from 'drizzle-orm';
 import { DEFAULT_FILTERS, SearchFilters, type ConfirmedProfile } from '@ia/shared';
+import { ulid } from 'ulid';
 import { db, schema } from '../infra/db/client';
 import { getProfile, isProfileConfirmed } from '../core/profile/repository';
 import {
@@ -13,7 +14,7 @@ import {
   saveManualPosting,
   type DiscoveryTarget,
 } from '../core/discovery/run';
-import { resolveCompany } from '../core/discovery/resolveCompany';
+import { resolveCompany, type Resolution } from '../core/discovery/resolveCompany';
 import { fetchManualPosting } from '../core/discovery/manualPosting';
 import { refreshPostings } from '../core/discovery/refresh';
 import { planQueries, type PlannedTarget } from '../core/discovery/queryPlanner';
@@ -107,6 +108,61 @@ function ignoredFilters(filters: SearchFilters): string[] {
   return out;
 }
 
+/**
+ * A resolution, written down, because that is the only way one reaches a plan.
+ *
+ * `queryPlanner` says a Workday target enters the plan only through an actual resolution,
+ * "which arrives here in knownBoards", and knownBoards is built below out of `source` rows.
+ * Nothing created a source row from a resolution: `ensureSource` fires once per PERSISTED
+ * POSTING inside a run, so a resolved board only became a plan target if the user re-typed
+ * it into the run list by hand, ran it, AND that run came back with at least one posting.
+ * For Workday, whose adapter searches for "intern" by default, a board resolved outside
+ * internship season legitimately returns nothing and could therefore never become a plan
+ * target at all, while the planner's own note told the user to "resolve it in Discover to
+ * find the right board" for the board they had just resolved.
+ *
+ * Only boards that positively answered are written. `resolveCompany` no longer reports a
+ * vendor whose answer proves nothing, so this cannot mint a row for a board that is not
+ * there — which is the thing that would make it worse than the gap it closes.
+ *
+ * A board with nothing posted today is written down too, and that is deliberate: it is the
+ * case this exists for. A run only ever created a row for a board that returned postings,
+ * so the boards that could not reach a plan were exactly the quiet ones, and a company's
+ * ATS does not stop being its ATS between seasons. The cost is a plan chip that finds
+ * nothing until the board fills; the chip names its board, and the source can be switched
+ * off in Settings.
+ *
+ * The select-then-insert is `ensureSource` again, in the one other place that needs it;
+ * that function is private to run.ts. Two resolves of the same name racing would write the
+ * label twice, as they would through run.ts, and the planner dedupes on `source:board`.
+ */
+function rememberResolvedBoards(matches: Resolution[]): void {
+  for (const m of matches) {
+    /**
+     * A board found only under the company's FIRST WORD is a guess, and a guess may be
+     * shown but never written down.
+     *
+     * The guard above says this cannot mint a row for a board that is not there, which is
+     * true and beside the point: the board is there and belongs to somebody else. "Vector
+     * Health" yields the slug "vector", and ashby:vector is a real board with seven real
+     * openings at another company. Written here it became an enabled source row the student
+     * cannot tell from a real resolution, and the plan chip then stated it as fact — "a
+     * board already resolved" — for a company they have never heard of. One press of "Find
+     * the boards" did it for up to eight names at once, and the row can only be switched
+     * off in Settings, never removed.
+     */
+    if (!m.fromFullName) continue;
+    const label = `${m.source}:${m.board}`;
+    const existing = db
+      .select({ id: schema.source.id })
+      .from(schema.source)
+      .where(eq(schema.source.label, label))
+      .all();
+    if (existing.length > 0) continue;
+    db.insert(schema.source).values({ id: ulid(), kind: m.source, label, enabled: true }).run();
+  }
+}
+
 export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   /**
    * Gate G1: discovery is meaningless against an unconfirmed profile, since eligibility
@@ -149,8 +205,12 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         .code(400)
         .send({ error: { code: 'VALIDATION_FAILED', message: 'Expected { name }.' } });
     }
-    const matches = await resolveCompany(parsed.data.name);
-    return { name: parsed.data.name, matches };
+    const { matches, notes } = await resolveCompany(parsed.data.name);
+    rememberResolvedBoards(matches);
+    // `notes` carries the vendors that could not be checked at all. Without it an empty
+    // `matches` reads as "this company has no board at any vendor we asked", which is a
+    // stronger claim than the probes can make for SmartRecruiters.
+    return { name: parsed.data.name, matches, notes };
   });
 
   app.get('/api/discovery/stats', async () => postingStats());
@@ -189,8 +249,13 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       .filter((s) => s.label.includes(':') && s.kind in ALL_SOURCES)
       .map((s) => ({
         source: s.kind as PlannedTarget['source'],
-        board: s.label.split(':')[1] ?? '',
-        reason: 'already resolved from a previous run',
+        // Everything after the FIRST colon, not the second field of a split: a Workday
+        // board is addressed "tenant@host/site" and any vendor may one day put a colon in
+        // a board name, and a split would hand the runner a truncated address that 404s.
+        board: s.label.slice(s.label.indexOf(':') + 1),
+        // Not "from a previous run" any more: a board resolved on the Discover screen is
+        // written down as a source row too, which is what gets a Workday board into a plan.
+        reason: 'a board already resolved, by a run or on the Discover screen',
       }));
 
     const plan = planQueries(profile as ConfirmedProfile, filters, knownBoards);
