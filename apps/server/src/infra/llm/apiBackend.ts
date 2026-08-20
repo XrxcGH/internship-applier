@@ -93,7 +93,7 @@ export const apiBackend: Backend = {
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
     if (!hasApiKey()) {
-      throw new NoModelAccessError('No ANTHROPIC_API_KEY is configured.');
+      throw new NoModelAccessError('No ANTHROPIC_API_KEY is configured.', 'no_key');
     }
 
     const model = modelFor(req.purpose);

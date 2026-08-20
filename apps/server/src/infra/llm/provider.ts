@@ -59,10 +59,50 @@ export interface GenerateResult {
 }
 
 /** Thrown when no backend can serve the request. The message is shown to the user. */
+/**
+ * Why a model call could not be made — and it is NOT always "no access".
+ *
+ * One class carried seven different situations, and callers could only re-render its message
+ * or fall back to advice about signing in. The web-search source did the latter, so a CLI run
+ * that TIMED OUT told the student to sign in to a CLI they were already signed in to, and
+ * said the live web "is not searched" without saying that the search had in fact started and
+ * run out of time. The advice named a cause that was not the cause and prescribed an action
+ * that would change nothing.
+ *
+ *   `unavailable`     no CLI on PATH and no key — the genuine no-access case
+ *   `not_signed_in`   the CLI is installed and has no credentials
+ *   `no_key`          the API backend was selected with no ANTHROPIC_API_KEY
+ *   `usage_limit`     the subscription's cap was reached; it comes back on its own
+ *   `timed_out`       the call was still running when the per-call ceiling expired
+ *   `cli_error`       the CLI exited non-zero or reported an error of its own
+ *   `unreadable`      it answered in a shape this app could not parse
+ *
+ * The first three are the ones where "set up model access" is the right thing to say. The
+ * rest are failures of a working setup, and telling someone to fix their setup is wrong.
+ */
+export type NoModelAccessReason =
+  | 'unavailable'
+  | 'not_signed_in'
+  | 'no_key'
+  | 'usage_limit'
+  | 'timed_out'
+  | 'cli_error'
+  | 'unreadable';
+
 export class NoModelAccessError extends Error {
-  constructor(message: string) {
+  readonly reason: NoModelAccessReason;
+
+  constructor(message: string, reason: NoModelAccessReason = 'unavailable') {
     super(message);
     this.name = 'NoModelAccessError';
+    this.reason = reason;
+  }
+
+  /** Whether the fix is "set model access up", as opposed to "something went wrong". */
+  get isSetupProblem(): boolean {
+    return (
+      this.reason === 'unavailable' || this.reason === 'not_signed_in' || this.reason === 'no_key'
+    );
   }
 }
 

@@ -222,14 +222,25 @@ export const webSearch: JobSource = {
       });
     } catch (err) {
       if (err instanceof NoModelAccessError) {
-        // A gap, not a note: the web was not searched, which is coverage the user asked for
-        // and did not get. Skipping it quietly would read as "the web had nothing".
+        /**
+         * A gap, not a note: the web was not searched, which is coverage the user asked for
+         * and did not get. Skipping it quietly would read as "the web had nothing".
+         *
+         * What it SAYS depends on why, and it used to say one thing for seven causes. A CLI
+         * run that timed out — which a 32-turn sweep does on the default 180s ceiling — threw
+         * this same error, so the student was told "no model access, sign in to the Claude
+         * Code CLI" while signed in to a working CLI, about a search that had started and run
+         * out of time. That is a wrong diagnosis carrying a confident remedy, on the one
+         * channel this file exists to keep honest.
+         */
         return {
           postings: [],
           notes: [],
           gaps: [
-            'web_search: skipped — no model access. Sign in to the Claude Code CLI or set ' +
-              'ANTHROPIC_API_KEY in .env; until then the live web is not searched.',
+            err.isSetupProblem
+              ? 'web_search: skipped — no model access. Sign in to the Claude Code CLI or set ' +
+                'ANTHROPIC_API_KEY in .env; until then the live web is not searched.'
+              : `web_search: the live web was not searched. ${err.message}`,
           ],
         };
       }

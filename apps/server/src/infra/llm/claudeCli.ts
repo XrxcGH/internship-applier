@@ -118,7 +118,33 @@ interface RunResult {
   timedOut: boolean;
 }
 
-async function run(c: Candidate, args: string[], stdin: string): Promise<RunResult> {
+/**
+ * How long one call may take, given what it was allowed to do.
+ *
+ * A single-turn draft and a multi-turn web sweep are not the same shape of request, and one
+ * ceiling could not fit both: the sweep was raised to 32 turns — each of them a live search
+ * and a page read — while the ceiling stayed at the 180s written for a one-shot call. So the
+ * sweep was killed partway through, every time, on a machine where running the identical
+ * search by hand takes several minutes and works.
+ *
+ * What made it costly rather than merely slow is where the timeout LANDED: as a
+ * NoModelAccessError, which the web-search source reported to the student as "no model
+ * access — sign in to the Claude Code CLI", to someone already signed in. A wrong diagnosis
+ * with a confident remedy.
+ *
+ * Scaled from the configured ceiling rather than replacing it, so raising
+ * CLAUDE_CLI_TIMEOUT_MS still raises both.
+ */
+function ceilingFor(req: { webSearch?: boolean }): number {
+  return config.llm.cliTimeoutMs * (req.webSearch === true ? 5 : 1);
+}
+
+async function run(
+  c: Candidate,
+  args: string[],
+  stdin: string,
+  timeoutMs: number,
+): Promise<RunResult> {
   return new Promise((resolve) => {
     let child;
     try {
@@ -141,7 +167,7 @@ async function run(c: Candidate, args: string[], stdin: string): Promise<RunResu
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
-    }, config.llm.cliTimeoutMs);
+    }, timeoutMs);
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -187,7 +213,8 @@ async function probe(): Promise<Candidate | null> {
 
   for (const c of candidates()) {
     if (path.isAbsolute(c.bin) && !existsSync(c.bin)) continue;
-    const r = await run(c, ['--version'], '');
+    // A version probe is the smallest call there is; it never needs the sweep's ceiling.
+    const r = await run(c, ['--version'], '', config.llm.cliTimeoutMs);
     if (r.code === 0 && /\d+\.\d+/.test(r.stdout)) {
       found = c;
       // `--version` prints "2.1.222 (Claude Code)". Keep the number; the name is already
@@ -392,6 +419,7 @@ export const claudeCliBackend: Backend = {
     if (!c) {
       throw new NoModelAccessError(
         `${failure ?? 'The Claude Code CLI is unavailable.'}\n\n${INSTALL_HINT}`,
+        'unavailable',
       );
     }
 
@@ -470,13 +498,15 @@ export const claudeCliBackend: Backend = {
         ? `${req.user}\n\nThe files to read:\n${req.documents!.join('\n')}\n`
         : req.user;
 
+      const timeoutMs = ceilingFor(req);
       const started = Date.now();
-      const r = await run(c, args, stdin);
+      const r = await run(c, args, stdin, timeoutMs);
 
       if (r.timedOut) {
         throw new NoModelAccessError(
-          `The Claude CLI did not finish within ${Math.round(config.llm.cliTimeoutMs / 1000)}s and was stopped. ` +
+          `The Claude CLI did not finish within ${Math.round(timeoutMs / 1000)}s and was stopped. ` +
             'Try again, or raise CLAUDE_CLI_TIMEOUT_MS in .env.',
+          'timed_out',
         );
       }
 
@@ -500,11 +530,11 @@ export const claudeCliBackend: Backend = {
           // Latch it: the version probe cannot see this, so without the flag `available()`
           // would keep claiming the CLI can serve requests and keep shadowing the API key.
           signedOut = true;
-          throw new NoModelAccessError(notSignedIn);
+          throw new NoModelAccessError(notSignedIn, 'not_signed_in');
         }
 
         const limit = usageLimitMessage(combined);
-        if (limit) throw new NoModelAccessError(limit);
+        if (limit) throw new NoModelAccessError(limit, 'usage_limit');
       }
 
       // A crash is diagnosed before a parse failure, because a crashed process produces
@@ -517,7 +547,7 @@ export const claudeCliBackend: Backend = {
           { code: r.code, detail: detail.slice(0, 300) },
           'claude cli reported an error',
         );
-        throw new NoModelAccessError(`The Claude CLI reported an error: ${detail}`);
+        throw new NoModelAccessError(`The Claude CLI reported an error: ${detail}`, 'cli_error');
       }
 
       if (!env) {
