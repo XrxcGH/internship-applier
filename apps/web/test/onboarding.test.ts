@@ -61,6 +61,9 @@ function render(props: {
       typed: props.typed ?? {},
       onEntry: () => undefined,
       onTyped: () => undefined,
+      // Add / move / remove are exercised by their own cases below; these renders are about
+      // what a single row draws.
+      onList: () => undefined,
     }),
   );
 }
@@ -219,6 +222,7 @@ describe('the row handler when a stored GPA goes', () => {
         entries: [entry],
         flagged: () => false,
         typed,
+        onList: () => undefined,
         onEntry: (_i, next, clears, options) => {
           edit = { next, clears, options };
         },
@@ -592,10 +596,23 @@ describe('the education editor on screen', () => {
     expect(html).toContain('Add honor');
   });
 
-  it('says what to do when the reader found no school at all', () => {
+  it('offers a correction when the reader found no school at all', () => {
+    // The only action here used to be uploading a different file, which is not a correction:
+    // a resume whose education section was misread had no way to be fixed by hand.
     const html = render({ entries: [] });
     expect(html).toContain('none found');
-    expect(html).toContain('Upload a different file');
+    expect(html).toContain('Add one here');
+    expect(html).toContain('Add a school');
+  });
+
+  it('lets a school be removed and reordered, like every other list on this screen', () => {
+    // ProfileEditors states the rule this broke: anything the wizard cannot edit is an
+    // extraction error made permanent. The blocking notice even tells the user to "remove the
+    // row outright", which was impossible for a school.
+    const html = render({ entries: [school(), school({ institution: 'Second' })] });
+    expect(html).toContain('Remove school 1');
+    expect(html).toContain('Move school 1 down');
+    expect(html).toContain('Move school 2 up');
   });
 });
 

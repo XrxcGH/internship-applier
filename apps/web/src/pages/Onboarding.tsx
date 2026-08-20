@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { bulletlessExperience, EducationLevel, isEmailShaped, lostTheEvidence } from '@ia/shared';
 import type { CandidateProfile, EducationEntry, WorkLocation } from '@ia/shared';
@@ -823,6 +824,9 @@ export function Onboarding({
               typed={typed}
               onEntry={editEducation}
               onTyped={(boxes) => setTyped((prev) => ({ ...prev, ...boxes }))}
+              onList={(next, moved) =>
+                editList('education', (prev) => ({ ...prev, education: next }), moved)
+              }
             />
 
             {/* `patch` unchanged from the identity fields above, so an edit in here clears the
@@ -1226,6 +1230,7 @@ export function EducationEditor({
   typed,
   onEntry,
   onTyped,
+  onList,
 }: {
   entries: EducationEntry[];
   flagged: (path: string) => boolean;
@@ -1237,7 +1242,39 @@ export function EducationEditor({
     options?: { raise?: boolean },
   ) => void;
   onTyped: (boxes: Record<string, string>) => void;
+  /**
+   * Adding, removing and reordering the list itself.
+   *
+   * `moved` is `oldIndexForNew`, the permutation `remapListFlags` needs: every flag on this
+   * list is addressed positionally (`education.1.gpa`), so a row removed from the middle
+   * would otherwise leave each flag below it pointing at its neighbour — the GPA warning for
+   * the second school landing on the third.
+   */
+  onList: (next: EducationEntry[], moved?: number[]) => void;
 }) {
+  /** A fresh school, in the shape the schema demands of a new row. */
+  const blank = (): EducationEntry => ({
+    institution: '',
+    level: 'bachelor',
+  });
+
+  const move = (index: number, delta: number): void => {
+    const to = index + delta;
+    if (to < 0 || to >= entries.length) return;
+    const next = [...entries];
+    // Both indices are in range — the guard above returns otherwise — but the compiler reads
+    // an indexed access as possibly undefined, and a bare swap would widen the array type.
+    [next[index], next[to]] = [next[to]!, next[index]!];
+    const moved = entries.map((_, i) => (i === index ? to : i === to ? index : i));
+    onList(next, moved);
+  };
+
+  const remove = (index: number): void => {
+    onList(
+      entries.filter((_, i) => i !== index),
+      entries.map((_, i) => i).filter((i) => i !== index),
+    );
+  };
   return (
     <div className="mt-10">
       <div className="mb-3 flex items-baseline justify-between gap-4">
@@ -1251,7 +1288,7 @@ export function EducationEditor({
 
       {entries.length === 0 ? (
         <p className="text-faint u-prose text-sm">
-          No school was read off your resume. Upload a different file if that is wrong.
+          No school was read off your resume. Add one here, or upload a different file.
         </p>
       ) : (
         /* Never sliced or capped. A resume can carry three schools and a school can carry
@@ -1260,6 +1297,44 @@ export function EducationEditor({
         <ul className="space-y-6">
           {entries.map((entry, index) => (
             <li key={index} className="u-card-flat px-5 py-4">
+              {/* The controls every other list on this screen already had, and education
+                  did not — so a school the extractor invented could not be deleted and one
+                  it missed could not be added. The blocking notice tells the user to "remove
+                  the row outright if it should not be there at all", which was impossible
+                  here, and the empty state's only offered action was uploading a different
+                  file: a resume whose education section was misread had no correction at all.
+                  ProfileEditors states the rule this broke — anything the wizard cannot edit
+                  is an extraction error made permanent. */}
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <span className="u-data text-faint text-2xs tracking-widest uppercase">
+                  School {index + 1}
+                </span>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    disabled={index === 0}
+                    aria-label={`Move school ${String(index + 1)} up`}
+                    onClick={() => move(index, -1)}
+                  >
+                    <ChevronUp aria-hidden size={14} />
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={index === entries.length - 1}
+                    aria-label={`Move school ${String(index + 1)} down`}
+                    onClick={() => move(index, 1)}
+                  >
+                    <ChevronDown aria-hidden size={14} />
+                  </Button>
+                  <Button
+                    size="sm"
+                    aria-label={`Remove school ${String(index + 1)}`}
+                    onClick={() => remove(index)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
               <EducationRow
                 entry={entry}
                 index={index}
@@ -1272,6 +1347,13 @@ export function EducationEditor({
           ))}
         </ul>
       )}
+
+      <div className="mt-4">
+        <Button size="sm" onClick={() => onList([...entries, blank()])}>
+          <Plus aria-hidden size={14} />
+          Add a school
+        </Button>
+      </div>
     </div>
   );
 }
