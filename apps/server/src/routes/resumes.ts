@@ -174,8 +174,28 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
        * value can block a re-extraction.
        */
       const kept = existing ? (getUserEnteredFacts() ?? {}) : {};
+      /**
+       * `locationPrefs` is merged a level deeper, and the order of these keys is load-bearing.
+       *
+       * `getUserEnteredFacts` returns that object with `base` deliberately removed — the new
+       * resume is the better evidence for where somebody lives — so a shallow spread REPLACED
+       * the draft's whole `locationPrefs` with a base-less one. `base` is required by the
+       * schema and `saveProfile` parses before it writes, so every re-upload over an existing
+       * profile failed with "The fields at fault: locationPrefs.base", which is the exact
+       * outcome the comment above promises cannot happen. The explicit key must come AFTER
+       * `...kept` or the spread overwrites it again and nothing changes.
+       */
       // Re-extraction keeps the existing id so history and foreign keys survive.
-      const saved = saveProfile(existing ? { ...draft, ...kept, id: existing.id } : draft);
+      const saved = saveProfile(
+        existing
+          ? {
+              ...draft,
+              ...kept,
+              locationPrefs: { ...draft.locationPrefs, ...(kept.locationPrefs ?? {}) },
+              id: existing.id,
+            }
+          : draft,
+      );
       /**
        * The same approval sweep PUT /api/profile runs, because this is the same event by a
        * different door — and the more violent version of it, since a re-extraction replaces

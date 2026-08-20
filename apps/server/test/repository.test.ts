@@ -1,5 +1,7 @@
+import { existsSync, statSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CandidateProfile } from '@ia/shared';
+import { config } from '../src/config';
 import { db, schema, sqlite } from '../src/infra/db/client';
 import { runMigrations } from '../src/infra/db/migrate';
 import { isEncrypted } from '../src/infra/crypto/fieldCrypto';
@@ -245,5 +247,37 @@ describe('getUserEnteredFacts', () => {
     expect(kept?.availability).toBeUndefined();
     expect(kept?.citizenships).toEqual(['US']);
     expect(kept?.workAuthorization).toMatchObject({ status: 'citizen' });
+  });
+});
+
+/**
+ * The file itself, not just the columns inside it.
+ *
+ * Six profile columns are encrypted; the same database also holds every drafted answer in
+ * `draft_text` and `final_text`, every writing sample, every posting and the whole application
+ * history, none of which is. A student's essay about why they want a job says more about them
+ * than their name does, and the name was the part behind the cipher — so the file's own
+ * permissions are what actually stand between that content and another account on the machine.
+ * better-sqlite3 creates it with the default mode, which under a typical umask is world-readable.
+ */
+describe('what the database file is readable by', () => {
+  it('is owner-only, along with the two WAL sidecars that carry the same bytes', () => {
+    // POSIX only: chmod does not model this on Windows, where the file inherits the per-user
+    // data directory's ACL instead. Asserting a mode there would fail for a reason that is
+    // not a defect.
+    if (process.platform === 'win32') return;
+
+    const file = config.paths.database;
+    for (const f of [file, `${file}-wal`, `${file}-shm`]) {
+      if (!existsSync(f)) continue;
+      const mode = statSync(f).mode & 0o777;
+      expect({ f, groupOrOther: mode & 0o077 }).toEqual({ f, groupOrOther: 0 });
+    }
+  });
+
+  it('keeps the data directory owner-only too', () => {
+    if (process.platform === 'win32') return;
+    const mode = statSync(config.paths.data).mode & 0o777;
+    expect(mode & 0o077).toBe(0);
   });
 });

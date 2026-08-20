@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { ROLE_FAMILIES } from '@ia/shared';
 import type { CandidateProfile, EducationEntry, ExperienceEntry } from '@ia/shared';
 import { describe, expect, it } from 'vitest';
 import { readUrlField } from '../src/lib/profileEdit';
@@ -9,6 +10,7 @@ import {
   ExperienceEditor,
   LanguagesEditor,
   LinksEditor,
+  PreferencesEditor,
   ProjectsEditor,
   SkillsEditor,
 } from '../src/components/ProfileEditors';
@@ -300,5 +302,91 @@ describe('the remaining editors on screen', () => {
     // it; what this editor must not do is render an empty space where a section should be.
     expect(render(ProjectsEditor, profile())).toContain('none found');
     expect(render(SkillsEditor, profile())).toContain('none found');
+  });
+});
+
+/**
+ * What the student is looking for, which for the life of the project they could not say.
+ *
+ * `inferRoleFamilies` read the resume and the planner ADDED any filter to that inference
+ * rather than letting one replace it, so a family read off a resume could not be removed by
+ * any means the interface offered — and the plan's own note advised setting it "in the
+ * filters", which is the thing that did not work. The whole `preferences` block had no
+ * interface at all: `industries` feeds the score's domain dimension and `excludeCompanies` is
+ * meant to keep an employer out of the queue, and both were invisible.
+ */
+describe('PreferencesEditor', () => {
+  const prefs = (over: Partial<Parameters<typeof PreferencesEditor>[0]['preferences']> = {}) => ({
+    roleFamilies: [],
+    industries: [],
+    excludeCompanies: [],
+    companySizes: [],
+    ...over,
+  });
+
+  function render(
+    over: Partial<Parameters<typeof PreferencesEditor>[0]['preferences']> = {},
+    inferred?: string[],
+  ): string {
+    return renderToStaticMarkup(
+      createElement(PreferencesEditor, {
+        preferences: prefs(over),
+        inferred,
+        onChange: () => undefined,
+      }),
+    );
+  }
+
+  it('offers every family the planner knows, and no others', () => {
+    // A family offered here that the planner cannot search for would store a preference that
+    // silently matches nothing, which is why ROLE_FAMILIES is shared rather than copied.
+    const html = render();
+    for (const family of ROLE_FAMILIES) expect(html, family).toContain(family);
+    expect((html.match(/aria-pressed=/g) ?? []).length).toBe(ROLE_FAMILIES.length);
+  });
+
+  it('marks exactly the chosen families as pressed', () => {
+    // `aria-pressed` is the whole accessible state of these controls — they are buttons, not
+    // checkboxes, so nothing else tells a screen reader which are on.
+    const html = render({ roleFamilies: ['journalism'] });
+    expect((html.match(/aria-pressed="true"/g) ?? []).length).toBe(1);
+    expect((html.match(/aria-pressed="false"/g) ?? []).length).toBe(ROLE_FAMILIES.length - 1);
+  });
+
+  it('says the resume is not consulted once anything is chosen', () => {
+    // The honesty that makes the override legible: with a choice made, the inference is not
+    // merely outvoted, it does not run.
+    expect(render({ roleFamilies: ['finance'] })).toContain('resume is not consulted');
+    expect(render()).toContain('read off your resume');
+  });
+
+  it('shows what the resume suggested only while nothing is chosen', () => {
+    // Once the student has answered, what the reader guessed is no longer load-bearing and
+    // showing it invites them to wonder which one is in force.
+    // Asserted on the SENTENCE, not on the word: every family name is always present as a
+    // chip label, so  is true of both renders and proves nothing.
+    expect(render({}, ['robotics'])).toContain('Read off your resume right now');
+    expect(render({ roleFamilies: ['finance'] }, ['robotics'])).not.toContain(
+      'Read off your resume right now',
+    );
+  });
+
+  it('offers a way back to reading the resume, and only when there is something to clear', () => {
+    expect(render({ roleFamilies: ['finance'] })).toContain('go back to reading my resume');
+    expect(render()).not.toContain('go back to reading my resume');
+  });
+
+  it('renders the two preference lists that feed scoring and filtering', () => {
+    const html = render({ industries: ['robotics'], excludeCompanies: ['Acme'] });
+    expect(html).toContain('Industries you care about');
+    expect(html).toContain('Companies to keep out');
+    expect(html).toContain('robotics');
+    expect(html).toContain('Acme');
+  });
+
+  it('says plainly that industries rank rather than filter', () => {
+    // The dimension is worth 10 of 100 points and filters nothing; a student who reads it as
+    // a filter would explain a missing posting to themselves with the wrong reason.
+    expect(render()).toContain('Used to rank, never to filter');
   });
 });

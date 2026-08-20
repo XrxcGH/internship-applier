@@ -256,7 +256,20 @@ export function isProfileConfirmed(): boolean {
  * extraction is the newer evidence for it. The rest of that object is the student's own
  * answer and is kept.
  */
-export function getUserEnteredFacts(): Partial<CandidateProfile> | null {
+/**
+ * What a re-extraction carries across.
+ *
+ * `locationPrefs` is deliberately BASE-LESS — the new resume is the better evidence for where
+ * somebody lives — and saying so in the type is what stops the next caller spreading this
+ * object over a full `locationPrefs` and losing the base. It was typed as a plain
+ * `Partial<CandidateProfile>` with an `as` cast smoothing over the difference, and the shallow
+ * merge that followed broke every resume re-upload while the compiler said nothing.
+ */
+export type KeptFacts = Partial<Omit<CandidateProfile, 'locationPrefs'>> & {
+  locationPrefs?: Omit<LocationPrefs, 'base'>;
+};
+
+export function getUserEnteredFacts(): KeptFacts | null {
   const row = db
     .select({
       id: schema.profile.id,
@@ -272,9 +285,11 @@ export function getUserEnteredFacts(): Partial<CandidateProfile> | null {
     .all()[0];
   if (!row) return null;
 
-  const out: Partial<CandidateProfile> = {};
+  const out: KeptFacts = {};
   /** Keeps a field only if it survives its own schema. One bad field cannot cost the others. */
-  const keep = <K extends keyof CandidateProfile>(
+  // Narrowed to exclude `locationPrefs`, so no future edit can write a full one through the
+  // helper and quietly undo the distinction this type exists to make.
+  const keep = <K extends keyof Omit<CandidateProfile, 'locationPrefs'>>(
     key: K,
     schemaFor: { safeParse: (v: unknown) => { success: boolean; data?: unknown } },
     raw: unknown,
@@ -304,7 +319,7 @@ export function getUserEnteredFacts(): Partial<CandidateProfile> | null {
   const prefs = LocationPrefs.safeParse(row.locationPrefs);
   if (prefs.success) {
     const { base: _ignored, ...rest } = prefs.data;
-    out.locationPrefs = rest as CandidateProfile['locationPrefs'];
+    out.locationPrefs = rest;
   }
   return out;
 }
