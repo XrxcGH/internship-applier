@@ -84,3 +84,69 @@ export const OPTIONAL_WIZARD_FIELDS = new Set<string>(['pronouns', 'phone']);
 export function isDismissible(path: string): boolean {
   return ANSWERED_IN_WIZARD[path] === undefined;
 }
+
+/**
+ * What a flagged field is called, in the student's words rather than the schema's.
+ *
+ * The G1 sign-off list is the one thing standing between the user and a confirmed profile,
+ * and every row was rendered as the dotted path itself — `education.0.gpa`,
+ * `experience.2.startDate`, `locationPrefs.base.region`. Nine of those paths have a hint
+ * beside them from ANSWERED_IN_WIZARD; every other flag, meaning anything nested inside
+ * education or experience, was an internal identifier and a button, with nothing to say which
+ * box on which row it referred to.
+ *
+ * The index is stated as an ordinal because the paths are zero-based and the list is not: a
+ * student reading "education.0" and counting down to the first school is doing the compiler's
+ * work. A path this cannot read comes back unchanged rather than mangled — a wrong label is
+ * worse than a raw one, because it sends the user to the wrong box with confidence.
+ */
+const FIELD_NAMES: Record<string, string> = {
+  gpa: 'GPA',
+  startDate: 'start date',
+  endDate: 'end date',
+  fieldOfStudy: 'field of study',
+  school: 'school name',
+  degree: 'degree',
+  coursework: 'coursework',
+  honors: 'honors',
+  bullets: 'the bullet points',
+  title: 'job title',
+  organization: 'organization',
+  name: 'name',
+  description: 'description',
+  proficiency: 'proficiency',
+  issuer: 'issuer',
+};
+
+const SECTION_NAMES: Record<string, string> = {
+  education: 'school',
+  experience: 'job',
+  projects: 'project',
+  skills: 'skill',
+  certifications: 'certification',
+  languages: 'language',
+};
+
+function ordinal(n: number): string {
+  const suffix = n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th');
+  return `${String(n)}${suffix}`;
+}
+
+export function flagLabel(path: string): string {
+  const indexed = /^([a-zA-Z]+)\.(\d+)\.(.+)$/.exec(path);
+  if (indexed) {
+    const [, section, index, field] = indexed;
+    const where = SECTION_NAMES[section!];
+    if (where) {
+      const which = ordinal(Number(index) + 1);
+      const what = FIELD_NAMES[field!] ?? field!.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+      return `${what} on your ${which} ${where}`;
+    }
+  }
+  const flat = /^([a-zA-Z]+)\.(.+)$/.exec(path);
+  if (flat && SECTION_NAMES[flat[1]!]) {
+    const what = FIELD_NAMES[flat[2]!] ?? flat[2]!;
+    return `${what} in your ${SECTION_NAMES[flat[1]!]!}s`;
+  }
+  return FIELD_NAMES[path] ?? path;
+}

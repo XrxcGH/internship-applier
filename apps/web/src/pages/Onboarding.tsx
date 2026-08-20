@@ -4,6 +4,7 @@ import type { CandidateProfile, EducationEntry, WorkLocation } from '@ia/shared'
 import * as api from '../lib/api';
 import {
   ANSWERED_IN_WIZARD,
+  flagLabel,
   isAnswered,
   isDismissible,
   OPTIONAL_WIZARD_FIELDS,
@@ -313,6 +314,26 @@ export function tidyProfileLists(profile: CandidateProfile): CandidateProfile {
         github: url(profile.links.github),
         linkedin: url(profile.links.linkedin),
         portfolio: url(profile.links.portfolio),
+      },
+    }),
+    /**
+     * The preference lists, tidied like every other free-text list on this screen.
+     *
+     * `preferences` was the one block this function spread past without naming, so the empty
+     * string `ListEditor` appends on Add went to the server intact. A blank industry then made
+     * `descriptionText.includes('')` true for every posting, scoring a perfect domain match on
+     * the dimension that means the company does something the student cares about; a blank
+     * excluded company would have matched every employer name the same way.
+     */
+    ...(profile.preferences && {
+      preferences: {
+        ...profile.preferences,
+        // `?? []` because these three are required arrays on the schema (each carries a
+        // `.default([])`), while `tidyList` preserves an undefined it was given — it is shared
+        // with the optional lists on education and projects, where absent and empty differ.
+        industries: tidyList(profile.preferences.industries) ?? [],
+        excludeCompanies: tidyList(profile.preferences.excludeCompanies) ?? [],
+        companySizes: tidyList(profile.preferences.companySizes) ?? [],
       },
     }),
   };
@@ -1026,7 +1047,11 @@ export function Onboarding({
                 <ul className="mt-3 space-y-1.5">
                   {profile.needsReview.slice(0, 12).map((f) => (
                     <li key={f} className="flex flex-wrap items-center justify-between gap-3">
-                      <span className="u-data">{f}</span>
+                      {/* The field named the way the student would name it. This printed the
+                          dotted path — education.0.gpa — which for every flag outside the nine
+                          with a hint beside them was an internal identifier and a button, with
+                          nothing to say which box on which row it meant. */}
+                      <span>{flagLabel(f)}</span>
                       {isDismissible(f) ? (
                         <Button
                           size="sm"

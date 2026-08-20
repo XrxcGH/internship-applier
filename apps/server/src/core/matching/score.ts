@@ -153,7 +153,14 @@ export function scoreMatch(input: ScoreInput): ScoreOutcome {
       ? 0.5
       : titleTokens.filter((t) => myVocab.has(t)).length / titleTokens.length;
 
-  const industries = profile.preferences.industries.map((i) => i.toLowerCase());
+  // `.filter(Boolean)`, exactly as `relocateTo` gets two lines down. The industries editor
+  // adds a row as an empty string and nothing tidies `preferences` on the way to the server,
+  // so one un-filled row made `descriptionText.includes('')` true for every posting on earth
+  // — a perfect 1.0 domain match, on the dimension that is supposed to mean the company does
+  // something the student said they cared about.
+  const industries = profile.preferences.industries
+    .map((i) => i.trim().toLowerCase())
+    .filter(Boolean);
   const domainMatch =
     industries.length === 0
       ? 0.5 // No stated preference is neutral, not a penalty.

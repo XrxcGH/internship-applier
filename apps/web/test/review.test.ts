@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  flagLabel,
   ANSWERED_IN_WIZARD,
   isAnswered,
   isDismissible,
@@ -100,5 +101,42 @@ describe('isDismissible', () => {
       expect(ANSWERED_IN_WIZARD[path]).toBeUndefined();
     }
     expect(OPTIONAL_WIZARD_FIELDS.has('pronouns')).toBe(true);
+  });
+});
+
+/**
+ * The sign-off list is the last thing between a student and a confirmed profile, and it was
+ * printing schema paths at them: `education.0.gpa`, `experience.2.startDate`. Nine paths had
+ * a hint beside them; every flag nested in education or experience had an identifier and a
+ * button, and nothing said which box on which row.
+ */
+describe('flagLabel', () => {
+  it('names the field and the row, counting from one', () => {
+    // The paths are zero-based and the list on screen is not, so an index printed raw makes
+    // the student do the compiler's counting.
+    expect(flagLabel('education.0.gpa')).toBe('GPA on your 1st school');
+    expect(flagLabel('experience.2.startDate')).toBe('start date on your 3rd job');
+    expect(flagLabel('projects.1.description')).toBe('description on your 2nd project');
+  });
+
+  it('gets the awkward ordinals right', () => {
+    expect(flagLabel('education.10.gpa')).toBe('GPA on your 11th school');
+    expect(flagLabel('education.20.gpa')).toBe('GPA on your 21st school');
+    expect(flagLabel('education.11.gpa')).toBe('GPA on your 12th school');
+  });
+
+  it('reads an un-indexed section path', () => {
+    expect(flagLabel('experience.bullets')).toBe('the bullet points in your jobs');
+  });
+
+  it('splits a camelCase field it has no name for, rather than printing it raw', () => {
+    expect(flagLabel('education.0.someOtherThing')).toBe('some other thing on your 1st school');
+  });
+
+  it('hands back anything it cannot read, unchanged', () => {
+    // A wrong label is worse than a raw one: it sends the user to the wrong box confidently.
+    expect(flagLabel('workAuthorization.status')).toBe('workAuthorization.status');
+    expect(flagLabel('locationPrefs.base.city')).toBe('locationPrefs.base.city');
+    expect(flagLabel('somethingUnexpected')).toBe('somethingUnexpected');
   });
 });

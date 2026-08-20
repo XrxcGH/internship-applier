@@ -211,6 +211,32 @@ export function Discovery({
       setScored(null);
       const result = await startRun(targets);
       setSummary(result);
+      /**
+       * Scored in the same press, because searching without scoring produces nothing the
+       * user can act on.
+       *
+       * A run stores postings and scores none of them, and the queue only ever shows what has
+       * been scored. So the two controls sat side by side with no ordering signal, and a
+       * first-time user who finished a search and took the button naming the next gate —
+       * "Open the queue (G2)" — arrived at a queue unchanged by the run they had just waited
+       * for, whose own empty state then sent them back here.
+       *
+       * The scoring failure is caught rather than thrown: the search itself succeeded, its
+       * postings are stored, and losing that report to an error from the step after it would
+       * throw away the expensive half of the press.
+       */
+      try {
+        const r = await recompute();
+        setScored(
+          `${r.matched} scored — ${r.eligible} eligible, ${r.unknown} to check, ${r.ineligible} filtered.`,
+        );
+      } catch (err) {
+        setScored(
+          'The search finished and its postings are stored, but scoring them did not run: ' +
+            (err instanceof Error ? err.message : String(err)) +
+            ' Press "Score what is stored" to try that half again.',
+        );
+      }
       // The stats and the run list both moved; the plan may have too, since a board that
       // answered is a board the next plan knows about. Read through `refresh` rather than
       // fetching here, so these answers are subject to the same last-asked-wins rule as
@@ -643,9 +669,11 @@ export function Discovery({
           >
             {busy === 'Searching'
               ? 'Searching…'
-              : targets.length === 0
-                ? 'Search'
-                : `Search ${targets.length} ${targets.length === 1 ? 'target' : 'targets'}`}
+              : busy === 'Scoring'
+                ? 'Scoring…'
+                : targets.length === 0
+                  ? 'Search and score'
+                  : `Search ${targets.length} ${targets.length === 1 ? 'target' : 'targets'} and score`}
           </Button>
           {/* Only once there IS a list. With an empty one, the card above, a button reading
               "Search 0 targets" and this span all said the same thing three ways, two of them
@@ -658,7 +686,9 @@ export function Discovery({
 
         <p className="text-faint u-prose mt-4 text-sm">
           A run fetches four boards at a time and answers when the last one is done, which is
-          anything from a few seconds to a couple of minutes. There is no progress on the way: the
+          anything from a few seconds to a couple of minutes. Scoring then reads each new posting
+          for its requirements — that is the step here that can spend a model call, and it is the
+          same work the queue&apos;s Recompute button does. There is no progress on the way: the
           server publishes it and no screen in this app listens yet, so this page waits rather than
           drawing a bar it cannot fill honestly.
         </p>
@@ -808,7 +838,7 @@ export function Discovery({
         </div>
 
         {manual && (
-          <div className="u-card-flat mt-5 px-5 py-4">
+          <div className="u-card-flat mt-5 px-5 py-4" role="status" aria-live="polite">
             <p className="text-lg">{manual.posting.title}</p>
             <p className="text-dim">{manual.posting.company}</p>
             <p className="text-faint u-data mt-3 text-xs">
@@ -821,10 +851,21 @@ export function Discovery({
                 {n}
               </p>
             ))}
+            {/* The control, not a pointer to one. This read "press Score what is stored
+                above", and that button lives inside the run-summary block — which only a
+                search renders. The Tier C user pastes a posting and never runs a search, so
+                for exactly the person section 05 exists to serve, the named button was
+                nowhere on the page. */}
             <p className="text-faint u-prose mt-3 text-sm">
-              Stored, and not yet scored. Press <em>Score what is stored</em> above to put it in
-              front of you at G2.
+              Stored, and not yet scored. Scoring reads it for its requirements and puts it in front
+              of you at G2.
             </p>
+            <div className="mt-4">
+              <Button variant="primary" disabled={busy !== null} onClick={() => void score()}>
+                {busy === 'Scoring' ? 'Scoring…' : 'Score what is stored'}
+              </Button>
+            </div>
+            {scored && <Notice tone="verified">{scored}</Notice>}
           </div>
         )}
       </Section>
