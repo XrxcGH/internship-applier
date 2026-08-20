@@ -80,7 +80,13 @@ export function Applications({ onBack }: { onBack: () => void }) {
       {list?.length === 0 && (
         <Empty title="No applications yet.">
           Approve a posting in the queue and it lands here.{' '}
-          <button onClick={onBack} className="text-accent underline underline-offset-4">
+          {/* An inline link inside a sentence, so it keeps the underline rather than becoming
+              a Button — but it still has to be hittable: at 31px it was the one control in the
+              app under the 44px a touch device wants, because it carried no vertical padding. */}
+          <button
+            onClick={onBack}
+            className="text-accent inline-flex min-h-11 items-center underline underline-offset-4"
+          >
             Open the queue
           </button>
         </Empty>
