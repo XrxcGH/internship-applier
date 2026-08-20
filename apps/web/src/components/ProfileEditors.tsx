@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ExperienceType } from '@ia/shared';
+import { ROLE_FAMILIES, ExperienceType } from '@ia/shared';
 import type { CandidateProfile, ExperienceEntry, ProjectEntry, Skill } from '@ia/shared';
 import { indexRange, moveListItem } from '../lib/profileEdit';
 import { Button, SelectField, TextField } from './Controls';
@@ -700,6 +700,110 @@ export function LinksEditor({ profile, flagged, edit }: EditorProps) {
           onChange={(e) => set('portfolio', e.target.value)}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * What the user is actually looking for — the block of the profile that had no interface.
+ *
+ * Every field here already existed on `ConfirmedProfile.preferences` and every one of them
+ * was invisible and uneditable. `industries` feeds the score's domain-match dimension,
+ * `excludeCompanies` is meant to keep an employer out of the queue, and `roleFamilies` did
+ * not exist at all: the planner INFERRED the role families from the resume and no interface
+ * could remove one, so a student whose resume mentions one coding class got software
+ * engineering queries for as long as they owned the profile, with the plan's own note telling
+ * them to change something they had no way to change.
+ *
+ * Choosing here replaces the inference outright rather than adding to it. An explicit answer
+ * to "what are you looking for" is better evidence than anything read off a resume, and a
+ * preference the tool argues with is not a preference. Choosing NOTHING is a real answer too,
+ * and it means the old behaviour: read it off the resume.
+ */
+export function PreferencesEditor({
+  preferences,
+  inferred,
+  onChange,
+}: {
+  preferences: {
+    roleFamilies: string[];
+    industries: string[];
+    excludeCompanies: string[];
+    companySizes: string[];
+    minStipend?: number;
+  };
+  /** What the resume suggests, shown only while the user has chosen nothing themselves. */
+  inferred?: string[];
+  onChange: (next: Partial<typeof preferences>) => void;
+}) {
+  const chosen = preferences.roleFamilies;
+  const toggle = (family: string): void => {
+    onChange({
+      roleFamilies: chosen.includes(family)
+        ? chosen.filter((f) => f !== family)
+        : [...chosen, family],
+    });
+  };
+
+  return (
+    <div className="mt-10">
+      <h3 className="u-eyebrow mb-2">What you are looking for</h3>
+      <p className="text-faint u-prose mb-5 text-[0.9375rem]">
+        {chosen.length > 0
+          ? 'Searches use exactly what you pick here. Your resume is not consulted for this.'
+          : 'Nothing picked, so this is read off your resume. Pick any and that guess is replaced.'}
+      </p>
+
+      {chosen.length === 0 && inferred && inferred.length > 0 && (
+        <p className="text-dim u-prose mb-4 text-[0.9375rem]">
+          Read off your resume right now: <em>{inferred.join(', ')}</em>. Pick below to override.
+        </p>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {ROLE_FAMILIES.map((family) => {
+          const on = chosen.includes(family);
+          return (
+            <button
+              key={family}
+              type="button"
+              aria-pressed={on}
+              onClick={() => toggle(family)}
+              className={`rounded border px-3 py-1.5 text-[0.9375rem] transition-colors ${
+                on
+                  ? 'border-accent bg-accent/15 text-ink'
+                  : 'border-rule text-dim hover:border-rule-strong hover:text-ink'
+              }`}
+            >
+              {family}
+            </button>
+          );
+        })}
+      </div>
+
+      {chosen.length > 0 && (
+        <div className="mt-3">
+          <Button size="sm" onClick={() => onChange({ roleFamilies: [] })}>
+            Clear, and go back to reading my resume
+          </Button>
+        </div>
+      )}
+
+      <ListEditor
+        label="Industries you care about"
+        singular="industry"
+        hint="Used to rank, never to filter. A posting that matches none is still shown."
+        items={preferences.industries}
+        onChange={(industries) => onChange({ industries })}
+      />
+
+      <ListEditor
+        label="Companies to keep out"
+        singular="company"
+        hint="Postings from these are dropped from your queue."
+        items={preferences.excludeCompanies}
+        onChange={(excludeCompanies) => onChange({ excludeCompanies })}
+      />
     </div>
   );
 }

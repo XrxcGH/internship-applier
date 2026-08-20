@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   accessBadge,
   addManualPosting,
+  addPastedPosting,
   availableSources,
   boardMeaning,
   durationLabel,
@@ -13,6 +14,7 @@ import {
   resolveCompany,
   runHeadline,
   sourceLabel,
+  unavailableReason,
   splitCompanies,
   startRun,
   targetKey,
@@ -27,7 +29,7 @@ import {
 } from '../lib/discovery';
 import { recompute } from '../lib/matches';
 import { Page, RunningHead, Section } from '../components/Chrome';
-import { Badge, Button, Empty, Notice, TextField } from '../components/Controls';
+import { Badge, Button, Empty, Notice, TextArea, TextField } from '../components/Controls';
 
 /**
  * Discover — docs/04, and the screen its own planner notes have been pointing at.
@@ -70,6 +72,11 @@ export function Discovery({
   const [scored, setScored] = useState<string | null>(null);
 
   const [manualUrl, setManualUrl] = useState('');
+  // The paste-the-text fallback, for the three boards that refuse automated readers.
+  const [pastedTitle, setPastedTitle] = useState('');
+  const [pastedCompany, setPastedCompany] = useState('');
+  const [pastedUrl, setPastedUrl] = useState('');
+  const [pastedText, setPastedText] = useState('');
   const [manual, setManual] = useState<ManualResult | null>(null);
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -233,6 +240,31 @@ export function Discovery({
       refresh(pinnedRef.current);
     });
 
+  // Mirrors PasteBody on the server, so the button is dead until the request would be
+  // accepted rather than offering a press that comes back 400.
+  const canPaste =
+    pastedTitle.trim() !== '' &&
+    pastedCompany.trim() !== '' &&
+    pastedUrl.trim() !== '' &&
+    pastedText.trim().length >= 40;
+
+  const pasteText = (): Promise<void> =>
+    guarded('Storing what you pasted', async () => {
+      setManual(null);
+      const r = await addPastedPosting({
+        text: pastedText.trim(),
+        title: pastedTitle.trim(),
+        company: pastedCompany.trim(),
+        url: pastedUrl.trim(),
+      });
+      setManual(r);
+      setPastedTitle('');
+      setPastedCompany('');
+      setPastedUrl('');
+      setPastedText('');
+      refresh(pinnedRef.current);
+    });
+
   const blocked = whyCannotRun(targets);
 
   return (
@@ -309,9 +341,18 @@ export function Discovery({
             {sources && (
               <ul className="divide-rule/60 divide-y">
                 {sources.map((s) => (
-                  <li key={s.name} className="flex items-center justify-between gap-4 py-2.5">
-                    <span className="text-[1rem]">{sourceLabel(s.name)}</span>
-                    <Badge tone={s.configured ? 'verified' : 'caution'}>{accessBadge(s)}</Badge>
+                  <li key={s.name} className="py-2.5">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-[1rem]">{sourceLabel(s.name)}</span>
+                      <Badge tone={s.configured ? 'verified' : 'caution'}>{accessBadge(s)}</Badge>
+                    </div>
+                    {/* A standing limitation, said where the source is listed rather than
+                        only after a run has failed to reveal it. */}
+                    {unavailableReason(s.name) && (
+                      <p className="text-faint u-prose mt-1 text-[0.875rem]">
+                        {unavailableReason(s.name)}
+                      </p>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -681,11 +722,11 @@ export function Discovery({
         )}
       </Section>
 
-      <Section n="05" title="One posting, by URL" step={7}>
+      <Section n="05" title="One posting you found yourself" step={7}>
         <div className="max-w-2xl">
           <TextField
             label="Paste the address of a job posting"
-            hint="Any site, including ones this tool will not crawl on its own. One page, fetched because you asked."
+            hint="Any site. The page is fetched once, because you asked for it."
             value={manualUrl}
             onChange={(e) => setManualUrl(e.target.value)}
             placeholder="https://…"
@@ -699,6 +740,62 @@ export function Discovery({
           >
             {busy === 'Reading the page' ? 'Reading…' : 'Read it and store it'}
           </Button>
+        </div>
+
+        {/* Handshake, LinkedIn and Indeed. The address alone is not enough for these: their
+            terms refuse automated reads and Handshake is behind a university login, so the
+            fetch above would come back with a sign-in wall rather than a posting. The student
+            reading their own account is not automated access, so the text comes from them. */}
+        <div className="border-rule/60 mt-10 border-t pt-8">
+          <h3 className="u-eyebrow mb-2">Handshake, LinkedIn or Indeed</h3>
+          <p className="text-dim u-prose mb-5">
+            Those three refuse automated readers, and Handshake needs your school login, so the box
+            above will only reach a sign-in page. Open the posting there yourself, copy its
+            description, and paste it here — everything after this point works the same way it does
+            for any other posting.
+          </p>
+
+          <div className="grid max-w-3xl gap-5 sm:grid-cols-2">
+            <TextField
+              label="Job title"
+              value={pastedTitle}
+              onChange={(e) => setPastedTitle(e.target.value)}
+              placeholder="Software Engineering Intern"
+            />
+            <TextField
+              label="Company"
+              value={pastedCompany}
+              onChange={(e) => setPastedCompany(e.target.value)}
+              placeholder="Acme"
+            />
+          </div>
+          <div className="mt-5 max-w-3xl">
+            <TextField
+              label="Link to the posting"
+              hint="Stored so you can get back to it. Never opened by this tool."
+              value={pastedUrl}
+              onChange={(e) => setPastedUrl(e.target.value)}
+              placeholder="https://app.joinhandshake.com/jobs/…"
+            />
+          </div>
+          <div className="mt-5 max-w-3xl">
+            <TextArea
+              label="The job description"
+              hint="Paste the whole thing. Requirements are read out of this text."
+              rows={8}
+              value={pastedText}
+              onChange={(e) => setPastedText(e.target.value)}
+            />
+          </div>
+          <div className="mt-4">
+            <Button
+              variant="primary"
+              disabled={busy !== null || !canPaste}
+              onClick={() => void pasteText()}
+            >
+              {busy === 'Storing what you pasted' ? 'Storing…' : 'Store this posting'}
+            </Button>
+          </div>
         </div>
 
         {manual && (

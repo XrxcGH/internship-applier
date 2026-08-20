@@ -72,10 +72,27 @@ terms of service prohibit automated access, or whose listings sit behind authent
 Handshake is both at once: every listing sits behind a student login and its terms prohibit
 automated access. There is no adapter for these and none should be added. Instead:
 
-**The manual path.** A "Paste a job URL" box in the UI. The user brings a posting they
-found anywhere; the tool fetches that single page (a user-directed fetch of a page the user
-is already looking at), normalizes it, and runs it through matching. This covers Tier C
-without building a scraper against sites that forbid it.
+**How a Tier C posting reaches the tool anyway**, in the order the user should expect
+to need them:
+
+1. **Tier B finds it.** This is the one that matters, and it is why Tier B exists. Almost
+   every listing on those sites is a repost of a page this tool reads legitimately, so the
+   web-search prompt turns an aggregator hit into a lead rather than a link: when a search
+   result is a LinkedIn or Handshake listing, it names the employer and the role, and the
+   model searches again for that employer's own posting and returns THAT. The student gets
+   the job without the tool touching the site that refuses it.
+2. **Paste a URL.** A single page the user is already looking at, fetched because they asked.
+3. **Paste the text** (`POST /api/discovery/paste`, `readPastedPosting`). The fallback for a
+   posting with no fetchable page at all — a Handshake listing behind the school login. The
+   student copies the description out of the account they are entitled to read; the same
+   parsers run over it, and the URL is stored as identity and as their way back but is never
+   fetched. Storing an address is not visiting one.
+
+What is deliberately NOT built, and will not be: signing in to any of those sites, storing a
+credential for one, or driving a browser session against one. A stored login replaying itself
+is precisely the automated access the terms forbid, and the account carrying the ban would be
+the student's own — for Handshake that is their university careers office, not a website
+signup. The cost of not doing it is small, because of 1.
 
 ## Company target list
 
@@ -173,12 +190,19 @@ is never guessed: its board address includes an arbitrary site name, so a "guess
 a blind walk over hosts and site names inside a discovery run, and a Workday target enters
 the plan only through an actual resolution, which reaches it as the `source` row the resolve
 route writes. The keyless sources that need no board at all — the SimplifyJobs community
-list (`github_list`), Arbeitnow and Remotive — are planned by default and survive the cap
-too, because for a fresh install they are the entire plan. Surviving means surviving after a
-run has used them, which is the case that was broken: once a run wrote their `source` rows
-they arrived as ordinary known boards, fell into the capped remainder, and eight pinned
-companies were enough to cut all three — the community list among them, the
-highest-coverage source in the product, gone without a word.
+list (`github_list`) and Arbeitnow — are planned by default and survive the cap too, because
+for a fresh install they are the entire plan. Surviving means surviving after a run has used
+them, which is the case that was broken: once a run wrote their `source` rows they arrived as
+ordinary known boards, fell into the capped remainder, and eight pinned companies were enough
+to cut them all — the community list among them, the highest-coverage source in the product,
+gone without a word.
+
+Remotive is keyless too and is deliberately NOT planned by default. Its own robots.txt
+refuses the path its adapter reads, the adapter honours that and reports the refusal — so
+planning it put "This search was not complete" on every run the user took the plan for,
+about a source that cannot contribute until the site changes its mind. A standing refusal is
+not a coverage gap anyone can act on; it is noise that teaches the user to stop reading the
+warnings that matter. The adapter stays, as honest as ever, for anyone who adds it by hand.
 
 The cap therefore gives way to what it must, and pinning enough companies plans more targets
 than the cap allows. When that happens the plan says so in a note, as plainly as it reports

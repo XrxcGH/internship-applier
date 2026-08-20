@@ -5,6 +5,7 @@
  * dimension is reported alongside the total so the bars in the UI are the actual
  * computation rather than a decoration.
  */
+import { workLocations } from '@ia/shared';
 import type { ConfirmedProfile, JobRequirement, ScoreBreakdown } from '@ia/shared';
 import type { PostingFacts } from './eligibility';
 
@@ -169,11 +170,16 @@ export function scoreMatch(input: ScoreInput): ScoreOutcome {
   // An empty home city makes includes('') true for every posting, which scored every
   // location a perfect 1.0 and told the user it was "in your home city". Same guard as
   // the location rule in eligibility.ts.
-  const homeCity = prefs.base.city.trim().toLowerCase();
+  // Every place the user works from scores as a home match, not only the primary address —
+  // a posting in the city where they go to school is as good as one at home. Same empty-string
+  // guard as the eligibility rule: a blank base would make includes('') true for everything.
+  const homeCities = workLocations(prefs)
+    .map((b) => b.city.toLowerCase())
+    .filter(Boolean);
   const relocations = prefs.relocateTo.map((t) => t.trim().toLowerCase()).filter(Boolean);
-  const inHome =
-    homeCity !== '' &&
-    posting.locations.some((l) => (l.city ?? '').toLowerCase().includes(homeCity));
+  const inHome = posting.locations.some((l) =>
+    homeCities.some((c) => (l.city ?? '').toLowerCase().includes(c)),
+  );
   const inTarget = posting.locations.some((l) =>
     relocations.some((t) => (l.city ?? '').toLowerCase().includes(t)),
   );

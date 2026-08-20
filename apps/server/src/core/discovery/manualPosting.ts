@@ -250,3 +250,97 @@ export function detectVendor(url: string, html = ''): string {
   if (h.includes('workable.com')) return 'workable';
   return 'unknown';
 }
+
+/**
+ * A posting the user read on a site this tool will not fetch, pasted in as text.
+ *
+ * THE HANDSHAKE PATH, and the honest answer to "make Handshake, LinkedIn and Indeed part of
+ * this program". Those three prohibit automated access in their terms, and Handshake sits
+ * behind a university login besides — so this tool does not fetch them, and a stored
+ * credential replaying a login would be exactly the automated access the terms forbid, with
+ * the student's own account carrying the ban if it were noticed. Handshake bans are worse
+ * than most: the account is the university's careers office, not a website signup.
+ *
+ * None of which stops the STUDENT from reading the posting. They are signed in as themselves,
+ * doing what the account is for. So the tool takes the text from them instead of taking it
+ * from the site: every parser below is the same one `fetchManualPosting` runs, because the
+ * pipeline downstream of here only ever worked on a title and a body of text. What the
+ * student pastes is what the employer wrote, which is the same standard the rest of this file
+ * holds to — the difference is only who did the fetching, and a human reading their own
+ * Handshake account is not a robot.
+ *
+ * The URL is required and is never fetched. A Handshake or LinkedIn job address exists and is
+ * copyable out of the address bar even though the page behind it refuses us — so it is stored
+ * as the posting's identity (dedupe keys on it) and as the student's way back to it at G4.
+ * Storing an address is not visiting one. Nothing here guesses a URL: a fabricated apply link
+ * is a dead end discovered at the last gate, which is the worst possible moment for it.
+ */
+export interface PastedPosting {
+  text: string;
+  /** What the site called it. Required, because a title cannot be read out of a bare body. */
+  title: string;
+  company: string;
+  /**
+   * The address the student copied. Stored and shown, NEVER fetched — that is the whole point
+   * of this path. Also the dedupe key, so it cannot be omitted.
+   */
+  url: string;
+  /** Where the student read it, for the note that says so. */
+  readOn?: string;
+}
+
+export function readPastedPosting(input: PastedPosting): ManualResult {
+  const notes: string[] = [];
+  const description = input.text.trim();
+  const title = input.title.trim();
+  const company = input.company.trim();
+
+  if (description.length < 200) {
+    notes.push(
+      'That is very little text for a posting. Requirements are read out of the body, so a ' +
+        'partial paste means a partial answer at the eligibility step.',
+    );
+  }
+  notes.push(
+    input.readOn
+      ? `Read from ${input.readOn} and pasted in by you, so every fact below is the text you ` +
+          'pasted — nothing was fetched. Correct anything that came through wrong.'
+      : 'Pasted in by you rather than fetched, so every fact below comes from that text.',
+  );
+
+  const hay = `${title}\n${description}`;
+  const dates = parseTermDates(hay);
+  const duration = parseDurationWeeks(hay);
+  const arrangement = parseWorkArrangement(hay);
+
+  const posting: NormalizedPosting = {
+    externalId: null,
+    canonicalUrl: canonicalUrl(input.url),
+    applyUrl: input.url,
+    company,
+    companyDomain: safeHost(input.url),
+    title,
+    descriptionText: description,
+    descriptionHtml: null,
+    locations: arrangement === 'remote' ? [{ remote: true }] : [],
+    positionType: parsePositionType(title, description),
+    workArrangement: arrangement,
+    hybridDaysOnsite: parseHybridDays(hay),
+    remoteEligibleIn: [],
+    programFlags: [],
+    term: {
+      season: parseSeason(hay),
+      year: parseYear(hay),
+      ...(dates ?? {}),
+      durationWeeks: duration,
+      multiTerm: duration !== null && duration > 20,
+    },
+    compensation: parseCompensation(hay) as Record<string, unknown> | null,
+    requires: parseRequirements(description),
+    postedAt: null,
+    closesAt: null,
+    atsVendor: 'unknown',
+  };
+
+  return { posting, usedJsonLd: false, notes };
+}

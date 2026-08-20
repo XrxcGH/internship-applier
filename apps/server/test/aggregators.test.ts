@@ -214,7 +214,7 @@ describe('arbeitnow', () => {
     expect(note).toMatch(/dropped 3/);
   });
 
-  it('follows links.next up to the page cap and reports the unread rest as a gap', async () => {
+  it('follows links.next up to the page cap and reports the unread rest as a note', async () => {
     const source = await freshSource('arbeitnow');
     const page = (n: number) => `${API}?page=${n}`;
     const fetched = serve([
@@ -228,8 +228,10 @@ describe('arbeitnow', () => {
     expect(postings.map((p) => p.externalId)).toEqual(['p1', 'p2', 'p3']);
     // Three pages fetched; the fourth is never asked for.
     expect(feedCalls(fetched)).toHaveLength(3);
-    expect(gaps?.join(' ')).toMatch(/3 pages/);
-    expect(gaps?.join(' ')).toMatch(/older pages exist/);
+    // Not a gap — reading deeper pages means reading STALER jobs, which is the adapter's
+    // design bound, not a failed read. Reported as a gap it put "not complete" on every run.
+    expect(gaps ?? []).not.toContain(expect.stringMatching(/older/i));
+    expect(notes.join(' ')).toMatch(/older ones age out|left unread/i);
     expect(notes.join(' ')).toMatch(/read 3 jobs/);
   });
 

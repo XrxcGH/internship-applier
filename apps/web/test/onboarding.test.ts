@@ -617,16 +617,14 @@ describe('the save buttons', () => {
     // contains "> 0", so a lazy match ends inside the condition and never reaches the onClick.
     for (const m of src.matchAll(/<Button/g)) {
       const el = src.slice(m.index, m.index + 260);
-      const call = /persist\(\)|checkedOff\(|confirm\(\)|setStep\('facts'\)/.exec(el)?.[0];
+      const call = /persist\(\)|checkedOff\(|confirm\(\)/.exec(el)?.[0];
       if (!call) continue;
-      found.set(call, /disabled=\{([^}]*)\}/.exec(el)?.[1] ?? '(nothing)');
+      found.set(`${call}@${String(m.index)}`, /disabled=\{([^}]*)\}/.exec(el)?.[1] ?? '(nothing)');
     }
-    expect([...found.keys()].sort()).toEqual([
-      'checkedOff(',
-      'confirm()',
-      'persist()',
-      "setStep('facts')",
-    ]);
+    const calls = [...found.keys()].map((k) => k.split('@')[0]!);
+    // Two persist() callers now: Save, and Continue, which saves on the way past.
+    expect(calls.filter((c) => c === 'persist()')).toHaveLength(2);
+    expect([...new Set(calls)].sort()).toEqual(['checkedOff(', 'confirm()', 'persist()']);
     for (const [call, hold] of found) expect(hold, call).toContain('nameless.length > 0');
   });
 });

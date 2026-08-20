@@ -1003,11 +1003,15 @@ function profileFixture(over: Record<string, unknown> = {}): ConfirmedProfile {
     education: [],
     locationPrefs: {
       base: { city: 'Boston', region: 'MA', country: 'US' },
+      additionalBases: [],
       maxCommuteKm: 50,
       remoteOk: true,
       hybridOk: true,
       relocateTo: [],
     },
+    // Required on ConfirmedProfile and read by planQueries on every call. The fixture casts
+    // through `unknown`, so leaving it out typechecked and then threw at runtime.
+    preferences: { companySizes: [], industries: [], excludeCompanies: [], roleFamilies: [] },
     ...over,
   } as unknown as ConfirmedProfile;
 }

@@ -43,12 +43,13 @@ function draft(over: Partial<CandidateProfile> = {}): CandidateProfile {
     availability: { start: '2027-06-01', end: '2027-08-20', flexible: true },
     locationPrefs: {
       base: { city: 'Boston', region: 'MA', country: 'US' },
+      additionalBases: [],
       maxCommuteKm: 50,
       remoteOk: true,
       hybridOk: true,
       relocateTo: [],
     },
-    preferences: { companySizes: [], industries: [], excludeCompanies: [] },
+    preferences: { companySizes: [], roleFamilies: [], industries: [], excludeCompanies: [] },
     derived: {
       age: null,
       isMinor: false,

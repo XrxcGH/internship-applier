@@ -24,6 +24,7 @@ const profile = CandidateProfile.parse({
   email: 'ada@example.com',
   dateOfBirth: '2008-03-04',
   locationPrefs: { base: { city: 'Austin', region: 'TX' } },
+  additionalBases: [],
   workAuthorization: { status: 'citizen', needsSponsorship: false },
   availability: { start: '2027-06-01', end: '2027-08-15' },
   education: [

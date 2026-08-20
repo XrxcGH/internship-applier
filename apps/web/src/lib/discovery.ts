@@ -122,6 +122,13 @@ interface SourceFacts {
    * describing a credential that does not exist.
    */
   access?: { yes: string; no: string };
+  /**
+   * Why this source cannot contribute, when that is a standing fact rather than a run outcome.
+   *
+   * Shown wherever the source is listed, so the coverage gap is visible without a run having
+   * to fail to reveal it.
+   */
+  unavailable?: string;
 }
 
 /**
@@ -177,11 +184,22 @@ const SOURCE_FACTS: Record<SourceKind, SourceFacts> = {
   // by keyword" was doubly untrue: the endpoint discards every parameter it is given, and
   // the fetch does not happen at all. The student should not press a button expecting
   // postings from a source that will tell them at run time it read nothing.
+  /**
+   * Remotive's own robots.txt asks automated clients off the path this adapter reads, the
+   * adapter asks, is refused, and reports the refusal. So it gets no `addReason` and
+   * `keylessTargets` offers no button for it — a one-press button that answers every press
+   * with a refusal teaches the user that this screen wastes their time.
+   *
+   * The refusal stays written down here rather than being deleted with the button. It is a
+   * real limitation of this tool's coverage, and the first attempt at this change removed the
+   * sentence that said so while leaving the button in place under a fabricated caption, which
+   * is the exact trade this repo exists not to make.
+   */
   remotive: {
     label: 'Remotive',
     board: 'not used — Remotive takes no company and no keyword',
     needsBoard: false,
-    addReason: 'the Remotive feed, which currently declines automated reads',
+    unavailable: 'declines automated reads, so nothing from it reaches your results',
   },
   github_list: {
     label: 'Community list',
@@ -274,8 +292,15 @@ export function keylessTargets(sources: AvailableSource[] | null): RunTarget[] {
            * without a company". A source this file cannot describe is not a source it can
            * offer in one press; it still appears everywhere else, where the fallback label is
            * the honest answer.
+           *
+           * Gating on `addReason` rather than on mere presence in the table, because the two
+           * came apart: Remotive was given no `addReason` under a comment claiming "no button
+           * offers it", and the button went on rendering — it is in FACTS and needs no board,
+           * which was the whole test — captioned by the fallback below with a search the
+           * adapter refuses before it sends a request. A source that has not been given a
+           * reason to be offered in one press is a source with no one-press offer.
            */
-          s.name in FACTS &&
+          FACTS[s.name]?.addReason !== undefined &&
           !needsBoard(s.name),
       )
       .map((s) => s.name),
@@ -283,7 +308,11 @@ export function keylessTargets(sources: AvailableSource[] | null): RunTarget[] {
   return names.map((name) => ({
     source: name,
     board: '',
-    reason: FACTS[name]?.addReason ?? `${sourceLabel(name)}, searched without a company`,
+    // The fallback asserts nothing about what a search will do, because it cannot know: the
+    // filter above only admits names that HAVE an addReason, and the one name that reaches
+    // this branch is ALWAYS_OFFERED. "Searched without a company" was a claim, and it was
+    // false for the one source that ever reached it.
+    reason: FACTS[name]?.addReason ?? `${sourceLabel(name)}, no company or key needed`,
   }));
 }
 
@@ -505,3 +534,28 @@ export const addManualPosting = (url: string) =>
     headers: json,
     body: JSON.stringify({ url }),
   });
+
+/**
+ * The paste-the-TEXT path, for postings on sites this tool will not fetch — docs/04 § Tier C.
+ *
+ * Handshake, LinkedIn and Indeed prohibit automated access, and Handshake sits behind a
+ * university login besides. A student reading their own account is not automated access, so
+ * the text comes from them. The URL is stored as the way back and is never fetched.
+ */
+export const addPastedPosting = (input: {
+  text: string;
+  title: string;
+  company: string;
+  url: string;
+  readOn?: string;
+}) =>
+  request<ManualResult>('/api/discovery/paste', {
+    method: 'POST',
+    headers: json,
+    body: JSON.stringify(input),
+  });
+
+/** Why a source cannot contribute at all, when that is a standing fact. See `SourceFacts`. */
+export function unavailableReason(name: string): string | null {
+  return FACTS[name]?.unavailable ?? null;
+}

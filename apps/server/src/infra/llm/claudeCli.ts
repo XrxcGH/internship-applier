@@ -432,7 +432,10 @@ export const claudeCliBackend: Backend = {
         '--system-prompt-file',
         systemFile,
         '--max-turns',
-        wantsWebSearch ? '16' : wantsDocuments ? '6' : '1',
+        // Sixteen was a one-pass budget: each search is a turn, and the discovery prompt
+        // asks for a sweep across several angles — role, each location, recency, employer
+        // kind. The model ran out of turns partway through and answered with what it had.
+        wantsWebSearch ? '32' : wantsDocuments ? '6' : '1',
       ];
 
       if (wantsWebSearch) {

@@ -769,12 +769,14 @@ export function toDraftProfile(x: ResumeExtraction, now: Date = new Date()): Can
     availability: { flexible: true },
     locationPrefs: {
       base: { city: home.city, region: home.region, country: home.country ?? 'US' },
+      // A resume names one home. The user adds any others they can work from at G1.
+      additionalBases: [],
       maxCommuteKm: 50,
       remoteOk: true,
       hybridOk: true,
       relocateTo: [],
     },
-    preferences: { companySizes: [], industries: [], excludeCompanies: [] },
+    preferences: { companySizes: [], roleFamilies: [], industries: [], excludeCompanies: [] },
     derived: {
       age: null,
       isMinor: false,

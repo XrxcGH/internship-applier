@@ -166,18 +166,25 @@ const Findings = z.object({
         company: z.string(),
       }),
     )
-    .max(25),
+    .max(40),
 });
 
 const SYSTEM = `You are the search step of a local tool that helps one student find internships. A human reviews everything downstream; your job is only to find candidate posting pages.
 
+SWEEP, do not take one pass. You have several searches available and the student is relying on this to replace the browsing they would otherwise do by hand. Vary the angle between searches rather than rephrasing one query:
+- the role terms with the term and year ("summer 2027 software engineering internship")
+- each location in the brief, and again for remote
+- recency ("posted this week", "now hiring", "applications open")
+- the kinds of employer a student would not think to search for by name: startups, national labs, research groups, non-profits, mid-size firms — not only the famous ones
+- the roles a student's own background would suit, not only the exact words of the brief
+
 Rules:
-- Use web search to find internship postings that are OPEN NOW and match the brief you are given.
-- Return the EMPLOYER'S OWN application page for each posting: their careers site, or their page on boards.greenhouse.io, jobs.lever.co, jobs.ashbyhq.com, *.myworkdayjobs.com, jobs.smartrecruiters.com, or apply.workable.com.
-- NEVER return links to LinkedIn, Indeed, Glassdoor, ZipRecruiter, Handshake, or any other job aggregator. Those pages refuse automated reads. When a search result is an aggregator listing, it names the employer — search again for that employer's own posting of the same role.
+- Every posting must be OPEN NOW. Skip anything closed, filled, or for a past term.
+- Return the EMPLOYER'S OWN application page: their careers site, or their page on boards.greenhouse.io, jobs.lever.co, jobs.ashbyhq.com, *.myworkdayjobs.com, jobs.smartrecruiters.com, or apply.workable.com.
+- NEVER return links to LinkedIn, Indeed, Glassdoor, ZipRecruiter, Handshake, or any other job aggregator. Those sites refuse automated reads. But their listings are still USEFUL TO YOU: when a search result is an aggregator listing, it names the employer and the role — search again for that employer's own posting of the same job and return THAT. This is how the student gets the postings they would have found on those sites.
 - Only return URLs you actually saw in search results. Never construct or guess a URL: a plausible-looking link that 404s wastes a fetch, and an invented one is worse.
 - Prefer variety across employers over many roles at one employer.
-- Return up to 15 results. Fewer real ones beat more doubtful ones.`;
+- Fewer real ones beat more doubtful ones.`;
 
 /**
  * How many candidate pages one run will fetch.
@@ -185,9 +192,16 @@ Rules:
  * Each candidate is a real HTTP fetch of somebody's careers page, rate-limited per host, so
  * the cap is a politeness bound as much as a time bound. `query.limit` may lower it; nothing
  * raises it past the ceiling.
+ *
+ * Raised from 10/15. The model already sweeps several angles in one call, so the old cap was
+ * throwing away most of what it found — a live run named 15 pages and was allowed to read 6,
+ * and the note apologising for the other 9 was the tier's most common output. The point of
+ * this source is to replace an evening of browsing job boards by hand; a sample of six does
+ * not. The fetches are sequential and per-host rate-limited, so the ceiling is what keeps
+ * that from becoming a burst at anybody's careers site.
  */
-const MAX_CANDIDATES = 10;
-const CANDIDATE_CEILING = 15;
+const MAX_CANDIDATES = 24;
+const CANDIDATE_CEILING = 30;
 
 /** The JSON object in a text answer, for the CLI path when the envelope carries no object. */
 function looseJson(text: string): unknown {
@@ -226,7 +240,7 @@ export const webSearch: JobSource = {
           `Roles and keywords: ${wanted}\n` +
           (where ? `Location (remote postings also welcome): ${where}\n` : '') +
           `\nSearch the web now and return the results as the required JSON.`,
-        maxTokens: 4000,
+        maxTokens: 8000,
         schema: jsonSchemaOf('WebSearchFindings', Findings),
         webSearch: true,
       });

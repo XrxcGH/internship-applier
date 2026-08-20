@@ -15,7 +15,7 @@ import {
   type DiscoveryTarget,
 } from '../core/discovery/run';
 import { resolveCompany, type Resolution } from '../core/discovery/resolveCompany';
-import { fetchManualPosting } from '../core/discovery/manualPosting';
+import { fetchManualPosting, readPastedPosting } from '../core/discovery/manualPosting';
 import { refreshPostings } from '../core/discovery/refresh';
 import { planQueries, type PlannedTarget } from '../core/discovery/queryPlanner';
 
@@ -37,6 +37,22 @@ const RunBody = z.object({
 
 const ResolveBody = z.object({ name: z.string().min(1) });
 const ManualBody = z.object({ url: z.string().url() });
+
+/**
+ * A pasted posting. Every field is required and none is guessed.
+ *
+ * The text has a floor because the whole point is that requirements get read out of it, and a
+ * one-line paste would sail through as a posting that "states no requirements" — which then
+ * reads downstream as a role with nothing to check rather than one nobody checked. The URL is
+ * validated as a URL because it is the dedupe key, and stored without ever being fetched.
+ */
+const PasteBody = z.object({
+  text: z.string().trim().min(40),
+  title: z.string().trim().min(1),
+  company: z.string().trim().min(1),
+  url: z.string().url(),
+  readOn: z.string().trim().max(60).optional(),
+});
 
 /**
  * What `planQueries` actually reads out of a SearchFilters body.
@@ -310,6 +326,32 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         },
       });
     }
+  });
+
+  /**
+   * A posting the user read themselves on a site this tool will not fetch — docs/04 § Tier C.
+   *
+   * Handshake, LinkedIn and Indeed all prohibit automated access, and Handshake is behind a
+   * university login besides. The student reading their own account is not automated access,
+   * so this takes the text from THEM. The URL is stored and never fetched: see
+   * `readPastedPosting`, which is where the reasoning lives.
+   */
+  app.post('/api/discovery/paste', async (req, reply) => {
+    const parsed = PasteBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Expected { text, title, company, url }.',
+          details: { issues: parsed.error.issues },
+        },
+      });
+    }
+    // No fetch and no network of any kind on this path, so there is nothing here that can
+    // fail the way a fetch fails — a 502 branch would be dead code pretending to be care.
+    const { posting, usedJsonLd, notes } = readPastedPosting(parsed.data);
+    const id = saveManualPosting(posting);
+    return { postingId: id, posting, usedJsonLd, notes };
   });
 
   app.post('/api/discovery/refresh', async (req, reply) => {

@@ -74,12 +74,13 @@ const PROFILE = {
   availability: { start: '2027-06-01', end: '2027-08-20', hoursPerWeek: 40, flexible: true },
   locationPrefs: {
     base: { city: 'New Brunswick', region: 'NJ', country: 'US' },
+    additionalBases: [],
     maxCommuteKm: 50,
     remoteOk: true,
     hybridOk: true,
     relocateTo: [],
   },
-  preferences: { companySizes: [], industries: [], excludeCompanies: [] },
+  preferences: { companySizes: [], roleFamilies: [], industries: [], excludeCompanies: [] },
   derived: {
     age: 20,
     isMinor: false,

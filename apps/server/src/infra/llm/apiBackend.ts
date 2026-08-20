@@ -125,7 +125,10 @@ export const apiBackend: Backend = {
       ...(req.webSearch
         ? {
             tools: [
-              { type: 'web_search_20250305' as const, name: 'web_search' as const, max_uses: 8 },
+              // Eight was a one-pass budget. The discovery prompt asks for a SWEEP across several
+              // angles — role, each location, recency, employer kind — and eight searches cannot
+              // cover them, so the model spent its budget on the first two angles and stopped.
+              { type: 'web_search_20250305' as const, name: 'web_search' as const, max_uses: 16 },
             ],
           }
         : {}),
