@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dateProblem, indexRange, remapListFlags } from '../src/lib/profileEdit';
+import { remapTypedBoxes, dateProblem, indexRange, remapListFlags } from '../src/lib/profileEdit';
 import { isAnswered } from '../src/lib/review';
 
 /**
@@ -117,5 +117,60 @@ describe('isAnswered, on a list', () => {
     expect(isAnswered(undefined)).toBe(false);
     expect(isAnswered('citizen')).toBe(true);
     expect(isAnswered(0)).toBe(true);
+  });
+});
+
+/**
+ * The half-typed GPA text, which is what the student SEES.
+ *
+ * `typed` is keyed by position and `gpaBoxesFor` gives it precedence over the stored number,
+ * so removing a school left a figure typed for row 1 sitting on row 2 — over whatever GPA
+ * that school really had — and nothing warned, because from the editor's side the text was
+ * simply still there. `needsReview` was already remapped on that path; this was not.
+ */
+describe('remapTypedBoxes', () => {
+  const boxes = {
+    'education.0.gpa.value': '3.9',
+    'education.1.gpa.value': '3.5',
+    'education.2.gpa.value': '4.0',
+    'experience.0.title': 'kept',
+  };
+
+  it('moves each row’s text to where that row went', () => {
+    // Removing the middle school: new 0 holds old 0, new 1 holds old 2.
+    expect(remapTypedBoxes(boxes, 'education', [0, 2])).toEqual({
+      'education.0.gpa.value': '3.9',
+      'education.1.gpa.value': '4.0',
+      'experience.0.title': 'kept',
+    });
+  });
+
+  it('drops the text belonging to a row that is gone', () => {
+    // The removed row's index is absent from the permutation, which is what says "gone"
+    // rather than "moved" — the same signal remapListFlags reads.
+    const after = remapTypedBoxes(boxes, 'education', [0, 2]);
+    expect(Object.values(after)).not.toContain('3.5');
+  });
+
+  it('swaps two rows’ text with them', () => {
+    expect(remapTypedBoxes(boxes, 'education', [1, 0, 2])).toMatchObject({
+      'education.0.gpa.value': '3.5',
+      'education.1.gpa.value': '3.9',
+      'education.2.gpa.value': '4.0',
+    });
+  });
+
+  it('leaves another list’s keys alone', () => {
+    expect(remapTypedBoxes(boxes, 'education', [0, 1, 2])['experience.0.title']).toBe('kept');
+  });
+
+  it('agrees with remapListFlags, which walks the same permutation', () => {
+    // The two run on one list change and would corrupt each other if they disagreed about
+    // what the permutation means.
+    const moved = [0, 2];
+    expect(remapListFlags(['education.2.gpa'], 'education', moved)).toEqual(['education.1.gpa']);
+    expect(remapTypedBoxes({ 'education.2.gpa.value': 'x' }, 'education', moved)).toEqual({
+      'education.1.gpa.value': 'x',
+    });
   });
 });

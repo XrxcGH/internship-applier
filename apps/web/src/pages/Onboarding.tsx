@@ -10,7 +10,13 @@ import {
   isDismissible,
   OPTIONAL_WIZARD_FIELDS,
 } from '../lib/review';
-import { dateProblem, readUrlField, remapListFlags, tidyList } from '../lib/profileEdit';
+import {
+  dateProblem,
+  readUrlField,
+  remapListFlags,
+  remapTypedBoxes,
+  tidyList,
+} from '../lib/profileEdit';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Button, Notice, SelectField, TextField } from '../components/Controls';
 import {
@@ -828,9 +834,13 @@ export function Onboarding({
               typed={typed}
               onEntry={editEducation}
               onTyped={(boxes) => setTyped((prev) => ({ ...prev, ...boxes }))}
-              onList={(next, moved) =>
-                editList('education', (prev) => ({ ...prev, education: next }), moved)
-              }
+              onList={(next, moved) => {
+                editList('education', (prev) => ({ ...prev, education: next }), moved);
+                // The typed GPA text moves with its row too. `editList` remaps needsReview and
+                // knows nothing about these boxes, so a half-typed figure for the second
+                // school reappeared on the third — over whatever GPA that school really had.
+                if (moved) setTyped((prev) => remapTypedBoxes(prev, 'education', moved));
+              }}
             />
 
             {/* `patch` unchanged from the identity fields above, so an edit in here clears the

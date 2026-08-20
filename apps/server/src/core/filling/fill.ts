@@ -41,6 +41,19 @@ export interface FillResult {
   filled: number;
   mismatched: number;
   failed: number;
+  /**
+   * Where the page went, if it left the document the form was read from partway through.
+   *
+   * `executePlan` detects this and stops, and used to keep the fact to itself — so
+   * `describeFill` went on printing "Nothing has been submitted." in the one case where this
+   * code knows it might not be true. A mid-fill navigation is attributed by run.ts to "a
+   * select whose onchange navigates, a form that submits itself", and `selectOption`,
+   * `check` and `click` all fire the page's own handlers: a form that submits itself on
+   * change genuinely can have been submitted, and nothing here can tell.
+   *
+   * Undefined on every ordinary run, which is what keeps the plain sentence plain.
+   */
+  movedTo?: string;
 }
 
 /**
@@ -638,6 +651,9 @@ export async function executePlan(
     filled: results.filter((r) => r.status === 'ok').length,
     mismatched: results.filter((r) => r.status === 'mismatch').length,
     failed: results.filter((r) => r.status === 'failed').length,
+    // Carried out rather than left behind: the summary cannot promise nothing was submitted
+    // if it does not know the page navigated. See `movedTo` on FillResult.
+    ...(movedTo === undefined ? {} : { movedTo }),
   };
 }
 
@@ -663,8 +679,17 @@ export function describeFill(result: FillResult): string {
     const n = result.filled;
     return `All ${n} field${n === 1 ? '' : 's'} filled. Read the page, then submit it yourself.`;
   }
+  const tail =
+    result.movedTo === undefined
+      ? 'Nothing has been submitted.'
+      : // The page left the document the form was read from, which is the one case where the
+        // sentence above would be a claim rather than a fact. Say what happened and what this
+        // tool did NOT do, which is all it can honestly say.
+        `The page moved to ${result.movedTo} partway through, so the rest was not typed. This ` +
+        'tool did not submit anything — but a page can submit itself, so check there before ' +
+        'filling this again.';
   return (
     `${needsYou} field${needsYou === 1 ? '' : 's'} still need${needsYou === 1 ? 's' : ''} you. ` +
-    `${result.filled} filled. Nothing has been submitted.`
+    `${result.filled} filled. ${tail}`
   );
 }

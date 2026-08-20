@@ -28,6 +28,7 @@ import {
   chooseOption,
   describeFill,
   executePlan,
+  type FillResult,
   type SelectOption,
 } from '../src/core/filling/fill';
 import { removeTempDir } from './support/tempDir';
@@ -1280,4 +1281,54 @@ describe('gate G4 — the whole point', () => {
       'Para one about infrastructure.  Para two about reliability.',
     );
   }, 60_000);
+});
+
+/**
+ * The one sentence in this app that must never be a claim.
+ *
+ * `describeFill` ended every partial run with "Nothing has been submitted." — including the
+ * run where `executePlan` detected a mid-fill navigation, which run.ts itself attributes to
+ * "a select whose onchange navigates, a form that submits itself". `selectOption`, `check`
+ * and `click` all fire the page's own handlers, so a form that submits itself on change
+ * genuinely can have been submitted, and nothing in this process can tell. Printing the
+ * promise anyway is the exact failure the G4 guarantee exists to prevent: not a submission,
+ * but a false statement that there was not one.
+ */
+describe('what the summary promises after a page moved', () => {
+  const partial = (over: Partial<FillResult> = {}): FillResult => ({
+    // Only the two properties describeFill reads. The full FieldResult carries a planned
+    // field with a dozen more, none of which changes a sentence.
+    results: [
+      { field: { label: 'Name', selector: '#n' }, status: 'ok' },
+      { field: { label: 'Essay', selector: '#e' }, status: 'skipped', note: 'not reached' },
+    ] as unknown as FillResult['results'],
+    filled: 1,
+    mismatched: 0,
+    failed: 0,
+    ...over,
+  });
+
+  it('says nothing was submitted when the page never moved', () => {
+    expect(describeFill(partial())).toContain('Nothing has been submitted.');
+  });
+
+  it('stops promising it when the page moved, and names where it went', () => {
+    const text = describeFill(partial({ movedTo: 'https://careers.acme.com/apply?step=2' }));
+    expect(text).not.toContain('Nothing has been submitted.');
+    expect(text).toContain('https://careers.acme.com/apply?step=2');
+  });
+
+  it('still says what this tool did not do, which is all it honestly can', () => {
+    // Not silence either: the student needs to know the tool did not submit, and that the
+    // page might have. Both halves, or the sentence is as misleading as the old one.
+    const text = describeFill(partial({ movedTo: 'https://careers.acme.com/step2' }));
+    expect(text).toMatch(/did not submit/i);
+    expect(text).toMatch(/a page can submit itself/i);
+  });
+
+  it('still reports how many fields were filled either way', () => {
+    for (const r of [partial(), partial({ movedTo: 'https://x.example/2' })]) {
+      expect(describeFill(r)).toMatch(/1 filled/);
+    }
+  });
 });

@@ -118,3 +118,38 @@ export function dateProblem(raw: string | null | undefined): string | null {
 export function tidyList(xs: string[] | undefined): string[] | undefined {
   return xs === undefined ? undefined : xs.map((x) => x.trim()).filter((x) => x !== '');
 }
+
+/**
+ * The GPA boxes' half-typed text, moved with the rows it belongs to.
+ *
+ * `typed` is keyed by POSITION — `education.0.gpa.value` — and `gpaBoxesFor` gives that text
+ * precedence over the stored number, so it is what the student sees. Removing or reordering a
+ * school remaps `needsReview` through `remapListFlags` and left `typed` alone, so a half-typed
+ * "3.9" for the second school reappeared on the third, sitting over whatever GPA that school
+ * really had. Nothing warned, because from the editor's side the text was simply still there.
+ *
+ * Same permutation shape as `remapListFlags`: position is the NEW index, value is the OLD one.
+ * A key whose old index is absent from the permutation belongs to a removed row and is dropped.
+ */
+export function remapTypedBoxes(
+  typed: Record<string, string>,
+  prefix: string,
+  oldIndexForNew: number[],
+): Record<string, string> {
+  const newIndexForOld = new Map<number, number>();
+  oldIndexForNew.forEach((oldIndex, newIndex) => newIndexForOld.set(oldIndex, newIndex));
+
+  const pattern = new RegExp(`^${prefix}\\.(\\d+)(\\..*)?$`);
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(typed)) {
+    const m = pattern.exec(key);
+    if (!m) {
+      out[key] = value;
+      continue;
+    }
+    const moved = newIndexForOld.get(Number(m[1]));
+    if (moved === undefined) continue;
+    out[`${prefix}.${String(moved)}${m[2] ?? ''}`] = value;
+  }
+  return out;
+}

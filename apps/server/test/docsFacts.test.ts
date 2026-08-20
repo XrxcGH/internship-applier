@@ -1026,3 +1026,51 @@ function filtersFixture(over: Record<string, unknown> = {}): SearchFilters {
     ...over,
   } as unknown as SearchFilters;
 }
+
+/**
+ * Two copies of one map, on opposite sides of the client/server boundary.
+ *
+ * `ANSWERED_IN_WIZARD` lists the flags a student cannot wave off, because a control on the
+ * wizard answers them. The server copy drives the 409 that refuses a dismissal; the web copy
+ * drives whether an "I have checked this" button renders at all. Both files document the
+ * duplication and say the two must be edited together, and nothing enforced it: the web test
+ * only ever read the web copy, and no server test imported the server one.
+ *
+ * Disagreement is silent and lands on the user either way. A path on the server and not the
+ * web gets a button that the server then refuses; a path on the web and not the server gets
+ * no button and no refusal — a flag with no way to clear it, which is G1 locked shut.
+ */
+describe('the two copies of ANSWERED_IN_WIZARD', () => {
+  /** The keys of an object literal in a source file, read without importing across apps. */
+  function keysOf(rel: string, declaration: string): string[] {
+    const src = read(rel);
+    const at = src.indexOf(declaration);
+    expect({ rel, found: at >= 0 }).toEqual({ rel, found: true });
+    const body = src.slice(at, src.indexOf('};', at));
+    return [...body.matchAll(/^\s{2}'?([A-Za-z][\w.]*)'?:/gm)].map((m) => m[1]!).sort();
+  }
+
+  it('name exactly the same paths', () => {
+    const server = keysOf(
+      'apps/server/src/core/profile/reviewFlags.ts',
+      'export const ANSWERED_IN_WIZARD',
+    );
+    const web = keysOf('apps/web/src/lib/review.ts', 'export const ANSWERED_IN_WIZARD');
+    expect(server.length).toBeGreaterThan(0);
+    expect(web).toEqual(server);
+  });
+
+  it('agree that phone is NOT among them', () => {
+    // The one that came out, and the reason this test exists. `phone` is optional on the
+    // schema, so a blank is a complete answer — but while it was in these maps the flag was
+    // non-dismissible on the web and refused on the server, and clearing the box locked G1
+    // for anyone who did not want to give a number.
+    for (const rel of [
+      'apps/server/src/core/profile/reviewFlags.ts',
+      'apps/web/src/lib/review.ts',
+    ]) {
+      const keys = keysOf(rel, 'export const ANSWERED_IN_WIZARD');
+      expect({ rel, hasPhone: keys.includes('phone') }).toEqual({ rel, hasPhone: false });
+    }
+  });
+});
