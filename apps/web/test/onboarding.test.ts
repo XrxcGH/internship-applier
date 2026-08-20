@@ -19,6 +19,7 @@ import {
 // Moved out of the wizard when the experience, project and skill editors arrived and needed
 // it too — a component file importing from a page is the wrong direction. The editors those
 // helpers serve are covered in profileEditors.test.ts.
+import { remapListFlags } from '../src/lib/profileEdit';
 import { moveListItem } from '../src/lib/profileEdit';
 
 /**
@@ -771,5 +772,111 @@ describe('optional wizard fields', () => {
       expect(OPTIONAL_WIZARD_FIELDS.has(path), path).toBe(false);
       expect(nextReviewFlags([], path, ''), path).toEqual([path]);
     }
+  });
+});
+
+/**
+ * Moving and removing a school, and the permutation that keeps its flags attached.
+ *
+ * Every flag on this list is addressed positionally — `education.1.gpa` — so a row removed
+ * from the middle without a remap leaves each flag below it pointing at its neighbour, and
+ * the GPA warning for the second school lands on the third. `remapListFlags` takes
+ * `oldIndexForNew`: position is the NEW index, value is the OLD one. It is an easy shape to
+ * build backwards, and backwards is silent — the flags stay, they just describe other rows.
+ */
+describe('the education list handler', () => {
+  type Node = { type: unknown; props: Record<string, unknown> };
+
+  function collect(node: unknown, out: Node[]): void {
+    if (Array.isArray(node)) {
+      for (const n of node) collect(n, out);
+      return;
+    }
+    if (!isValidElement(node)) return;
+    const el = node as { type: unknown; props: Record<string, unknown> };
+    out.push({ type: el.type, props: el.props });
+    if (typeof el.type === 'function') {
+      const fn = el.type as (p: Record<string, unknown>) => unknown;
+      collect(fn(el.props), out);
+    }
+    collect((el.props as { children?: unknown }).children, out);
+  }
+
+  /** Presses the button whose accessible name matches, and returns what onList was given. */
+  function press(
+    entries: EducationEntry[],
+    label: string,
+  ): { next: EducationEntry[]; moved?: number[] } {
+    let got: { next: EducationEntry[]; moved?: number[] } | null = null;
+    const out: Node[] = [];
+    collect(
+      createElement(EducationEditor, {
+        entries,
+        flagged: () => false,
+        typed: {},
+        onEntry: () => undefined,
+        onTyped: () => undefined,
+        onList: (next: EducationEntry[], moved?: number[]) => {
+          got = { next, moved };
+        },
+      }),
+      out,
+    );
+    // Children may be a bare string or an array — the Add control renders an icon beside
+    // its text, so a strict equality check finds the Remove buttons and misses that one.
+    const named = (n: Node): boolean => {
+      if (n.props['aria-label'] === label) return true;
+      const kids = n.props['children'];
+      if (kids === label) return true;
+      return Array.isArray(kids) && kids.some((k) => k === label);
+    };
+    const button = out.find((n) => named(n) && typeof n.props['onClick'] === 'function');
+    if (!button) throw new Error(`no control named ${label}`);
+    (button.props['onClick'] as () => void)();
+    if (!got) throw new Error(`${label} did not call onList`);
+    return got;
+  }
+
+  const three = (): EducationEntry[] => [
+    school({ institution: 'First' }),
+    school({ institution: 'Second' }),
+    school({ institution: 'Third' }),
+  ];
+
+  it('removes the row asked for, and maps every surviving flag to where its row went', () => {
+    const { next, moved } = press(three(), 'Remove school 2');
+    expect(next.map((e) => e.institution)).toEqual(['First', 'Third']);
+    // New position 0 holds old 0; new position 1 holds old 2. The removed index is absent,
+    // which is what tells remapListFlags to DROP its flags rather than move them.
+    expect(moved).toEqual([0, 2]);
+    expect(remapListFlags(['education.0.gpa', 'education.2.gpa'], 'education', moved!)).toEqual([
+      'education.0.gpa',
+      'education.1.gpa',
+    ]);
+    expect(remapListFlags(['education.1.gpa'], 'education', moved!)).toEqual([]);
+  });
+
+  it('swaps two rows and swaps their flags with them', () => {
+    const { next, moved } = press(three(), 'Move school 1 down');
+    expect(next.map((e) => e.institution)).toEqual(['Second', 'First', 'Third']);
+    expect(moved).toEqual([1, 0, 2]);
+    // The flag that was on row 0 has to follow it to row 1, not stay pointing at row 0.
+    expect(remapListFlags(['education.0.gpa'], 'education', moved!)).toEqual(['education.1.gpa']);
+  });
+
+  it('leaves a flag on another list alone', () => {
+    const { moved } = press(three(), 'Remove school 2');
+    expect(remapListFlags(['experience.1.title'], 'education', moved!)).toEqual([
+      'experience.1.title',
+    ]);
+  });
+
+  it('adds a row without claiming anything moved', () => {
+    // No permutation, because no existing index changed — passing one would make
+    // remapListFlags rewrite flags that are already correct.
+    const { next, moved } = press(three(), 'Add a school');
+    expect(next).toHaveLength(4);
+    expect(next[3]?.institution).toBe('');
+    expect(moved).toBeUndefined();
   });
 });
