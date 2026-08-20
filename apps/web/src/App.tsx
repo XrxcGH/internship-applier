@@ -25,26 +25,26 @@ type State =
   | { kind: 'ready'; health: HealthResponse }
   | { kind: 'error'; message: string };
 
+// No `view` on these. They were a second navigation and are a statement now, so a field
+// naming where each one leads is a field nothing reads — and the next person to see it would
+// reasonably wire it back up.
 const GATES = [
   {
     id: 'G1',
     label: 'Confirm profile',
     note: 'You correct what was read from your resume.',
-    view: 'setup' as View | null,
   },
   {
     id: 'G2',
     label: 'Approve posting',
     note: 'One explicit approval, per application.',
-    view: 'queue' as View | null,
   },
   {
     id: 'G3',
     label: 'Review answers',
     note: 'You read and edit every generated sentence.',
-    view: 'applications' as View | null,
   },
-  { id: 'G4', label: 'Submit', note: 'You click Submit yourself, on the real page.', view: null },
+  { id: 'G4', label: 'Submit', note: 'You click Submit yourself, on the real page.' },
 ];
 
 /**
@@ -285,28 +285,28 @@ function Home({
         </Section>
 
         <Section n="02" title="The four gates" step={5}>
+          {/* A statement of the four gates, which is what the heading says it is — not a second
+              navigation.
+
+              Every card was a button, and two of them went where Section 01 above already
+              sends the reader with real primary buttons, which the persistent nav offers a
+              third time: three routes to two destinations on one screen. The other two were
+              permanently disabled — G3 has no view of its own and G4 is not a screen at all —
+              so half of "the four gates" rendered as dead controls with nothing to say why,
+              and a dead control reads as a broken one. */}
           <ol className="grid gap-3 sm:grid-cols-2">
-            {GATES.map((g, i) => {
-              const target = g.view;
-              const reachable = target !== null && (confirmed || target === 'setup');
-              return (
-                <li key={g.id} className={`a-rise a-step-${String(Math.min(i + 5, 8))}`}>
-                  <button
-                    disabled={!reachable}
-                    onClick={() => target && onNavigate(target)}
-                    className={`u-card-flat flex h-full w-full gap-4 px-5 py-4 text-left transition-colors ${
-                      reachable ? 'hover:border-rule-strong cursor-pointer' : 'cursor-default'
-                    }`}
-                  >
-                    <span className="u-data text-accent w-7 shrink-0 pt-1">{g.id}</span>
-                    <span>
-                      <span className="block text-lg leading-snug">{g.label}</span>
-                      <span className="text-dim mt-1 block text-base leading-snug">{g.note}</span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
+            {GATES.map((g, i) => (
+              <li
+                key={g.id}
+                className={`u-card-flat flex gap-4 px-5 py-4 a-rise a-step-${String(Math.min(i + 5, 8))}`}
+              >
+                <span className="u-data text-accent w-7 shrink-0 pt-1">{g.id}</span>
+                <span>
+                  <span className="block text-lg leading-snug">{g.label}</span>
+                  <span className="text-dim mt-1 block text-base leading-snug">{g.note}</span>
+                </span>
+              </li>
+            ))}
           </ol>
           <p className="text-faint u-prose mt-6">
             {/* The promise is the point and stays; the proof was in developer's terms. A

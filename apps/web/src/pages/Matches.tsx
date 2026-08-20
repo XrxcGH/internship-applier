@@ -240,8 +240,26 @@ export function Matches({
     return () => window.removeEventListener('keydown', onKey);
   }, [move, act, rejecting]);
 
+  /**
+   * Focus follows the selection, not just the scroll.
+   *
+   * j and k move the selection and swap the entire detail pane — posting title, rationale,
+   * requirements, score, and the four decision buttons — and this effect only scrolled. Focus
+   * stayed wherever it was and the replaced content sits in no live region, so on the screen
+   * this file describes as keyboard-first, a keyboard user pressing j heard nothing at all and
+   * then acted on a posting they had not been told they were looking at.
+   *
+   * Focusing the row itself rather than announcing separately: the row IS the label for what
+   * the pane now shows, so moving focus there reads the company and title without a second
+   * copy of them living in a live region that could disagree with the pane.
+   *
+   * `preventScroll` because the scroll below places the row deliberately: `block: 'nearest'`
+   * keeps the list still, where focusing alone would jump the row to the centre.
+   */
   useEffect(() => {
-    listRef.current?.querySelector(`[data-id="${selected}"]`)?.scrollIntoView({ block: 'nearest' });
+    const row = listRef.current?.querySelector<HTMLElement>(`[data-id="${selected}"]`);
+    row?.querySelector('button')?.focus({ preventScroll: true });
+    row?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
 
   const current = rows.find((r) => r.id === selected);

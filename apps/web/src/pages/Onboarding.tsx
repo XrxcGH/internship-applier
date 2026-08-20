@@ -1633,7 +1633,15 @@ export function WorkLocationsEditor({
                   value={loc.label ?? ''}
                   onChange={(e) => edit(index, 'label', e.target.value)}
                 />
-                <Button size="sm" onClick={() => onChange(locations.filter((_, i) => i !== index))}>
+                {/* Named by row, like every other list on this screen. Three buttons whose
+                    only accessible name is "Remove", beside fields labelled City / State /
+                    What it is in every row, give a screen-reader user pulling up the button
+                    list nothing at all to choose between. */}
+                <Button
+                  size="sm"
+                  aria-label={`Remove location ${String(index + 1)}`}
+                  onClick={() => onChange(locations.filter((_, i) => i !== index))}
+                >
                   Remove
                 </Button>
               </div>

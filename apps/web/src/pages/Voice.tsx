@@ -178,7 +178,11 @@ export function Voice() {
             <ul className="space-y-3">
               {style.description.map((line, i) => (
                 <li key={i} className="flex gap-3 text-base">
-                  <span className="text-accent-dim shrink-0">—</span>
+                  {/* Decoration, so it is hidden: a screen reader announced "em dash" before every
+                    line of a list that already has real list semantics. */}
+                  <span aria-hidden className="text-accent-dim shrink-0">
+                    —
+                  </span>
                   <span className="text-dim">{line}</span>
                 </li>
               ))}
