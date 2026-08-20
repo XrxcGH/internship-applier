@@ -245,6 +245,32 @@ async function takeToken(host: string, rps: number): Promise<void> {
  * paginating through its listings got paginated through anyway, while the plain path rules
  * next to it in the same file were obeyed.
  */
+/**
+ * The spellings of a path a disallow rule has to be tested against.
+ *
+ * `URL` does not decode percent-escapes in `pathname`, so
+ * `new URL('https://example.com/%61pi/jobs').pathname` is `/%61pi/jobs` — which matches a
+ * `Disallow: /api/` rule under no comparison at all, while the origin server decodes the
+ * escape and serves the resource its robots.txt asked automated clients to leave alone. The
+ * student's address does the crawling, against a promise this tool made on their behalf.
+ *
+ * This is the same trick `app.ts` documents and defends against for its own routing — never
+ * compare a raw request target against a literal path — and it had not been carried over here.
+ *
+ * Both forms are tested and either one matching is a refusal, because every failure mode of
+ * this check is already meant to err toward not fetching. A malformed escape decodes to
+ * nothing, so the raw form stands alone rather than the whole check falling over.
+ */
+function robotsTargets(u: URL): string[] {
+  const raw = u.pathname + u.search;
+  try {
+    const decoded = decodeURIComponent(raw);
+    return decoded === raw ? [raw] : [raw, decoded];
+  } catch {
+    return [raw];
+  }
+}
+
 function robotsMatches(pattern: string, target: string): boolean {
   if (pattern === '/') return true;
   if (!pattern.includes('*') && !pattern.endsWith('$')) return target.startsWith(pattern);
@@ -460,7 +486,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
       );
     }
     for (const p of rules.disallow) {
-      if (robotsMatches(p, u.pathname + u.search)) {
+      if (robotsTargets(u).some((target) => robotsMatches(p, target))) {
         throw new HttpError(`robots.txt disallows ${u.pathname}`, 403, url);
       }
     }

@@ -589,3 +589,50 @@ describe('a robots.txt that redirects', () => {
     await expect(politeFetch(`${origin}/private/x`, { rps: 100 })).rejects.toThrow(/robots/i);
   }, 30_000);
 });
+
+/**
+ * A Disallow spelled a different way is the same Disallow.
+ *
+ * `URL` does not decode percent-escapes in `pathname`, so `/%61pi/jobs` was compared against
+ * `Disallow: /api/` and matched nothing — while the origin server decodes the escape and
+ * serves the very resource its robots.txt asked automated clients to leave alone. The harm
+ * lands on the student: their address does the crawling, against a promise this tool made on
+ * their behalf. It is the same trick app.ts documents for its own routing, not carried over.
+ */
+describe('a disallowed path spelled in escapes', () => {
+  async function withRules(rules: string): Promise<string> {
+    const server = createServer((req, res) => {
+      if ((req.url ?? '') === '/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end(rules);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end(`served ${req.url ?? ''}`);
+    });
+    running.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    return `http://127.0.0.1:${String(address.port)}`;
+  }
+
+  it('is refused however the path is written', async () => {
+    const origin = await withRules('User-agent: *\nDisallow: /api/\nDisallow: /private/*\n');
+    for (const path of ['/api/jobs', '/%61pi/jobs', '/ap%69/jobs', '/private/%78']) {
+      await expect(politeFetch(`${origin}${path}`, { rps: 100 }), path).rejects.toThrow(/robots/i);
+    }
+  }, 30_000);
+
+  it('still fetches a path no rule covers', async () => {
+    const origin = await withRules('User-agent: *\nDisallow: /api/\n');
+    expect(await politeFetch(`${origin}/careers/1`, { rps: 100 })).toBe('served /careers/1');
+    // An escape in an allowed path is not itself a reason to refuse.
+    expect(await politeFetch(`${origin}/careers/%41`, { rps: 100 })).toBe('served /careers/%41');
+  }, 30_000);
+
+  it('does not fall over on an escape that decodes to nothing', async () => {
+    const origin = await withRules('User-agent: *\nDisallow: /api/\n');
+    expect(await politeFetch(`${origin}/careers/%zz`, { rps: 100 })).toBe('served /careers/%zz');
+  }, 30_000);
+});

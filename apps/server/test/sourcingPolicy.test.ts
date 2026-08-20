@@ -65,6 +65,17 @@ describe('which hosts this tool refuses to open', () => {
     }
   });
 
+  it("refuses a board's own short-link domain, which is a different registrable name", () => {
+    // `lnkd.in` reduces to the brand `lnkd`, not `linkedin`, so the list did not cover it.
+    // These are everywhere in search results and in employers' own social posts, and every
+    // one of them was two requests to LinkedIn infrastructure from the student's address —
+    // the redirect afterwards was caught, but the rule here is that these are never fetched.
+    expect(isAggregatorUrl('https://lnkd.in/eXaMpLe')).toBe(true);
+    expect(isAggregatorUrl('https://LNKD.IN/eXaMpLe')).toBe(true);
+    // And the brand is matched, not the letters: an unrelated host keeping its own name.
+    expect(isAggregatorUrl('https://lnkd.example.com/x')).toBe(false);
+  });
+
   it('refuses one wearing credentials, a port, or capitals', () => {
     // All three are parsed by `URL`, not by the brand list, which is why the check reads
     // `hostname` rather than the raw string. A rule that a query string could walk past is
@@ -207,9 +218,33 @@ describe('the fill path refuses a board this tool will not open', () => {
     // Stronger than checking the URL afterwards: a route handler refuses the REQUEST, so no
     // cookies, no Referer and no TLS handshake reach a site this tool has promised not to
     // visit. Scoped to document navigations so a page's fonts and images still load.
+    //
+    // Read off the source for the same reason as the case above: proving it at runtime means
+    // letting a real browser attempt a real navigation to LinkedIn, and a test that only
+    // passes by NOT contacting them is a test that contacts them the day it breaks.
     const code = codeOf('core/filling/browser.ts');
     expect(code).toMatch(/context\.route\(/);
-    expect(code).toMatch(/resourceType\(\) === 'document'/);
+    expect(code).toMatch(/resourceType\(\)/);
+    expect(code).toMatch(/'document'/);
+    expect(code).toMatch(/isAggregatorUrl\(request\.url\(\)\)/);
     expect(code).toMatch(/route\.abort\(/);
+  });
+
+  it('refuses an apply address on this machine or its network, in both places', () => {
+    // `apply_url` is the one address in the app that `politeFetch` never sees — only
+    // `canonical_url` is fetched, in refreshPostings — so it met no private-address check at
+    // any point in its life, while being the one string that gets opened in the profile
+    // carrying the student's real logins. A feed row naming http://192.168.1.1/setup.cgi
+    // reached G2, was copied onto the application, and was opened.
+    const run = codeOf('core/filling/run.ts');
+    expect(run).toMatch(/assertPublicHost\(input\.applyUrl\)/);
+    // And a scheme check in front of it: `file:///C:/Users/...` has no host to resolve, so it
+    // would pass an address check and then open a local file in the browser.
+    expect(run).toMatch(/parseScheme\(input\.applyUrl\)/);
+
+    // The browser needs its own, because Chromium follows 3xx and meta-refresh by itself.
+    const browser = codeOf('core/filling/browser.ts');
+    expect(browser).toMatch(/assertPublicHost\(url\)/);
+    expect(browser).toMatch(/PrivateAddressError/);
   });
 });

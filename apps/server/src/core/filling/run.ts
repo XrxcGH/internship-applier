@@ -11,9 +11,11 @@
  * When it cannot proceed it says why and waits.
  */
 import type { ApplicationAnswer, ConfirmedProfile } from '@ia/shared';
+import { config } from '../../config';
 import { publish } from '../../infra/events';
 import { logger } from '../../infra/logger';
 import { AGGREGATOR_REFUSAL, isAggregatorUrl } from '../discovery/sourcingPolicy';
+import { assertPublicHost, PrivateAddressError } from '../../infra/http/publicHost';
 import { detectIntervention, openSession, type BrowserSession, type Intervention } from './browser';
 import { executePlan, describeFill, sameDocument, type FillResult } from './fill';
 import { buildFormMap, summarizeMap, type FormMap } from './formMap';
@@ -227,6 +229,15 @@ function refuseIfAggregator(run: FillRun): void {
   }
 }
 
+/** The scheme of a URL, or null if it is not one. */
+function parseScheme(raw: string): string | null {
+  try {
+    return new URL(raw).protocol;
+  } catch {
+    return null;
+  }
+}
+
 export async function startRun(input: StartInput): Promise<FillRun> {
   /**
    * Refused before the browser opens, and this is the sharpest edge of the whole policy.
@@ -245,6 +256,39 @@ export async function startRun(input: StartInput): Promise<FillRun> {
    */
   if (isAggregatorUrl(input.applyUrl)) {
     throw new SourceRefusedError(AGGREGATOR_REFUSAL);
+  }
+
+  /**
+   * And the same question `politeFetch` asks of everything it fetches, asked here too.
+   *
+   * The brand check above was the ONLY thing this address had to pass. `apply_url` is never
+   * fetched by `politeFetch` — only `canonical_url` is, in `refreshPostings` — so it never met
+   * `assertPublicHost` at any point in its life, and it is a string that arrives from a board
+   * feed's row or from a link a student pasted. `http://192.168.1.1/setup.cgi?...` in a feed
+   * row reached G2, was copied onto the application, and was opened HERE: in the persistent
+   * profile, the one carrying the student's real logged-in sessions and their LAN cookies.
+   *
+   * The tool's HTTP client is forbidden from touching those addresses. Its browser, which is
+   * strictly more dangerous because of what it carries, was not.
+   *
+   * The scheme is checked first because `assertPublicHost` parses a URL and reads its host,
+   * and `file:///C:/Users/...` has no host to resolve — it would pass the address check and
+   * then open a local file in the browser.
+   */
+  const scheme = parseScheme(input.applyUrl);
+  if (scheme !== 'http:' && scheme !== 'https:') {
+    throw new SourceRefusedError(
+      'This application has no web address to open. A posting is a page on the internet; ' +
+        `"${input.applyUrl.slice(0, 60)}" is not one, so nothing was opened.`,
+    );
+  }
+  if (!config.isTest) {
+    try {
+      await assertPublicHost(input.applyUrl);
+    } catch (err) {
+      if (err instanceof PrivateAddressError) throw new SourceRefusedError(err.message);
+      throw err;
+    }
   }
 
   // Claimed before anything is awaited, and held across the discard, the launch and the read.

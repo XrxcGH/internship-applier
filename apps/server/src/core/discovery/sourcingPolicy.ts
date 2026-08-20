@@ -29,6 +29,14 @@
  */
 export const AGGREGATOR_BRANDS = [
   'linkedin',
+  // LinkedIn's own short-link domain, which is a different registrable name and so was not
+  // covered by 'linkedin'. `https://lnkd.in/eXaMpLe` reduces to the brand 'lnkd'. These are
+  // everywhere in search results and in employers' own social posts, so the model returns
+  // them, and every one of them was two requests to LinkedIn infrastructure from the
+  // student's address. The redirect to www.linkedin.com was caught by the per-hop check, so
+  // no page content was read — but the rule this file states is that these hosts are never
+  // fetched or opened, and fetching the short link is fetching one of them.
+  'lnkd',
   'indeed',
   'glassdoor',
   'ziprecruiter',

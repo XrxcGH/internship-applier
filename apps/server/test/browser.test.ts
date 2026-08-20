@@ -94,6 +94,59 @@ describe('stopping instead of working around', () => {
     expect(await session.page.locator('#hdr-signin').count()).toBe(1);
     expect(await detectIntervention(session.page)).toBeNull();
   }, 60_000);
+
+  /**
+   * The detector has to look where the scanner looks.
+   *
+   * `page.locator()` is `page.mainFrame().locator()` and does not enter iframes, while
+   * `buildFormMap` iterates `page.frames()` and scans all of them. So the two saw different
+   * document sets, and everything in the gap was filled without ever being checked — which is
+   * most embedded ATS flows, and one line of markup for a hostile page. Verified before the
+   * fix: the detector answered null on a page whose only content was an iframe holding a
+   * sign-in form, and the scanner mapped that form's email box as `semantic: 'email'`. The run
+   * did not stop; it typed the student's address into a sign-in box.
+   */
+  const inFrame = async (inner: string): Promise<void> => {
+    const page = session.page;
+    await page.setContent(
+      `<h1>Careers</h1><iframe srcdoc='${inner}' width="600" height="300"></iframe>`,
+    );
+    await page.waitForTimeout(200);
+  };
+
+  it('sees a login wall one iframe deep', async () => {
+    await inFrame(
+      '<form><input id="e" type="email"><input id="p" type="password"><button>Sign in</button></form>',
+    );
+    expect((await detectIntervention(session.page))?.reason).toBe('login');
+  }, 60_000);
+
+  it('sees a bot check one iframe deep', async () => {
+    await inFrame('<iframe src="https://challenges.cloudflare.com/turnstile"></iframe>');
+    expect((await detectIntervention(session.page))?.reason).toBe('captcha');
+  }, 60_000);
+
+  it('is not talked out of a sign-in frame by a real form beside it', async () => {
+    // The `applicationish` rescue is scoped to the frame the password field is in, so the
+    // application form in the outer document cannot excuse the sign-in box in the inner one.
+    await session.page.setContent(
+      `<form><input name="first"><input name="last"><input name="email" type="email">
+         <textarea name="why"></textarea><input type="file" name="resume"></form>
+       <iframe srcdoc='<form><input type="email"><input type="password"><button>Sign in</button></form>'></iframe>`,
+    );
+    await session.page.waitForTimeout(200);
+    expect((await detectIntervention(session.page))?.reason).toBe('login');
+  }, 60_000);
+
+  it('still says nothing about an ordinary application in a frameless page', async () => {
+    // The direction that matters if this is written too widely: stopping a run that had no
+    // reason to stop puts the browser back in the user's hands for nothing.
+    await session.page.setContent(
+      `<form><input name="first"><input name="last"><input name="email" type="email">
+         <textarea name="why"></textarea></form>`,
+    );
+    expect(await detectIntervention(session.page)).toBeNull();
+  }, 60_000);
 });
 
 describe('gate G4', () => {

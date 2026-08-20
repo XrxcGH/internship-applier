@@ -17,12 +17,13 @@
  * site does not want that, the correct response is to stop and hand control back, which is
  * what `awaiting_user` exists for.
  */
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { chromium, type BrowserContext, type Frame, type Page, type Route } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { config } from '../../config';
 import { logger } from '../../infra/logger';
 import { scrubUrl } from '../../infra/http/fetcher';
 import { isAggregatorUrl } from '../discovery/sourcingPolicy';
+import { assertPublicHost, PrivateAddressError } from '../../infra/http/publicHost';
 
 export interface SessionOptions {
   /** Headless is for the fixture site only. */
@@ -55,6 +56,41 @@ export const TYPING_DELAY = { min: 10, max: 30 } as const;
 
 export function keyDelay(): number {
   return TYPING_DELAY.min + Math.random() * (TYPING_DELAY.max - TYPING_DELAY.min);
+}
+
+/**
+ * Refuses a page load whose host is on this machine or its network.
+ *
+ * `startRun` checks the address it is ABOUT to open, and then Chromium takes over and follows
+ * 3xx, meta-refresh and `location =` by itself — the same argument the aggregator block above
+ * makes, and the same answer. A host that answers `302 Location: http://192.168.1.1/setup.cgi`
+ * would otherwise have this profile, the persistent one holding the student's real logins and
+ * LAN cookies, issue that request.
+ *
+ * Refusing the REQUEST rather than noticing afterwards is the point: nothing reaches the host
+ * at all, no cookies, no Referer, no TLS handshake carrying SNI.
+ *
+ * Only document navigations, because a careers page legitimately loads fonts, images and
+ * analytics from all over, and a lookup per subresource would be both slow and wrong — a CDN
+ * behind a split-horizon DNS is not an attack on anybody.
+ */
+async function guardAddress(route: Route, url: string): Promise<void> {
+  if (config.isTest) {
+    await route.continue();
+    return;
+  }
+  try {
+    await assertPublicHost(url);
+  } catch (err) {
+    if (err instanceof PrivateAddressError) {
+      logger.warn({ url: scrubUrl(url) }, 'blocked a navigation to a private address');
+      await route.abort('blockedbyclient');
+      return;
+    }
+    // Anything else is not a verdict about the address — a malformed URL, a resolver that
+    // threw. Let Chromium try it and fail in its own words rather than inventing a reason.
+  }
+  await route.continue();
 }
 
 export async function openSession(opts: SessionOptions = {}): Promise<BrowserSession> {
@@ -92,7 +128,11 @@ export async function openSession(opts: SessionOptions = {}): Promise<BrowserSes
    */
   await context.route('**/*', (route) => {
     const request = route.request();
-    if (request.resourceType() === 'document' && isAggregatorUrl(request.url())) {
+    if (request.resourceType() !== 'document') {
+      void route.continue();
+      return;
+    }
+    if (isAggregatorUrl(request.url())) {
       logger.warn(
         { url: scrubUrl(request.url()) },
         'blocked a navigation to a board this tool does not open',
@@ -100,7 +140,7 @@ export async function openSession(opts: SessionOptions = {}): Promise<BrowserSes
       void route.abort('blockedbyclient');
       return;
     }
-    void route.continue();
+    void guardAddress(route, request.url());
   });
 
   const page = context.pages()[0] ?? (await context.newPage());
@@ -218,8 +258,40 @@ function inside(roots: string[], controls: string[]): string {
  * turns out to be a login form is exactly the mistake worth preventing.
  */
 export async function detectIntervention(page: Page): Promise<Intervention | null> {
+  for (const frame of page.frames()) {
+    if (frame.isDetached()) continue;
+    // A frame that cannot be read is not evidence of anything. `buildFormMap` cannot read it
+    // either, so nothing in it will be filled and there is nothing here to stop.
+    const found = await inspectFrame(frame).catch(() => null);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * The same questions, asked of one frame.
+ *
+ * THIS USED TO BE ASKED OF THE PAGE, WHICH MEANS THE MAIN FRAME AND NOTHING ELSE —
+ * `page.locator()` is `page.mainFrame().locator()` and does not enter iframes. `buildFormMap`
+ * iterates `page.frames()` and scans all of them. So the scanner saw one document set and the
+ * detector saw another, and everything in the gap between them was filled without ever being
+ * checked.
+ *
+ * Which is most embedded ATS flows, and one line of markup for a hostile page. Verified
+ * against a page whose only content is an iframe holding a branded sign-in form: the detector
+ * answered null, the main-frame locator counted zero password fields, and the scanner mapped
+ * the sign-in box's email input as `semantic: 'email'`. The run never entered `awaiting_user`
+ * — it typed the student's address into a sign-in box. A bot check inside the application
+ * iframe went the same way: filled, while browser.ts's own header promises this stops for one.
+ *
+ * The `applicationish` rescue is scoped to the frame the password field is in, so a sign-in
+ * iframe sitting beside a real application form is still caught rather than excused by its
+ * neighbour. PAGE_CHROME is per-frame for the same reason: an iframe has no header or footer
+ * belonging to the document around it.
+ */
+async function inspectFrame(frame: Frame): Promise<Intervention | null> {
   for (const sel of BOT_CHECK_SIGNS) {
-    if ((await page.locator(sel).count()) > 0) {
+    if ((await frame.locator(sel).count()) > 0) {
       return {
         reason: 'captcha',
         detail:
@@ -232,7 +304,7 @@ export async function detectIntervention(page: Page): Promise<Intervention | nul
   // A password field is only a login wall if there is no application form around it.
   // Plenty of application pages carry an optional account-creation section.
   const passwords = await Promise.all(
-    PASSWORD_FIELDS.map(async (s) => (await page.locator(s).count()) > 0),
+    PASSWORD_FIELDS.map(async (s) => (await frame.locator(s).count()) > 0),
   );
   if (passwords.some(Boolean)) {
     /**
@@ -249,10 +321,10 @@ export async function detectIntervention(page: Page): Promise<Intervention | nul
      * are the same rule said twice. See PAGE_CHROME.
      */
     const [uploads, essays, plainAnywhere, plainInChrome] = await Promise.all([
-      page.locator('input[type=file]').count(),
-      page.locator('textarea, [contenteditable=true]').count(),
-      page.locator(PLAIN_CONTROLS.join(', ')).count(),
-      page.locator(inside(PAGE_CHROME, PLAIN_CONTROLS)).count(),
+      frame.locator('input[type=file]').count(),
+      frame.locator('textarea, [contenteditable=true]').count(),
+      frame.locator(PLAIN_CONTROLS.join(', ')).count(),
+      frame.locator(inside(PAGE_CHROME, PLAIN_CONTROLS)).count(),
     ]);
     const plain = plainAnywhere - plainInChrome;
     const applicationish = uploads > 0 || essays > 0 || plain >= 3;
