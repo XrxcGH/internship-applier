@@ -240,16 +240,123 @@ export function decodeEntities(html: string): string {
   return decodeAll(html);
 }
 
+/**
+ * The same three tag-removing passes the regexes did, without the backtracking.
+ *
+ * THIS FUNCTION WAS FIVE CHAINED REGEXES AND IT WAS QUADRATIC. `/<[^>]+>/g` is the expensive
+ * one: at every `<` the `[^>]+` runs to the end of the input looking for a `>`, fails, and
+ * gives back one character at a time. Measured before the rewrite on a body that is simply
+ * the character `<` repeated — 10 KB took 61ms, 20 KB 221ms, 40 KB 909ms, 80 KB 18.3 SECONDS.
+ * Repeated `<script` and `<meta ` behave the same way. A one megabyte page, which any host
+ * can serve and nothing here caps, is minutes.
+ *
+ * It matters because this is pointed at whatever a fetch returned: a careers page the model
+ * named, a link pasted into the manual box, a `description` on an open feed anyone can post a
+ * row to. Node is single-threaded, so for the whole of that time the server does nothing else
+ * — not the health check, not the event stream, and not a fill run standing on a real
+ * employer's form. No timeout can end it either, because a timeout needs the event loop too.
+ *
+ * THE PASSES STAY IN THIS ORDER AND SEPARATE, which a first attempt at this did not, and 1,150
+ * of 20,000 generated documents came out different. Removing `<br>` BEFORE the general tag
+ * pass is what stops a stray `<` swallowing it: in `a < b<br/>` the general pass would
+ * otherwise read `< b<br/` as one tag and take the line break with it. Each pass here does
+ * exactly what its regex did, one scan at a time instead of by backtracking.
+ */
 export function stripHtml(html: string): string {
+  const withoutScripts = removeSpans(
+    removeSpans(html, '<script', '</script>'),
+    '<style',
+    '</style>',
+  );
+
   return decodeAll(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<[^>]+>/g, ' '),
+    removeTags(
+      withoutScripts.replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n'),
+    ),
   )
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/**
+ * What `/<script[\s\S]*?<\/script>/gi` did: each opener, to its nearest closer, replaced by a
+ * space — and an opener with no closer after it left exactly as it was found.
+ *
+ * The opener is matched as a bare prefix with no word boundary, because the regex had none
+ * either: `<scriptural>` opened a script span, and adding the boundary now would start
+ * keeping page furniture that used to be dropped.
+ *
+ * Once no closer can be found ahead of one opener, none can be found ahead of any later one,
+ * and the search stops. Without that, a body of repeated `<script` would scan to the end of
+ * the string once per occurrence — the same quadratic cost arriving by a different road.
+ */
+function removeSpans(html: string, open: string, close: string): string {
+  const out: string[] = [];
+  let at = 0;
+
+  for (;;) {
+    const start = findTag(html, open, at);
+    if (start === -1) break;
+
+    const end = findTag(html, close, start + open.length);
+    if (end === -1) break;
+
+    out.push(html.slice(at, start), ' ');
+    at = end + close.length;
+  }
+
+  out.push(html.slice(at));
+  return out.join('');
+}
+
+/**
+ * What `/<[^>]+>/g` did: each `<` up to the first `>` after it, replaced by a space.
+ *
+ * `[^>]+` cannot cross a `>`, so the greedy match always ended at the FIRST one — which is
+ * why this is an `indexOf` and not a search. Two cases have to be left alone to match it:
+ * `<>`, which fails because `[^>]+` needs at least one character, and a `<` with no `>` after
+ * it anywhere, which the regex never matched and left in the text as the literal character.
+ */
+function removeTags(html: string): string {
+  const out: string[] = [];
+  let at = 0;
+
+  for (;;) {
+    const open = html.indexOf('<', at);
+    if (open === -1) break;
+
+    const shut = html.indexOf('>', open + 1);
+    if (shut === -1) break;
+
+    if (shut === open + 1) {
+      // `<>` is not a tag. Copy it and carry on from just after the `<`, exactly where the
+      // regex engine would have resumed.
+      out.push(html.slice(at, open + 1));
+      at = open + 1;
+      continue;
+    }
+
+    out.push(html.slice(at, open), ' ');
+    at = shut + 1;
+  }
+
+  out.push(html.slice(at));
+  return out.join('');
+}
+
+/**
+ * Where a tag next appears, ignoring case, without copying the document to find out.
+ *
+ * `html.toLowerCase().indexOf(...)` is the obvious way and is two separate mistakes. It builds
+ * a whole lowercase copy of the input on every call, which is the quadratic cost this rewrite
+ * exists to remove, arriving by a third road. And lowercasing can change a string's length —
+ * `'İ'.toLowerCase()` is two characters — so an index found in the copy can point somewhere
+ * else in the original, which is a wrong answer rather than a slow one.
+ */
+function findTag(html: string, tag: string, from: number): number {
+  for (let at = html.indexOf('<', from); at !== -1; at = html.indexOf('<', at + 1)) {
+    if (html.slice(at, at + tag.length).toLowerCase() === tag) return at;
+  }
+  return -1;
 }

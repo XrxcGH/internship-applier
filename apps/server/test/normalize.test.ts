@@ -589,6 +589,55 @@ describe('reading HTML out of a feed', () => {
    * Greenhouse adapter's own ordering is pinned in sources.test.ts, where the adapter is
    * actually driven.
    */
+  /**
+   * A page that is one long run of `<` used to freeze the server for as long as it took.
+   *
+   * `/<[^>]+>/g` backtracked: at every `<` it ran to the end of the input looking for a
+   * `&gt;`, failed, and gave back a character at a time. Measured before the rewrite — 10 KB of
+   * `<` took 61ms, 20 KB 221ms, 40 KB 909ms and 80 KB EIGHTEEN SECONDS. This is pointed at
+   * whatever a fetch returned, Node is single-threaded, and no timeout can fire to end it
+   * because a timeout needs the event loop too.
+   *
+   * The bound is loose: it is not measuring speed, it is asserting the cost is no longer
+   * quadratic. The old code needed eighteen seconds for the first of these.
+   */
+  it('reads a megabyte of hostile markup without stopping the server', () => {
+    for (const hostile of [
+      '<'.repeat(1024 * 1024),
+      '<script'.repeat(150_000),
+      '<style'.repeat(170_000),
+      '<meta '.repeat(170_000),
+      '<p'.repeat(500_000),
+    ]) {
+      const started = Date.now();
+      stripHtml(hostile);
+      expect(Date.now() - started, `${hostile.slice(0, 8)}...`).toBeLessThan(4000);
+    }
+  });
+
+  /**
+   * The passes have to stay in this order and stay separate.
+   *
+   * A first attempt at the rewrite folded them into one scan, and 1,150 of 20,000 generated
+   * documents came out different. Removing `<br>` BEFORE the general tag pass is what stops a
+   * stray `<` swallowing it — otherwise the general pass reads `< b<br/` as a single tag and
+   * takes the line break with it.
+   */
+  it('keeps the parts of a document a stray angle bracket used to be able to eat', () => {
+    expect(stripHtml('a < b<br/>')).toBe('a < b');
+    expect(stripHtml('trailing <')).toBe('trailing <');
+    expect(stripHtml('<unclosed')).toBe('<unclosed');
+    // `<>` is not a tag: the old pattern needed at least one character between the brackets.
+    expect(stripHtml('a<>b')).toBe('a<>b');
+    // An opener with no closer is left where it was found, markup and all.
+    expect(stripHtml('<style>.a{color:red}')).toBe('.a{color:red}');
+    expect(stripHtml('<style>.a{color:red}</style>x')).toBe('x');
+    // Case is ignored, and `<scriptural>` opens a script span because the pattern this
+    // replaced had no word boundary either.
+    expect(stripHtml('<SCRIPT>x</SCRIPT>y')).toBe('y');
+    expect(stripHtml('a<scriptural>b</script>c')).toBe('a c');
+  });
+
   it('an escaped document decoded first has no markup left after stripping', () => {
     const escaped =
       '&lt;p&gt;About the role&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;/ul&gt;';

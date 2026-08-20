@@ -450,3 +450,65 @@ describe('a redirect leaving the origin the caller named', () => {
     expect(requests).toBeLessThanOrEqual(6);
   });
 });
+
+/**
+ * How much of an answer this is willing to hold.
+ *
+ * `res.text()` reads until the connection closes, and the host decides when that is. Nothing
+ * capped it, so a page that streams for as long as it likes was read for as long as it likes.
+ * The addresses reaching this function are not chosen by a person — a board feed's row, a
+ * model's answer to a web search, a link pasted into the manual box — so "a real host would
+ * not do that" is not an argument available here.
+ */
+describe('a response that will not stop arriving', () => {
+  /** A host that streams far past any cap, in chunks, the way a real one would. */
+  async function endlessHost(totalBytes: number): Promise<string> {
+    const server = createServer((req, res) => {
+      if ((req.url ?? '') === '/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('User-agent: *\nAllow: /\n');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html' });
+      const chunk = 'x'.repeat(64 * 1024);
+      let sent = 0;
+      const pump = (): void => {
+        while (sent < totalBytes) {
+          sent += chunk.length;
+          if (!res.write(chunk)) {
+            res.once('drain', pump);
+            return;
+          }
+        }
+        res.end();
+      };
+      pump();
+    });
+    running.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    return `http://127.0.0.1:${String(address.port)}`;
+  }
+
+  it('gives up rather than reading a body without end', async () => {
+    const origin = await endlessHost(256 * 1024 * 1024);
+    const started = Date.now();
+
+    await expect(politeFetch(`${origin}/huge`, { rps: 100 })).rejects.toThrow(/not a download/);
+    // It has to stop at the cap, not read all 256MB and complain afterwards.
+    expect(Date.now() - started).toBeLessThan(15_000);
+  }, 30_000);
+
+  it('refuses rather than truncating, because half a posting reads as a whole one', async () => {
+    // A requirement that decides whether a student is eligible can sit in the half that would
+    // have been dropped, and nothing downstream would know a word was missing.
+    const origin = await endlessHost(256 * 1024 * 1024);
+    await expect(politeFetch(`${origin}/huge`, { rps: 100 })).rejects.toBeInstanceOf(HttpError);
+  }, 30_000);
+
+  it('does not disturb a response of an ordinary size', async () => {
+    const origin = await host(() => ({ status: 200, body: '<p>A normal posting</p>' }));
+    expect(await politeFetch(`${origin}/job/1`, { rps: 100 })).toBe('<p>A normal posting</p>');
+  });
+});

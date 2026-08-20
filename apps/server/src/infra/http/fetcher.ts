@@ -43,6 +43,65 @@ const robots = new Map<string, RobotsEntry>();
 const MAX_CACHE_ENTRIES = 500;
 
 /**
+ * How much of a response this will hold in memory before giving up on it.
+ *
+ * `res.text()` reads until the connection closes, and a host decides when that is. Nothing
+ * here capped it, so a page that streams for as long as it likes was read for as long as it
+ * likes: memory first, then whatever the body gets handed to. The addresses this fetches are
+ * not chosen by a person — a board feed's row, a model's answer to a web search, a link pasted
+ * into the manual box — so "the host would not do that" is not an argument available here.
+ *
+ * 16 MB is far above any real posting or board feed; the largest thing this legitimately
+ * reads is a whole Greenhouse board, a few megabytes of JSON. robots.txt gets its own much
+ * smaller number, because a robots file that is not a few kilobytes is not a robots file.
+ */
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
+const MAX_ROBOTS_BYTES = 512 * 1024;
+
+/**
+ * The body, or a refusal — never the first N bytes passed off as the whole thing.
+ *
+ * Truncating would hand a half-read posting to the parsers with nothing anywhere saying a
+ * word was missing, and a requirement that decides whether a student is eligible could sit in
+ * the half that was dropped. The stream is cancelled on the way out so the socket closes
+ * rather than being left to run.
+ *
+ * `Response.text()` decodes as UTF-8 whatever the charset header says — that is what the
+ * Fetch standard specifies — so decoding that way here changes nothing about the result.
+ */
+async function readCapped(res: Response, limit: number, url: string): Promise<string> {
+  const body = res.body;
+  if (!body) return '';
+
+  const decoder = new TextDecoder('utf-8');
+  const reader = body.getReader();
+  let read = 0;
+  let out = '';
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      read += value.byteLength;
+      if (read > limit) {
+        throw new HttpError(
+          `The response was over ${String(Math.round(limit / 1024 / 1024))}MB and was not read. ` +
+            'A job posting is a page, not a download.',
+          508,
+          url,
+          { retryable: false },
+        );
+      }
+      out += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+
+  return out + decoder.decode();
+}
+
+/**
  * A cached body, if it is still worth having.
  *
  * Past the TTL an entry earns its keep only through its validators: an etag or a
@@ -280,7 +339,8 @@ async function disallowedPaths(origin: string): Promise<Robots> {
       let applies = false;
       let inGroup = false;
 
-      for (const raw of (await res.text()).split('\n')) {
+      const robots = await readCapped(res, MAX_ROBOTS_BYTES, `${origin}/robots.txt`);
+      for (const raw of robots.split('\n')) {
         const line = raw.split('#')[0]!.trim();
         if (!line) continue;
         const [k, ...rest] = line.split(':');
@@ -524,7 +584,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
 
       if (!res.ok) throw new HttpError(`${res.status} ${res.statusText}`, res.status, url);
 
-      const body = await res.text();
+      const body = await readCapped(res, MAX_BODY_BYTES, url);
       if (opts.jsonBody === undefined) {
         rememberResponse(url, {
           body,
