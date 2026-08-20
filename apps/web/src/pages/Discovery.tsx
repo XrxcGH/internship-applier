@@ -643,9 +643,19 @@ export function Discovery({
           >
             {busy === 'Searching'
               ? 'Searching…'
-              : `Search ${targets.length} ${targets.length === 1 ? 'target' : 'targets'}`}
+              : targets.length === 0
+                ? 'Search'
+                : `Search ${targets.length} ${targets.length === 1 ? 'target' : 'targets'}`}
           </Button>
-          {blocked && <span className="text-faint text-[0.9375rem]">{blocked}</span>}
+          {/* Only once there IS a list. With an empty one, the card above, a button reading
+              "Search 0 targets" and this span all said the same thing three ways, two of them
+              listing overlapping fixes. `whyCannotRun` still drives `disabled` either way —
+              this hides the sentence, not the rule — and the two blockers the card cannot
+              express, a missing board name and the 200-target ceiling, still print verbatim
+              exactly when they apply. */}
+          {blocked && targets.length > 0 && (
+            <span className="text-faint text-[0.9375rem]">{blocked}</span>
+          )}
         </div>
 
         <p className="text-faint u-prose mt-4 text-[0.9375rem]">

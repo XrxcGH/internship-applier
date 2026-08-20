@@ -2,7 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { HealthResponse } from '@ia/shared';
 import { fetchHealth } from './lib/api';
-import { Field, Nav, Page, RunningHead, Section, type View } from './components/Chrome';
+import {
+  Field,
+  Nav,
+  Page,
+  RunningHead,
+  Section,
+  type ProfileStatus,
+  type View,
+} from './components/Chrome';
 import { Badge, Button, Notice } from './components/Controls';
 import { Onboarding } from './pages/Onboarding';
 import { Discovery } from './pages/Discovery';
@@ -83,7 +91,36 @@ export function App() {
 
   useEffect(refresh, [refresh]);
 
-  const confirmed = state.kind === 'ready' && state.health.profileConfirmed;
+  /**
+   * The four states the nav needs told apart. `confirmed` stays a boolean for the Home
+   * button, which genuinely only cares whether G1 is done.
+   */
+  const profile: ProfileStatus =
+    state.kind === 'loading'
+      ? 'checking'
+      : state.kind === 'error'
+        ? 'unreachable'
+        : state.health.profileConfirmed
+          ? 'confirmed'
+          : 'unconfirmed';
+  const confirmed = profile === 'confirmed';
+
+  /**
+   * The way back from a failed health check.
+   *
+   * `refresh` is a `useCallback(…, [])` wired to one `useEffect`, so a single failed fetch
+   * pinned the app for the life of the tab — with four nav destinations greyed out and no
+   * control anywhere to ask again. Settings already learned this lesson and put a "Try again"
+   * inside its error banner; the landing screen is the one place it was not applied.
+   *
+   * The loading reset lives HERE and not inside `refresh` itself: `Onboarding`'s `onDone`
+   * calls refresh too, and flipping to 'loading' there would drop `confirmed` and re-lock the
+   * whole nav at the moment the queue mounts.
+   */
+  const retry = useCallback(() => {
+    setState({ kind: 'loading' });
+    refresh();
+  }, [refresh]);
 
   const body = (): ReactNode => {
     if (view === 'setup') {
@@ -122,12 +159,20 @@ export function App() {
     if (view === 'applications') return <Applications onBack={() => setView('queue')} />;
     if (view === 'tracker') return <Tracker />;
     if (view === 'settings') return <Settings />;
-    return <Home state={state} confirmed={confirmed} onNavigate={setView} />;
+    return (
+      <Home
+        state={state}
+        confirmed={confirmed}
+        profile={profile}
+        onNavigate={setView}
+        onRetry={retry}
+      />
+    );
   };
 
   return (
     <>
-      <Nav view={view} onNavigate={setView} profileConfirmed={confirmed} busy={busy} />
+      <Nav view={view} onNavigate={setView} profile={profile} busy={busy} />
       {body()}
     </>
   );
@@ -136,17 +181,22 @@ export function App() {
 function Home({
   state,
   confirmed,
+  profile,
   onNavigate,
+  onRetry,
 }: {
   state: State;
   confirmed: boolean;
+  profile: ProfileStatus;
   onNavigate: (v: View) => void;
+  /** Asks the server again after a failed health check. See `retry` in App. */
+  onRetry: () => void;
 }) {
   return (
     <Page wide>
       <RunningHead
         section="A working dossier"
-        gate={confirmed ? undefined : 'G1'}
+        gate={profile === 'unconfirmed' ? 'G1' : undefined}
         lede={
           <>
             Every filter decision here quotes the job description that caused it. Every drafted
@@ -159,7 +209,7 @@ function Home({
       {/* The status panel is a short list and the gates need room, so they sit side by
           side rather than stacking down the middle of a laptop screen. */}
       <div className="grid gap-x-14 lg:grid-cols-[24rem_minmax(0,1fr)]">
-        <Section n="01" title="Server" step={4}>
+        <Section n="01" title="Where to start" step={4}>
           {state.kind === 'loading' && <p className="text-dim a-pulse">Checking the server…</p>}
 
           {state.kind === 'error' && (
@@ -171,22 +221,35 @@ function Home({
               <p className="text-dim mt-4">
                 Start it with <span className="u-data">npm run dev</span>.
               </p>
+              {/* Without this the app is pinned for the life of the tab: the health fetch
+                  runs from one useEffect with a stable callback, so nothing asks again. */}
+              <div className="mt-4">
+                <Button onClick={onRetry}>Try again</Button>
+              </div>
             </div>
           )}
 
           {state.kind === 'ready' && (
             <>
+              {/* A dead database inside a 200 answer, which the redline branch above
+                  cannot catch: it is gated on the fetch or the parse failing, and
+                  `db: { connected: false }` parses perfectly well. Deleting the old
+                  "Ledger" row without this would leave that state reported nowhere. */}
+              {!state.health.db.connected && (
+                <Notice tone="redline">
+                  <strong>The local database is not answering.</strong> Nothing you do here will be
+                  saved.
+                </Notice>
+              )}
+              {/* Runtime, uptime and a table count used to sit here, above everything else on
+                  the first screen of the app: a health-check readout served to a student
+                  before they were told what to do. So did a "Status" row that could only ever
+                  read "ok" — the shared schema types it `z.literal('ok')`, so any other
+                  answer fails the parse and lands in the error branch above instead.
+
+                  The profile row stays. It is not the nav pill in miniature: that reads
+                  local/setup rather than confirmed, and it is hidden below the sm breakpoint. */}
               <div className="u-card-flat divide-rule/60 divide-y px-5 py-2">
-                <Field label="Status" value={state.health.status} tone="var(--verified)" />
-                <Field label="Runtime" value={state.health.node} />
-                <Field label="Uptime" value={`${state.health.uptimeSeconds}s`} />
-                <Field
-                  label="Ledger"
-                  value={
-                    state.health.db.connected ? `${state.health.db.tables} tables` : 'disconnected'
-                  }
-                  tone={state.health.db.connected ? undefined : 'var(--redline)'}
-                />
                 <Field
                   label="Profile"
                   value={state.health.profileConfirmed ? 'confirmed' : 'not yet established'}

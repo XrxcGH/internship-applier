@@ -1,5 +1,12 @@
 import type { ReactNode } from 'react';
 
+/**
+ * What the app knows about the profile — including that it does not know yet, and that it
+ * could not ask. Collapsing the last two into `false` is what made the nav blame G1 for an
+ * unreachable server.
+ */
+export type ProfileStatus = 'checking' | 'unreachable' | 'unconfirmed' | 'confirmed';
+
 export type View =
   'home' | 'setup' | 'discovery' | 'queue' | 'applications' | 'tracker' | 'voice' | 'settings';
 
@@ -21,12 +28,12 @@ interface NavItem {
 export function Nav({
   view,
   onNavigate,
-  profileConfirmed,
+  profile,
   busy,
 }: {
   view: View;
   onNavigate: (v: View) => void;
-  profileConfirmed: boolean;
+  profile: ProfileStatus;
   /** What the current screen is in the middle of, if anything. See below. */
   busy?: string | null;
 }) {
@@ -47,8 +54,24 @@ export function Nav({
    * way that is not the browser's back button.
    */
   const running = busy ? `${busy} — wait for it to finish, or reload to abandon it.` : undefined;
+  /**
+   * Four states, not a boolean, because two of them were being told to fix the wrong thing.
+   *
+   * `profileConfirmed` was derived from the health fetch, so a server that could not be
+   * reached — or had not answered yet — collapsed into "not confirmed", and four nav
+   * destinations greyed out under "Confirm your profile first (gate G1)" for a returning user
+   * whose profile has been confirmed for weeks. The instruction was impossible to act on and
+   * named the wrong cause.
+   */
   const locked =
-    running ?? (profileConfirmed ? undefined : 'Confirm your profile first (gate G1).');
+    running ??
+    (profile === 'confirmed'
+      ? undefined
+      : profile === 'unconfirmed'
+        ? 'Confirm your profile first (gate G1).'
+        : profile === 'checking'
+          ? 'Still asking the server.'
+          : 'The server is not answering, so nothing here is live.');
 
   const items: NavItem[] = [
     { id: 'home', label: 'Overview', blocked: running },
@@ -66,7 +89,7 @@ export function Nav({
 
   return (
     <nav className="u-nav sticky top-0 z-30">
-      <div className="mx-auto flex max-w-[110rem] items-center gap-6 px-5 sm:px-8 lg:px-12">
+      <div className="mx-auto flex max-w-[88rem] items-center gap-6 px-5 sm:px-8 lg:px-12">
         <button
           onClick={() => onNavigate('home')}
           className="u-eyebrow hover:text-ink shrink-0 py-3 transition-colors"
@@ -103,15 +126,30 @@ export function Nav({
           ))}
         </div>
 
+        {/* Says which of the four states it is in, rather than reading "setup" at a
+            returning user whose profile is confirmed and whose server is simply down. */}
         <span
           className="u-data hidden shrink-0 items-center gap-2 py-3 text-[0.75rem] tracking-widest uppercase sm:flex"
-          style={{ color: profileConfirmed ? 'var(--verified)' : 'var(--caution)' }}
+          style={{
+            color:
+              profile === 'confirmed'
+                ? 'var(--verified)'
+                : profile === 'unreachable'
+                  ? 'var(--redline)'
+                  : 'var(--caution)',
+          }}
         >
           <span
             className="inline-block h-1.5 w-1.5 rounded-full"
             style={{ background: 'currentColor' }}
           />
-          {profileConfirmed ? 'local' : 'setup'}
+          {profile === 'confirmed'
+            ? 'local'
+            : profile === 'unconfirmed'
+              ? 'setup'
+              : profile === 'checking'
+                ? 'checking'
+                : 'offline'}
         </span>
       </div>
     </nav>
@@ -188,12 +226,19 @@ export function Field({ label, value, tone }: { label: string; value: string; to
  * harder to read than a narrow one. The fix is not a narrow page with empty margins,
  * it is a wide page whose prose blocks carry `u-prose` and whose panels sit side by
  * side. Widths are in rem, so they scale with the root type size.
+ *
+ * Both numbers came down, because the frame had outgrown anything put in it. At 110rem and
+ * an 18px root the frame was 1980px, while the widest thing most of these pages hold is a
+ * 68ch prose column at 780px and at most a two-column grid — so on a wide monitor a
+ * paragraph sat 54px from the left edge with 1146px of nothing to its right, which reads as
+ * text pinned to one side of the screen rather than as an asymmetric measure. The measure
+ * itself is unchanged and still capped by `u-prose`: it is the empty half that went.
  */
 export function Page({ children, wide }: { children: ReactNode; wide?: boolean }) {
   return (
     <div
       className={`mx-auto px-5 py-10 sm:px-8 sm:py-14 lg:px-12 ${
-        wide ? 'max-w-[110rem]' : 'max-w-[78rem]'
+        wide ? 'max-w-[88rem]' : 'max-w-[64rem]'
       }`}
     >
       {children}

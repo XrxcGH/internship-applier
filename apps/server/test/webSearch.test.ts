@@ -63,6 +63,7 @@ vi.mock('../src/core/discovery/manualPosting', () => ({
         atsVendor: 'unknown',
       },
       usedJsonLd: true,
+      namedByJsonLd: { title: true, company: true },
       notes: [],
     };
   }),
@@ -99,12 +100,36 @@ describe('isAggregatorUrl', () => {
     }
   });
 
+  it('recognises them on their country domains too, which the .com list did not', () => {
+    // Every entry used to be a .com host matched by equality or dot-suffix, so these were
+    // not dropped — they were FETCHED, and a robots.txt refusal then landed in the count of
+    // pages that could not be read rather than in the policy-refusal count the sift keeps
+    // separate on purpose.
+    for (const url of [
+      'https://www.glassdoor.co.uk/job-listing/x',
+      'https://www.monster.de/jobs/1',
+      'https://linkedin.cn/jobs/view/1',
+      'https://au.indeed.com.au/viewjob?jk=x',
+      'https://uk.talent.com/view?id=1',
+    ]) {
+      expect(isAggregatorUrl(url), url).toBe(true);
+    }
+  });
+
   it('does not read a company that merely contains the word', () => {
-    // Host-suffix matching, not substring: monster.com is refused, monsterenergy.com and
-    // notlinkedin.example are somebody's own sites.
+    // The registrable brand, not a substring and not any label: monster.com is refused,
+    // monsterenergy.com and notlinkedin.example are somebody's own sites.
     expect(isAggregatorUrl('https://careers.monsterenergy.com/jobs/1')).toBe(false);
     expect(isAggregatorUrl('https://notlinkedin.example/jobs/1')).toBe(false);
     expect(isAggregatorUrl('https://boards.greenhouse.io/acme/jobs/1')).toBe(false);
+  });
+
+  it('does not drop an employer whose SUBDOMAIN happens to be a brand on the list', () => {
+    // The trap in matching any label: "talent" is on the list, and talent.acme.com is an
+    // ordinary careers subdomain. Dropping it would lose the employer's own page and report
+    // the loss to the student as a policy refusal — a false statement about somebody's terms.
+    expect(isAggregatorUrl('https://talent.acme.com/jobs/1')).toBe(false);
+    expect(isAggregatorUrl('https://indeed.acme.com/careers')).toBe(false);
   });
 });
 
@@ -254,6 +279,7 @@ describe('naming a posting whose page states none', () => {
         title: 'Untitled posting',
       } as never,
       usedJsonLd: false,
+      namedByJsonLd: { title: false, company: false },
       notes: [],
     });
     h.answer = {

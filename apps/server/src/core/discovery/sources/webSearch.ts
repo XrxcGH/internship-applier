@@ -29,32 +29,83 @@ import { fetchManualPosting } from '../manualPosting';
 import type { JobSource, NormalizedPosting, SourceQuery, SourceResult } from './types';
 
 /**
- * Boards whose terms prohibit automated access, matched by host suffix.
+ * Boards whose terms prohibit automated access, matched at the registrable brand.
  *
  * The prompt already tells the model not to return these; this is the belt to that promise's
  * braces, because a model instruction is a request and this list is a rule. A candidate that
  * lands here is dropped before any fetch is attempted — the robots check would refuse it
  * anyway, but refusing it without the request is both faster and politer.
+ *
+ * Brands rather than hosts: see `registrableBrand` for why the previous `.com`-only list left
+ * every one of these boards reachable on its country domain.
  */
-export const AGGREGATOR_HOSTS = [
-  'linkedin.com',
-  'indeed.com',
-  'glassdoor.com',
-  'ziprecruiter.com',
-  'joinhandshake.com',
-  'handshake.com',
-  'monster.com',
-  'simplyhired.com',
-  'lensa.com',
-  'jobrapido.com',
-  'talent.com',
-  'bebee.com',
+export const AGGREGATOR_BRANDS = [
+  'linkedin',
+  'indeed',
+  'glassdoor',
+  'ziprecruiter',
+  'joinhandshake',
+  'handshake',
+  'monster',
+  'simplyhired',
+  'lensa',
+  'jobrapido',
+  'talent',
+  'bebee',
 ];
+
+/**
+ * Public suffixes that take two labels, so the registrable name is the third from the right.
+ *
+ * Deliberately short: it covers the country domains these particular boards actually run, and
+ * a name that is not here is simply matched one label in, which is right for every ordinary
+ * TLD. A full public-suffix list is a dependency and a download, and being wrong about
+ * `glassdoor.co.uk` was the entire bug.
+ */
+const TWO_LABEL_SUFFIXES = new Set([
+  'co.uk',
+  'co.jp',
+  'co.in',
+  'co.nz',
+  'co.za',
+  'com.au',
+  'com.br',
+  'com.mx',
+  'com.sg',
+  'com.hk',
+]);
+
+/**
+ * The brand a hostname is registered under: the label immediately left of its public suffix.
+ *
+ * Matched here rather than by host suffix, which is what this did and which only ever
+ * covered `.com`. Every entry in the list was a `.com` host compared by equality or
+ * dot-suffix, so `glassdoor.co.uk`, `monster.de` and `linkedin.cn` were not recognised as
+ * aggregators at all: they were not dropped, they were fetched, and when robots.txt refused
+ * them the refusal was counted as a page that could not be read rather than as the policy
+ * refusal the sift exists to isolate. This file calls the list "the belt to that promise's
+ * braces, because a model instruction is a request and this list is a rule" — a rule with a
+ * hole in it for every country these boards operate in.
+ *
+ * NOT `hostname.split('.').includes(brand)`: `talent` is on the list, and `talent.acme.com`
+ * is an ordinary careers subdomain. That test would drop an employer's own page AND report
+ * it to the user as a policy refusal.
+ */
+function registrableBrand(hostname: string): string | null {
+  // The trailing dot of a fully-qualified name, and only that: an unescaped `.` here matched
+  // any last character and quietly ate the final letter of every hostname, so "co.uk" arrived
+  // as "co.u" and no two-label suffix was ever recognised.
+  const labels = hostname.toLowerCase().replace(/\.$/, '').split('.');
+  if (labels.length < 2) return null;
+  const lastTwo = labels.slice(-2).join('.');
+  const index = TWO_LABEL_SUFFIXES.has(lastTwo) ? labels.length - 3 : labels.length - 2;
+  return index >= 0 ? (labels[index] ?? null) : null;
+}
 
 export function isAggregatorUrl(url: string): boolean {
   if (!URL.canParse(url)) return false;
-  const host = new URL(url).hostname.toLowerCase();
-  return AGGREGATOR_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  const brand = registrableBrand(new URL(url).hostname);
+  return brand !== null && AGGREGATOR_BRANDS.includes(brand);
 }
 
 export interface Candidate {
@@ -293,29 +344,34 @@ export const webSearch: JobSource = {
     let namedBySearch = 0;
     for (const candidate of sift.candidates) {
       try {
-        const { posting, usedJsonLd } = await fetchManualPosting(candidate.url);
+        const { posting, namedByJsonLd } = await fetchManualPosting(candidate.url);
         /**
          * The search result's naming, but only where the page itself stated none.
          *
          * The page stays the authority on every fact — description, dates, pay, location —
-         * and a page that carries structured data keeps its own naming outright. What this
+         * and a field the structured data actually filled keeps its own value outright. Per
+         * FIELD, not per page: a JobPosting node with a description and no hiringOrganization
+         * reports usedJsonLd true while its company is a hostname fragment, and gating on the
+         * page-level flag skipped the repair because some other field was structured. What this
          * repairs is the JS-rendered page whose raw HTML names nothing: the reader fell back
          * to "Untitled posting" and a vendor hostname fragment, which is strictly less true
          * than the title the search index showed the model. G2 puts the real page in front
          * of the user before anything else happens either way.
          */
-        if (!usedJsonLd) {
-          let renamed = false;
-          if (isFurnitureTitle(posting.title) && candidate.title !== '') {
-            posting.title = candidate.title;
-            renamed = true;
-          }
-          if (isHostFragment(posting.company, candidate.url) && candidate.company !== '') {
-            posting.company = candidate.company;
-            renamed = true;
-          }
-          if (renamed) namedBySearch++;
+        let renamed = false;
+        if (!namedByJsonLd.title && isFurnitureTitle(posting.title) && candidate.title !== '') {
+          posting.title = candidate.title;
+          renamed = true;
         }
+        if (
+          !namedByJsonLd.company &&
+          isHostFragment(posting.company, candidate.url) &&
+          candidate.company !== ''
+        ) {
+          posting.company = candidate.company;
+          renamed = true;
+        }
+        if (renamed) namedBySearch++;
         postings.push(posting);
       } catch (err) {
         const host = URL.canParse(candidate.url) ? new URL(candidate.url).hostname : candidate.url;

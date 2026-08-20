@@ -247,10 +247,10 @@ export function AnswerReview({
                 onChange={(e) => setText(e.target.value)}
                 rows={Math.max(8, Math.ceil(text.length / 70) + 2)}
                 autoFocus
-                className="border-rule focus:border-accent w-full resize-y rounded border bg-transparent p-4 leading-relaxed outline-none transition-colors"
+                className="border-rule focus:border-accent u-prose w-full resize-y rounded border bg-transparent p-4 outline-none transition-colors"
               />
             ) : (
-              <p className="text-[1.125rem] leading-[1.8] whitespace-pre-wrap">
+              <p className="u-prose text-[1.125rem] whitespace-pre-wrap">
                 {segments.map((s, i) =>
                   s.index === null ? (
                     <span key={i}>{s.text}</span>
