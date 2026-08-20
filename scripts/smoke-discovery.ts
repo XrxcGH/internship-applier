@@ -29,6 +29,10 @@ const TARGETS: Array<{ source: string; board: string }> = [
   { source: 'github_list', board: '' },
   { source: 'adzuna', board: '' },
   { source: 'usajobs', board: '' },
+  // Spends ONE model call when model access exists (CLI signed in, or an API key). That is
+  // the only way to smoke the tier that searches the live web, and this script is run by
+  // hand, rarely, for exactly this kind of question.
+  { source: 'web_search', board: '' },
 ];
 
 /**

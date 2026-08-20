@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  accessBadge,
   addManualPosting,
   availableSources,
   boardMeaning,
@@ -310,9 +311,7 @@ export function Discovery({
                 {sources.map((s) => (
                   <li key={s.name} className="flex items-center justify-between gap-4 py-2.5">
                     <span className="text-[1rem]">{sourceLabel(s.name)}</span>
-                    <Badge tone={s.configured ? 'verified' : 'caution'}>
-                      {!s.requiresKey ? 'no key needed' : s.configured ? 'key set' : 'no key'}
-                    </Badge>
+                    <Badge tone={s.configured ? 'verified' : 'caution'}>{accessBadge(s)}</Badge>
                   </li>
                 ))}
               </ul>
@@ -527,8 +526,19 @@ export function Discovery({
                     {
                       source: s.name,
                       board: '',
-                      reason: 'keyword search',
-                      keywords: plan?.keywords ?? [],
+                      // Web search costs a model call and the button says so, because a
+                      // reason that reads like the free ones would hide the one difference
+                      // that matters. Its brief also leads with the plan's term token —
+                      // "summer 2027 internship" is most of what makes a web search find
+                      // THIS cycle's postings rather than last year's.
+                      reason:
+                        s.name === 'web_search'
+                          ? 'a live web search through your model access — one model call'
+                          : 'keyword search',
+                      keywords:
+                        s.name === 'web_search'
+                          ? [...(plan?.termTokens.slice(0, 1) ?? []), ...(plan?.keywords ?? [])]
+                          : (plan?.keywords ?? []),
                       location: plan?.locations[0],
                     },
                   ])

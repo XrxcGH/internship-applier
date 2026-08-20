@@ -35,6 +35,17 @@ export interface GenerateRequest {
   schema?: { name: string; jsonSchema: Record<string, unknown> };
   /** Absolute paths to documents the model must read (resume PDFs). */
   documents?: string[];
+  /**
+   * Let the model search the live web while it answers.
+   *
+   * This is discovery's Tier B (docs/04): the model runs searches and returns candidate
+   * posting URLs, and everything it names is then fetched by THIS process through the
+   * polite, robots-respecting fetcher — the model's word is never stored as a fact. On the
+   * CLI path this grants the WebSearch tool; on the API path it attaches the server-side
+   * web-search tool. Anthropic's infrastructure does the searching either way, so no search
+   * engine is scraped and no extra key is needed.
+   */
+  webSearch?: boolean;
 }
 
 export interface GenerateResult {

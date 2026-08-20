@@ -9,6 +9,7 @@
 import { config } from '../../config';
 import { logger } from '../logger';
 import { apiBackend } from './apiBackend';
+import { hasApiKey } from './client';
 import { claudeCliBackend } from './claudeCli';
 import {
   NoModelAccessError,
@@ -52,6 +53,24 @@ export async function resolveBackend(): Promise<Backend | null> {
 /** Forget the cached choice, so installing the CLI takes effect without a restart. */
 export function resetBackend(): void {
   resolved = null;
+}
+
+/**
+ * Whether model access probably exists, answered synchronously.
+ *
+ * `JobSource.isConfigured()` is sync — every other source answers it by reading an env var —
+ * and the web-search source's real answer lives behind the async backend probe. This is the
+ * best sync approximation: a provider switched off is a firm no, an API-only setup is as firm
+ * as the key's presence, and a CLI that has not been probed yet is a yes until a real call
+ * proves otherwise. Optimism is the safe direction here because the only thing this gates is
+ * whether a button is offered; the fetch itself asks `generate()`, which tells the truth, and
+ * the run report carries that truth to the user.
+ */
+export function modelAccessLikely(): boolean {
+  if (config.llm.provider === 'none') return false;
+  if (resolved) return true;
+  if (config.llm.provider === 'api') return hasApiKey();
+  return true;
 }
 
 export interface ModelAccess {

@@ -64,6 +64,12 @@ function modelFor(purpose: GenerateRequest['purpose']): string {
     case 'resume_extraction':
     case 'requirement_extraction':
       return MODELS.extraction;
+    // Web discovery is judgment-light on purpose: the model's only job is to run searches
+    // and hand back candidate URLs, and every page it names is then fetched and parsed by
+    // this process's own deterministic readers. A bad candidate costs one wasted fetch,
+    // which the run report counts out loud — not a wrong fact in the queue. The cheap
+    // model does that fine, and a discovery run may make this call often.
+    case 'web_discovery':
     case 'field_classification':
       return MODELS.classification;
     case 'fact_guard':
@@ -111,6 +117,16 @@ export const apiBackend: Backend = {
                 schema: req.schema.jsonSchema,
               },
             },
+          }
+        : {}),
+      // The server-side web-search tool: Anthropic's own infrastructure runs the searches,
+      // so nothing here scrapes a search engine and no extra key is involved. Capped so a
+      // single discovery call cannot run away with the bill — each use is billed.
+      ...(req.webSearch
+        ? {
+            tools: [
+              { type: 'web_search_20250305' as const, name: 'web_search' as const, max_uses: 8 },
+            ],
           }
         : {}),
       messages: [{ role: 'user' as const, content: await userContent(req) }],

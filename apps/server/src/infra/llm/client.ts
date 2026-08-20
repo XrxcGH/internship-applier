@@ -50,6 +50,7 @@ export type LlmPurpose =
   | 'requirement_extraction'
   | 'field_classification'
   | 'answer_draft'
+  | 'web_discovery'
   | 'fact_guard'
   | 'style_critic'
   | 'rationale';

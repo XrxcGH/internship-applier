@@ -23,11 +23,12 @@ programmatically; using them is what they're for.
 | RemoteOK / The Muse / Findwork | documented JSON endpoints | Free, remote-heavy. |
 | SimplifyJobs Summer internship lists | public GitHub repo README/JSON | Community-maintained, well-structured, explicitly published for this. |
 
-Eleven of those ship today: Greenhouse, Lever, Ashby, Workday, SmartRecruiters and
-Workable in `sources/ats.ts`, and Adzuna, USAJOBS, Arbeitnow, Remotive and the SimplifyJobs
-list (`github_list`) in `sources/aggregators.ts`. The rest are in the table because they
-qualify under this policy, not because an adapter exists — each is a small self-contained
-addition when someone wants it.
+Twelve of those ship today: Greenhouse, Lever, Ashby, Workday, SmartRecruiters and
+Workable in `sources/ats.ts`; Adzuna, USAJOBS, Arbeitnow, Remotive and the SimplifyJobs
+list (`github_list`) in `sources/aggregators.ts`; and the model-driven web search
+(`web_search`) in `sources/webSearch.ts` — Tier B below. The rest are in the table because
+they qualify under this policy, not because an adapter exists — each is a small
+self-contained addition when someone wants it.
 
 **What each host says about being read.** "Documented" is not the same as "welcome", and
 `robots.txt` is the most explicit machine-readable statement of intent a host publishes. All
@@ -47,18 +48,24 @@ reads a host that has asked it not to. Nobody has made that call deliberately; i
 down here rather than left implicit in a default, so that whoever decides it is deciding
 rather than inheriting.
 
-**Tier B — general web search + structured page data. Designed, not built.** The design: a
-search provider (Brave Search API or Google Programmable Search — key supplied by the user)
-returns candidate career-page URLs; we fetch each and read the embedded
-`schema.org/JobPosting` JSON-LD, which most ATS pages ship, falling back to Claude reading
-the page text where it is absent. `robots.txt`, the per-domain rate limit and the identifying
-User-Agent already exist in `infra/http` and would apply.
+**Tier B — the live web, searched through the user's own model access. Built.** The
+`web_search` source (`core/discovery/sources/webSearch.ts`) asks the model to search the web
+for postings matching the plan's brief — on the CLI path through Claude Code's WebSearch
+tool, on the API path through Anthropic's server-side web-search tool, so Anthropic's own
+search infrastructure runs the queries and no search engine is scraped and no extra key is
+needed. The model's answer is a list of **candidate URLs and nothing more**: every page it
+names is then fetched by this process through `fetchManualPosting` — the same polite,
+robots-respecting, JSON-LD-reading path a hand-pasted URL takes — so what gets stored is what
+the employer's page says, never what the model claims. The prompt demands the employer's own
+careers or ATS page; aggregator links that come back anyway are dropped and counted out loud
+(`siftCandidates`). Each run reads a bounded sample of candidates and its report says so —
+this tier samples what a search surfaces, it is not a complete sweep of anything.
 
-**None of the crawl exists.** No search provider is called anywhere in the server, and
-`BRAVE_SEARCH_API_KEY` in `.env.example` is read by nothing. The only JSON-LD reader that
-ships is `core/discovery/manualPosting.ts`, and it serves the manual path below — one
-user-directed fetch of a page the user is already looking at, not a walk over search
-results.
+It costs one model call per run, so nothing adds it silently: the query planner never plans
+it, a `source` row left by a previous run never becomes a plan chip for it, and the only way
+it enters a run is the Discover screen's button, whose label names the cost. The original
+design here named a search-provider key (Brave or Google); that was never built and no longer
+needs to be — `BRAVE_SEARCH_API_KEY` in `.env.example` is still read by nothing.
 
 **Tier C — not scraped.** LinkedIn, Indeed, Glassdoor, Handshake, and similar sites whose
 terms of service prohibit automated access, or whose listings sit behind authentication —

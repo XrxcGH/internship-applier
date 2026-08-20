@@ -246,7 +246,12 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       // that heuristic turned it into a permanent plan chip for a source that does not
       // exist — which the run endpoint then rejected outright. The cast that used to sit
       // on `source` hid exactly this mismatch from the type checker.
-      .filter((s) => s.label.includes(':') && s.kind in ALL_SOURCES)
+      // web_search is additionally excluded even though the runner knows it: its source
+      // row exists after any run that used it, and a chip born from that row would put a
+      // MODEL-SPENDING target into every future plan silently. It costs money each run, so
+      // only the Discover screen's button — a deliberate press, labelled with the cost —
+      // ever adds it.
+      .filter((s) => s.label.includes(':') && s.kind in ALL_SOURCES && s.kind !== 'web_search')
       .map((s) => ({
         source: s.kind as PlannedTarget['source'],
         // Everything after the FIRST colon, not the second field of a split: a Workday
