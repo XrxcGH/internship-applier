@@ -15,6 +15,19 @@ import { lookup } from 'node:dns/promises';
  * redirection anybody can define, so `internal.example.com` pointing at 127.0.0.1 defeats any
  * amount of string matching — which is the same reason `app.ts` checks the Host header rather
  * than trusting the bind address alone.
+ *
+ * WHAT IT DOES NOT STOP, STATED HERE RATHER THAN DISCOVERED LATER. This resolves the name
+ * itself and then hands the NAME to `fetch`, which resolves it again when it connects. Nothing
+ * pins the answer between the two. A host whose DNS the attacker controls can answer a public
+ * address to the lookup here and a private one to the connection a moment later — classic DNS
+ * rebinding — and the guard will have approved an address that was never used.
+ *
+ * Closing it means making the check and the connection share one resolution, which means
+ * supplying the connector: `fetch` in Node is undici, and a dispatcher built with
+ * `connect: { lookup }` would run the range test on the address actually dialled. That needs
+ * undici as a direct dependency, since Node does not expose the bundled copy, so it is a
+ * decision about the project rather than a change to this file — and until it is made, this
+ * paragraph is what stops the sentence above being read as a stronger promise than it is.
  */
 
 /**
