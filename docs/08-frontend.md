@@ -62,7 +62,7 @@ to the overview.
 
 ### Overview — `home`
 
-Whether a profile exists, the four gates stated plainly, and the milestone list. The entry
+Whether a profile exists and the four gates stated plainly. The entry
 point into G1 when no profile is established.
 
 The runtime string, an uptime counter and a table count used to head this screen, above

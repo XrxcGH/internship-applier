@@ -10,7 +10,12 @@ import {
   type DeletePreview,
   type ModelAccess,
 } from '../lib/api';
-import { listStoredSources, setSourceEnabled, type StoredSource } from '../lib/discovery';
+import {
+  listStoredSources,
+  setSourceEnabled,
+  whenLabel,
+  type StoredSource,
+} from '../lib/discovery';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Badge, Button, Empty, Notice, TextField } from '../components/Controls';
 
@@ -242,12 +247,17 @@ export function Settings() {
                 <li key={src.id} className="flex flex-wrap items-center justify-between gap-4 py-3">
                   <div className="min-w-0">
                     <span className="u-data text-[0.9375rem]">{src.label}</span>
-                    {/* The posting count and nothing else. `last_run_at` is on the table and
-                        no code in apps/server writes it, so every row would have read "never
-                        run" — a false statement about boards this machine has searched today,
-                        printed beside a true one. A column nobody fills is not a fact. */}
+                    {/* `last_run_at` is written by the runner now, for every target it actually
+                        searches — not per stored posting, so a board searched honestly that had
+                        nothing open still gets a date. It briefly was written by nothing at all,
+                        and this line read "never run" beside boards searched an hour earlier, so
+                        the absent case says plainly that nothing has searched it rather than
+                        implying a date it does not have. */}
                     <span className="text-faint ml-3 text-[0.875rem]">
                       {src.postings} {src.postings === 1 ? 'posting' : 'postings'} stored
+                      {src.lastRunAt
+                        ? ` · searched ${whenLabel(src.lastRunAt)}`
+                        : ' · not searched yet'}
                     </span>
                   </div>
                   <div className="flex shrink-0 items-center gap-3">

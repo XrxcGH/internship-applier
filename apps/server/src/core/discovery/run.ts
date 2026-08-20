@@ -125,6 +125,20 @@ export async function runDiscovery(
           keywords: target.keywords,
           location: target.location,
         });
+        /**
+         * Stamped on the way out of a successful fetch, for every target that was searched.
+         *
+         * `last_run_at` was declared on the table and read by `GET /api/sources`, and no code
+         * in this app ever wrote it — so the Settings list would have told the user "never
+         * run" about boards this machine had searched an hour earlier. Here rather than in
+         * `ensureSource`, which fires once per PERSISTED POSTING: a board searched honestly
+         * that had nothing open would never have been stamped, which is the opposite of what
+         * "last searched" means and the case the column is most useful for.
+         */
+        db.update(schema.source)
+          .set({ lastRunAt: new Date().toISOString() })
+          .where(eq(schema.source.label, `${target.source}:${target.board}`))
+          .run();
         report.found = result.postings.length;
         report.notes = [...result.notes, ...(result.gaps ?? [])];
         // A source naming its own closed roles is the best evidence of a closure there is,

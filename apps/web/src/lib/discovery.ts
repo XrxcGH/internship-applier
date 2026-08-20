@@ -565,7 +565,7 @@ export interface StoredSource {
   kind: string;
   label: string;
   enabled: boolean;
-  /** On the table, written by nothing in apps/server — see the Settings comment. */
+  /** Stamped by the runner for every target it searches, results or not. Null until then. */
   lastRunAt: string | null;
   postings: number;
 }

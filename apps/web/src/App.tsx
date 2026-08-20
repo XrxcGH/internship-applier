@@ -11,7 +11,7 @@ import {
   type ProfileStatus,
   type View,
 } from './components/Chrome';
-import { Badge, Button, Notice } from './components/Controls';
+import { Button, Notice } from './components/Controls';
 import { Onboarding } from './pages/Onboarding';
 import { Discovery } from './pages/Discovery';
 import { Matches } from './pages/Matches';
@@ -47,21 +47,16 @@ const GATES = [
   { id: 'G4', label: 'Submit', note: 'You click Submit yourself, on the real page.', view: null },
 ];
 
-const MILESTONES = [
-  { id: 'M0', label: 'Skeleton', done: true },
-  { id: 'M1', label: 'Resume → profile', done: true },
-  // This read "Discovery (server only)" for as long as the endpoints existed with nothing
-  // in the interface calling them. `pages/Discovery.tsx` is that screen, so the qualifier
-  // goes — and if the screen is ever removed, the qualifier comes back rather than the row
-  // going on claiming a milestone the user cannot reach.
-  { id: 'M2', label: 'Discovery', done: true },
-  { id: 'M3', label: 'Matching', done: true },
-  { id: 'M4', label: 'Review queue', done: true },
-  { id: 'M5', label: 'Writing engine', done: true },
-  { id: 'M6', label: 'Form automation', done: true },
-  { id: 'M7', label: 'Tracker', done: true },
-  { id: 'M8', label: 'Hardening', done: true },
-];
+/**
+ * The build tracker that used to live on this screen is gone.
+ *
+ * Nine cards, M0 through M8, every one of them reading "done" — so the section carried no
+ * information even to the person who wrote it, and to a student looking for an internship it
+ * was a stranger's project plan occupying the third of the home page. What a milestone list
+ * answers is "is this finished", which the app answers better by working; what the user
+ * needs this screen for is the next thing to do. The gates above are the honest half of what
+ * this was trying to say, and they stay.
+ */
 
 export function App() {
   const [state, setState] = useState<State>({ kind: 'loading' });
@@ -303,50 +298,17 @@ function Home({
             })}
           </ol>
           <p className="text-faint u-prose mt-6">
-            <em>None of these can be switched off.</em> There is no endpoint that submits an
-            application for you, and that is asserted by a test, a lint rule, and a CI check rather
-            than by good intentions.
+            {/* The promise is the point and stays; the proof was in developer's terms. A
+                student does not know what a lint rule or a CI check is, and listing three of
+                them made the sentence about how the project is built rather than about what
+                the tool will not do to them. What survives is the fact and the reason it can
+                be relied on — that the capability is absent rather than merely switched off. */}
+            <em>None of these can be switched off.</em> Nothing in this tool can submit an
+            application — the ability was never built, so the last click on a real application page
+            is always yours.
           </p>
         </Section>
       </div>
-
-      <Section n="03" title="Build" step={6}>
-        {/* A horizontal track rather than a stacked list: nine short items read as
-            progress across the page, and it uses width the list was wasting. Nine across
-            needs a very wide screen, so narrower ones wrap — the column counts are chosen
-            so the track never ends with one card stranded on its own row. */}
-        <ol className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-9">
-          {MILESTONES.map((m) => (
-            <li
-              key={m.id}
-              className="u-card-flat px-4 py-3.5"
-              style={{ opacity: m.done ? 1 : 0.72 }}
-            >
-              <div className="flex items-baseline justify-between gap-2">
-                <span
-                  className="u-data"
-                  style={{ color: m.done ? 'var(--verified)' : 'var(--ink-faint)' }}
-                >
-                  {m.id}
-                </span>
-                {m.done ? (
-                  <span className="a-stamp u-data text-verified text-[0.75rem] tracking-widest uppercase">
-                    done
-                  </span>
-                ) : (
-                  <Badge>next</Badge>
-                )}
-              </div>
-              <p
-                className="mt-1.5 text-[1rem] leading-snug"
-                style={{ color: m.done ? 'var(--ink)' : 'var(--ink-faint)' }}
-              >
-                {m.label}
-              </p>
-            </li>
-          ))}
-        </ol>
-      </Section>
 
       <footer className="a-rise a-step-8 mt-16">
         <hr className="u-rule a-draw a-step-8 mb-4" />

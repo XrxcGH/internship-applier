@@ -88,7 +88,11 @@ export function Voice() {
         )}
 
         {samples?.samples.length === 0 && (
-          <Empty title="No samples yet.">{samples.adequacy.message}</Empty>
+          // The card's own title, not the adequacy message, which opens with the same four
+          // words — "No samples yet." rendered directly above "No samples yet. Without them…"
+          // is one fact stated twice in a row, and the second copy is the useful one. The
+          // consequence is what the student needs; the count is already visible beside it.
+          <Empty title="Nothing here yet.">{samples.adequacy.message}</Empty>
         )}
 
         {samples && samples.samples.length > 0 && (
