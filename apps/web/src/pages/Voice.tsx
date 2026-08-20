@@ -41,12 +41,25 @@ export function Voice() {
   // Both of these used to be fire-and-forget. On a failed fetch the samples state stayed
   // null, every branch of section 01 tested falsy, and the page rendered a heading over
   // nothing — no spinner, no error, and an unhandled rejection in the console.
+  /**
+   * Whether the answers are back, so an empty state speaks only for a request that finished.
+   *
+   * `style` starts null and section 03 keyed its empty state on `!style` alone, so the page
+   * asserted "Not measured yet." and labelled its button "Measure" for a user whose style HAS
+   * been measured — during every mount fetch, and permanently after a failed one, since the
+   * catch only sets the error banner. The queue already learned this exact lesson and named
+   * its flag `loaded`; this page had the same hole in it.
+   */
+  const [loaded, setLoaded] = useState(false);
+
   const refresh = useCallback(() => {
     const fail = (err: unknown) => {
       setError(err instanceof Error ? err.message : String(err));
     };
-    void listSamples().then(setSamples).catch(fail);
-    void getStyle().then(setStyle).catch(fail);
+    void Promise.allSettled([
+      listSamples().then(setSamples).catch(fail),
+      getStyle().then(setStyle).catch(fail),
+    ]).finally(() => setLoaded(true));
   }, []);
 
   useEffect(refresh, [refresh]);
@@ -91,7 +104,8 @@ export function Voice() {
             </div>
           )}
 
-          {samples?.samples.length === 0 && (
+          {!loaded && <p className="text-dim a-pulse text-sm">Reading…</p>}
+          {loaded && samples?.samples.length === 0 && (
             // The card's own title, not the adequacy message, which opens with the same four
             // words — "No samples yet." rendered directly above "No samples yet. Without them…"
             // is one fact stated twice in a row, and the second copy is the useful one. The
@@ -170,11 +184,15 @@ export function Voice() {
             disabled={busy || !samples || samples.samples.length === 0}
             onClick={() => void run(computeStyle)}
           >
-            {style ? 'Recompute' : 'Measure'}
+            {/* 'Measure' is a claim that nothing has been measured yet, which the page
+                cannot know until the fetch lands. */}
+            {!loaded ? 'Measure' : style ? 'Recompute' : 'Measure'}
           </Button>
         }
       >
-        {!style ? (
+        {!loaded ? (
+          <p className="text-dim a-pulse text-sm">Reading…</p>
+        ) : !style ? (
           <Empty title="Not measured yet.">
             Add at least one sample, then measure. It runs entirely on your machine.
           </Empty>

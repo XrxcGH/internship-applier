@@ -540,7 +540,10 @@ export function Matches({
 
       <footer className="a-rise a-step-8 mt-12">
         <hr className="u-rule mb-3" />
-        <p className="u-eyebrow">j/k move · a approve · l save · s skip · x reject</p>
+        {/* Only what the buttons cannot say. Each decision button already carries its own
+            key, so four fifths of this line was a second copy of them — and the one binding
+            a user genuinely cannot discover from a control was buried among the repeats. */}
+        <p className="u-eyebrow">j&nbsp;/&nbsp;k&nbsp;move&nbsp;between&nbsp;postings</p>
       </footer>
     </Page>
   );

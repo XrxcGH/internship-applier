@@ -640,8 +640,10 @@ describe('the save buttons', () => {
       found.set(`${call}@${String(m.index)}`, /disabled=\{([^}]*)\}/.exec(el)?.[1] ?? '(nothing)');
     }
     const calls = [...found.keys()].map((k) => k.split('@')[0]!);
-    // Two persist() callers now: Save, and Continue, which saves on the way past.
-    expect(calls.filter((c) => c === 'persist()')).toHaveLength(2);
+    // Four persist() callers: Save and "Save and continue" on the confirm step, and Save
+    // and "Save and go back" on the facts step — which had no way to save at all until the
+    // six facts typed there were found to live only in React state.
+    expect(calls.filter((c) => c === 'persist()')).toHaveLength(4);
     expect([...new Set(calls)].sort()).toEqual(['checkedOff(', 'confirm()', 'persist()']);
     for (const [call, hold] of found) expect(hold, call).toContain('nameless.length > 0');
   });

@@ -1084,9 +1084,30 @@ export function Onboarding({
 
             {namelessNotice}
 
-            <div className="mt-4 flex gap-3">
-              <Button disabled={busy !== null} onClick={() => setStep('confirm')}>
-                Back
+            {/* This step collects the six facts a resume never contains — date of birth,
+                work authorization, both availability dates, home city and state — plus every
+                additional work location. Until now its only two controls were Back, which
+                changed the step and saved nothing, and Confirm, which is disabled while any
+                flag is still open: precisely the state a person is in WHILE they are filling
+                this in. So everything typed here lived in React state alone, and leaving
+                through the nav — which blocks only on `busy` — unmounted the screen and took
+                it. The confirm step already had this fixed; this one did not. */}
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button
+                disabled={busy !== null || nameless.length > 0}
+                onClick={() => {
+                  void persist().then((ok) => {
+                    if (ok) setStep('confirm');
+                  });
+                }}
+              >
+                Save and go back
+              </Button>
+              <Button
+                disabled={busy !== null || nameless.length > 0}
+                onClick={() => void persist()}
+              >
+                Save
               </Button>
               <Button
                 variant="primary"

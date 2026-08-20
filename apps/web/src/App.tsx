@@ -152,7 +152,7 @@ export function App() {
       );
     }
     if (view === 'applications') return <Applications onBack={() => setView('queue')} />;
-    if (view === 'tracker') return <Tracker />;
+    if (view === 'tracker') return <Tracker onOpenQueue={() => setView('queue')} />;
     if (view === 'settings') return <Settings />;
     return (
       <Home

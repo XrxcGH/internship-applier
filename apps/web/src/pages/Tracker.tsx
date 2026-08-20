@@ -144,7 +144,7 @@ function Card({
   );
 }
 
-export function Tracker() {
+export function Tracker({ onOpenQueue }: { onOpenQueue?: () => void }) {
   const [view, setView] = useState<TrackerView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -236,6 +236,16 @@ export function Tracker() {
       {applications.length === 0 ? (
         <Empty title="Nothing tracked yet.">
           Approve a posting in the queue and it appears here.
+          {/* The control, not just the instruction. Applications' identical empty state
+              carries a button back to the queue; this one named the next step and left the
+              reader to find it in the nav. */}
+          {onOpenQueue && (
+            <div className="mt-4 flex justify-center">
+              <Button variant="primary" onClick={onOpenQueue}>
+                Open the queue
+              </Button>
+            </div>
+          )}
         </Empty>
       ) : (
         <>
