@@ -579,3 +579,36 @@ describe('end-to-end extraction without a model', () => {
     expect(sponsorship).toHaveLength(1);
   });
 });
+
+describe('a long posting must not stall the server', () => {
+  // A single-paragraph description is the shape that hurt: `sentenceSpan` asked for the
+  // newline after each match, found none, and walked to the end of the document — once per
+  // candidate requirement, with the candidate count itself rising with the length. Measured
+  // before the fix: 45KB took 288ms and 180KB took 16.4 SECONDS. The server is
+  // single-threaded, so that is 16 seconds during which nothing else it was asked to do
+  // happens. Nobody has to be malicious for a posting to get that long; an employer pasting
+  // a handbook into the description field is enough, and nothing upstream caps the length.
+  //
+  // The bound is loose on purpose. It is not measuring speed, it is asserting that the cost
+  // is no longer quadratic, and it has two orders of magnitude of headroom for a slow
+  // machine before it can fail for any reason other than the bug coming back.
+  it('extracts from a 180KB paragraph without going quadratic', () => {
+    const huge = 'Applicants must be at least 18 years of age. '.repeat(4000);
+    const started = Date.now();
+    const found = deterministicRequirements(huge);
+    expect(Date.now() - started).toBeLessThan(4000);
+    expect(found.length).toBeGreaterThan(0);
+  });
+
+  it('reads a description with no newline in it the same way as one with', () => {
+    const JOINED = [
+      'Applicants must be at least 18 years of age.',
+      'U.S. citizenship is required for this position.',
+      'We do not provide visa sponsorship.',
+    ];
+    const spaced = deterministicRequirements(JOINED.join(' '));
+    const lined = deterministicRequirements(JOINED.join('\n'));
+    expect(spaced.map((r) => r.kind).sort()).toEqual(lined.map((r) => r.kind).sort());
+    expect(spaced.map((r) => r.necessity)).toEqual(lined.map((r) => r.necessity));
+  });
+});

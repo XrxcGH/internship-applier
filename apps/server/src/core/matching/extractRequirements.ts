@@ -88,9 +88,10 @@ const MONTHS: Record<string, number> = {
  * paragraphs long and led with a heading from a different part of the posting.
  */
 function sentenceSpan(text: string, index: number, length: number): [number, number] {
-  const start = Math.max(0, text.lastIndexOf('.', index) + 1, text.lastIndexOf('\n', index) + 1);
-  const afterDot = text.indexOf('.', index + length);
-  const afterLine = text.indexOf('\n', index + length);
+  const { newlines, dots } = textIndex(text);
+  const start = Math.max(0, atOrBefore(dots, index) + 1, atOrBefore(newlines, index) + 1);
+  const afterDot = atOrAfter(dots, index + length);
+  const afterLine = atOrAfter(newlines, index + length);
   let end = afterDot === -1 ? Math.min(text.length, index + length + 120) : afterDot + 1;
   if (afterLine !== -1 && afterLine < end) end = afterLine;
   return [start, end];
@@ -145,6 +146,113 @@ function isSoftBreak(text: string, m: RegExpExecArray): boolean {
 }
 
 /**
+ * Everything about a description that gets looked up once per match, found once instead.
+ *
+ * `clauseBounds` used to run `CLAUSE_BREAK` from position 0 on every call, and it is called
+ * once per candidate requirement from nine places. That is O(n) work per match with the
+ * match count itself rising with the length of the posting, so the cost went up with the
+ * SQUARE of the description: measured, 45KB of text took 288ms and 180KB took 16.4 SECONDS —
+ * four times the input for fifty-seven times the work. The server is single-threaded, so a
+ * posting that long stops it dead: every other request in flight waits out the whole 16
+ * seconds. Job descriptions are attacker-influenced in the sense that matters here — nobody
+ * has to be malicious, an employer pasting a long handbook into the description field is
+ * enough — and nothing upstream caps the length.
+ *
+ * One entry is the whole cache on purpose. Extraction runs synchronously over one posting at
+ * a time, so every call inside a run shares a description and hits, and a map keyed by string
+ * would pin every posting ever parsed in memory with no way to know when to let go.
+ *
+ * The newline and full-stop positions are indexed for the same reason. `sentenceSpan` asks for
+ * the newline after a match, and a posting that arrives as one long paragraph — an ATS that
+ * strips its `<li>` markers hands over exactly that — contains none, so every one of those
+ * calls walked to the end of the document before it could answer "there isn't one".
+ */
+const NEWLINE = 10;
+const FULL_STOP = 46;
+
+interface TextIndex {
+  /** Where each hard clause break begins and ends. */
+  starts: Int32Array;
+  ends: Int32Array;
+  /** Every newline and every full stop, so neither has to be hunted for character by character. */
+  newlines: Int32Array;
+  dots: Int32Array;
+}
+
+let indexedText = '';
+let indexed: TextIndex = {
+  starts: new Int32Array(0),
+  ends: new Int32Array(0),
+  newlines: new Int32Array(0),
+  dots: new Int32Array(0),
+};
+
+function textIndex(text: string): TextIndex {
+  if (text === indexedText) return indexed;
+
+  const starts: number[] = [];
+  const ends: number[] = [];
+  CLAUSE_BREAK.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CLAUSE_BREAK.exec(text)) !== null) {
+    if (isSoftBreak(text, m)) continue;
+    starts.push(m.index);
+    ends.push(m.index + m[0].length);
+  }
+
+  const newlines: number[] = [];
+  const dots: number[] = [];
+  for (let k = 0; k < text.length; k++) {
+    const c = text.charCodeAt(k);
+    if (c === NEWLINE) newlines.push(k);
+    else if (c === FULL_STOP) dots.push(k);
+  }
+
+  indexedText = text;
+  indexed = {
+    starts: Int32Array.from(starts),
+    ends: Int32Array.from(ends),
+    newlines: Int32Array.from(newlines),
+    dots: Int32Array.from(dots),
+  };
+  return indexed;
+}
+
+/** The greatest position in `sorted` at or before `i`, or -1 — the answer `lastIndexOf` gives. */
+function atOrBefore(sorted: Int32Array, i: number): number {
+  let lo = 0;
+  let hi = sorted.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid]! <= i) {
+      found = sorted[mid]!;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return found;
+}
+
+/** The least position in `sorted` at or after `i`, or -1 — the answer `indexOf` gives. */
+function atOrAfter(sorted: Int32Array, i: number): number {
+  let lo = 0;
+  let hi = sorted.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid]! >= i) {
+      found = sorted[mid]!;
+      hi = mid - 1;
+    } else lo = mid + 1;
+  }
+  return found;
+}
+
+function hardBreaks(text: string): { starts: Int32Array; ends: Int32Array } {
+  return textIndex(text);
+}
+
+/**
  * The bounds of the statement containing the match at `index`.
  *
  * Breaks that fall inside the match itself are ignored, which matters because the
@@ -152,18 +260,34 @@ function isSoftBreak(text: string, m: RegExpExecArray): boolean {
  * breaks are stepped over, because what follows them is still the same statement.
  */
 function clauseBounds(text: string, index: number, length: number): [number, number] {
-  CLAUSE_BREAK.lastIndex = 0;
+  const { starts, ends } = hardBreaks(text);
+
+  // Last break that finishes at or before the match starts. Ends rise with starts, because
+  // a global regex yields non-overlapping matches in order, so both arrays are sorted.
+  let lo = 0;
+  let hi = ends.length - 1;
   let start = 0;
-  let end = text.length;
-  let m: RegExpExecArray | null;
-  while ((m = CLAUSE_BREAK.exec(text)) !== null) {
-    if (isSoftBreak(text, m)) continue;
-    if (m.index + m[0].length <= index) start = m.index + m[0].length;
-    else if (m.index >= index + length) {
-      end = m.index;
-      break;
-    }
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (ends[mid]! <= index) {
+      start = ends[mid]!;
+      lo = mid + 1;
+    } else hi = mid - 1;
   }
+
+  // First break that begins at or after the match ends. Anything straddling the match is
+  // skipped by both searches, which is what the original loop's `else if` did.
+  lo = 0;
+  hi = starts.length - 1;
+  let end = text.length;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid]! >= index + length) {
+      end = starts[mid]!;
+      hi = mid - 1;
+    } else lo = mid + 1;
+  }
+
   return [start, end];
 }
 
@@ -193,10 +317,11 @@ const SOFTENER =
  * the line alone would let a "plus" from an earlier sentence soften a later hard one.
  */
 function softenerWindow(text: string, index: number, length: number): string {
+  const { newlines, dots } = textIndex(text);
   const before = Math.max(0, index - 1);
-  const start = Math.max(text.lastIndexOf('\n', before) + 1, text.lastIndexOf('.', before) + 1);
-  const lineEnd = text.indexOf('\n', index + length);
-  const sentenceEnd = text.indexOf('.', index + length);
+  const start = Math.max(atOrBefore(newlines, before) + 1, atOrBefore(dots, before) + 1);
+  const lineEnd = atOrAfter(newlines, index + length);
+  const sentenceEnd = atOrAfter(dots, index + length);
   let end = text.length;
   if (lineEnd !== -1) end = Math.min(end, lineEnd);
   if (sentenceEnd !== -1) end = Math.min(end, sentenceEnd + 1);
@@ -246,7 +371,7 @@ function isHeadingLine(line: string): boolean {
  * to read for herself; stopping short hard-fails her on a line the posting called optional.
  */
 function governingHeading(text: string, index: number): string | null {
-  const lineStart = text.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
+  const lineStart = atOrBefore(textIndex(text).newlines, Math.max(0, index - 1)) + 1;
   const before = text.slice(Math.max(0, lineStart - 1200), lineStart);
   const lines = before
     .split('\n')

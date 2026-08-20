@@ -33,20 +33,47 @@
  */
 export const IMPLICIT_SUBMIT = 'button:not([type="button" i])';
 
-export const FILLABLE_CONTROLS =
-  // Excluding `type=password` is a safety exclusion, not a tidy-up. The scanner numbers every
-  // element matching this selector, and `locate()` resolves an `__index__N` locator as
-  // `.nth(N)` over the same selector — so a password box was both counted in the numbering
-  // and a legal target for the index fallback. `fillOne`'s defence of that fallback rests on
-  // this list excluding everything nothing may touch, and it did not exclude this.
-  //
-  // Nothing in this codebase may ever fill one: `checkRedline` returns a `credential` redline
-  // on `type=password` before any classification runs. So excluding it here costs no coverage
-  // and closes the one route by which a planned index could still land on it.
-  'input:not([type=hidden]):not([type=submit]):not([type=button])' +
-  ':not([type=image]):not([type=reset]):not([type=password]), ' +
-  `textarea, select, [role=combobox]:not(${IMPLICIT_SUBMIT}), ` +
-  `[contenteditable=true]:not(${IMPLICIT_SUBMIT})`;
+/**
+ * Every element that must never be clicked or typed into, whatever ARIA role it wears.
+ *
+ * `IMPLICIT_SUBMIT` covers `<button>` and nothing else, and the role-based clauses below were
+ * written with only that in mind — so `<input type="submit" role="combobox">` matched
+ * `[role=combobox]:not(IMPLICIT_SUBMIT)`, because an input is not a button. It was classified
+ * as a combobox, and the fill path's first act on a combobox is to CLICK IT OPEN. Verified in
+ * Chromium: the form submits.
+ *
+ * That is the one invariant this codebase is built around, broken by four separate spellings
+ * at once. `type=image` submits as well. `type=reset` wipes every answer already typed.
+ * `type=password` walked straight past the exclusion added for it a few commits ago, since
+ * that exclusion lives on the `input` clause and this arrives through another. The same hole
+ * existed on `[contenteditable=true]` and on `[role=option]`, which is clicked one level down.
+ *
+ * `scripts/g4-scan.ts` could not see any of it: it looks for the word "submit" and for
+ * `[type=submit]` in the source, and these clicks have neither.
+ *
+ * So the exclusion is expressed once, here, and applied to every clause — including the ones
+ * for `input`, which no longer state their own version of it. A rule written out four times
+ * is a rule that will be four different rules by the end of the year.
+ */
+export const NEVER_TOUCH =
+  ':not(button:not([type="button" i]))' +
+  ':not(input[type=hidden])' +
+  ':not(input[type=submit])' +
+  ':not(input[type=image])' +
+  ':not(input[type=reset])' +
+  ':not(input[type=button])' +
+  ':not(input[type=password])';
 
-/** The options inside an open combobox, under the same rule as the combobox itself. */
-export const SAFE_OPTION = `[role=option]:not(${IMPLICIT_SUBMIT})`;
+export const FILLABLE_CONTROLS =
+  // Every clause carries `NEVER_TOUCH`, including the plain `input` one, which used to spell
+  // its own exclusions out. See NEVER_TOUCH for what happened when only some of them did.
+  `input${NEVER_TOUCH}, textarea${NEVER_TOUCH}, select${NEVER_TOUCH}, ` +
+  `[role=combobox]${NEVER_TOUCH}, [contenteditable=true]${NEVER_TOUCH}`;
+
+/**
+ * The options inside an open combobox, under the same rule as the combobox itself.
+ *
+ * One level down and exactly as clickable, so `<input type="submit" role="option">` submitted
+ * a form the moment the tool picked an answer from a dropdown.
+ */
+export const SAFE_OPTION = `[role=option]${NEVER_TOUCH}`;

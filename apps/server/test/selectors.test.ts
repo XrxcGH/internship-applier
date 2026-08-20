@@ -109,3 +109,86 @@ describe('SAFE_OPTION', () => {
     expect(ids).not.toContain('opt-btn-implicit');
   });
 });
+
+/**
+ * An ARIA role must not smuggle a submit button past the exclusions.
+ *
+ * `IMPLICIT_SUBMIT` covers `<button>` and nothing else, and the role clauses were written
+ * with only that in mind — so `<input type="submit" role="combobox">` matched
+ * `[role=combobox]:not(IMPLICIT_SUBMIT)`, because an input is not a button. It was classified
+ * as a combobox, and the fill path's first act on a combobox is to CLICK IT OPEN. Confirmed
+ * in Chromium before the fix: the form submitted. That is the one invariant this codebase is
+ * built around, and it was broken by four spellings at once — `type=image` submits too,
+ * `type=reset` wipes every answer already typed, and `type=password` walked straight past the
+ * exclusion added for it, which lives on a clause this arrives through another way.
+ *
+ * `scripts/g4-scan.ts` cannot see any of this: it looks for the word "submit" and for
+ * `[type=submit]` in the source, and these clicks have neither. Which is why the property is
+ * asserted here, against a real browser, rather than left to the scan.
+ */
+describe('what an ARIA role must not smuggle through', () => {
+  // Its own page: the cases above share one document set up in `beforeAll`, and replacing its
+  // content from here would leave whichever test ran next looking at the wrong DOM.
+  let trapPage: Page;
+
+  beforeAll(async () => {
+    trapPage = await browser.newPage();
+    await trapPage.setContent(TRAPS);
+  }, 60_000);
+
+  afterAll(async () => {
+    await trapPage?.close();
+  });
+
+  const inTraps = async (selector: string): Promise<string[]> =>
+    trapPage.evaluate((sel) => [...document.querySelectorAll(sel)].map((el) => el.id), selector);
+
+  const TRAPS = `<form id="f" action="/submitted" method="POST">
+    <input id="combo-submit" type="submit" role="combobox" aria-label="Email">
+    <input id="combo-image" type="image" role="combobox" aria-label="Phone">
+    <input id="combo-reset" type="reset" role="combobox" aria-label="City">
+    <input id="combo-pw" type="password" role="combobox" aria-label="Question">
+    <input id="ce-submit" type="submit" contenteditable="true" aria-label="Essay">
+    <input id="opt-submit" type="submit" role="option" value="Yes">
+    <button id="btn-combo" role="combobox">Pick</button>
+    <input id="ok-text" type="text" aria-label="Name">
+    <div id="ok-combo" role="combobox" tabindex="0"></div>
+  </form>`;
+
+  it('matches no submit-capable control, whatever role it wears', async () => {
+    const matched = await inTraps(FILLABLE_CONTROLS);
+    for (const trap of [
+      'combo-submit',
+      'combo-image',
+      'combo-reset',
+      'combo-pw',
+      'ce-submit',
+      'btn-combo',
+    ]) {
+      expect(matched, trap).not.toContain(trap);
+    }
+  });
+
+  it('matches no submit-capable option either, one level down', async () => {
+    // Options are clicked when an answer is picked from a dropdown, so the same rule applies.
+    expect(await inTraps(SAFE_OPTION)).not.toContain('opt-submit');
+  });
+
+  it('still matches the controls a form actually needs filled', async () => {
+    // The other direction, and the one that matters if the exclusion is written too widely:
+    // an ordinary text box and a div-based combobox must stay reachable.
+    const matched = await inTraps(FILLABLE_CONTROLS);
+    expect(matched).toContain('ok-text');
+    expect(matched).toContain('ok-combo');
+  });
+
+  it('states the exclusion once, so four clauses cannot drift into four rules', async () => {
+    const { NEVER_TOUCH } = await import('../src/core/filling/selectors');
+    for (const t of ['submit', 'image', 'reset', 'password', 'hidden']) {
+      expect(NEVER_TOUCH, t).toContain(`input[type=${t}]`);
+    }
+    // And every clause of both selectors carries it.
+    expect(FILLABLE_CONTROLS.split(NEVER_TOUCH).length - 1).toBe(5);
+    expect(SAFE_OPTION).toContain(NEVER_TOUCH);
+  });
+});

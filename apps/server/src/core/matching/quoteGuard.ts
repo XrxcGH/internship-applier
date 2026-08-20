@@ -39,6 +39,20 @@ export interface QuoteCheck {
 const MIN_QUOTE_CHARS = 8;
 
 export function verifyQuote(quote: string, description: string): QuoteCheck {
+  return verifyAgainstNormalized(quote, normalizeForQuoteMatch(description));
+}
+
+/**
+ * The same check, against a description that has already been normalized.
+ *
+ * `verifyQuote` normalizes the whole description on every call, and `guardQuotes` calls it
+ * once per candidate requirement — so a posting yielding 8,000 candidates ran six
+ * whole-document regex passes 8,000 times, and the cost climbed with the SQUARE of the
+ * description. The server is single-threaded; a long enough posting holds every other
+ * request behind it. Normalizing the quote stays per-call, since each one is different, but
+ * the description is the same string every time.
+ */
+function verifyAgainstNormalized(quote: string, normalizedDescription: string): QuoteCheck {
   const q = normalizeForQuoteMatch(quote);
 
   if (q.length === 0) return { ok: false, reason: 'empty quote' };
@@ -47,7 +61,7 @@ export function verifyQuote(quote: string, description: string): QuoteCheck {
     return { ok: false, reason: `quote too short to verify (${q.length} chars)` };
   }
 
-  return normalizeForQuoteMatch(description).includes(q)
+  return normalizedDescription.includes(q)
     ? { ok: true }
     : { ok: false, reason: 'quote does not appear in the job description' };
 }
@@ -67,9 +81,10 @@ export interface GuardOutcome<T> {
 export function guardQuotes<T extends Quotable>(items: T[], description: string): GuardOutcome<T> {
   const kept: T[] = [];
   const dropped: Array<{ item: T; reason: string }> = [];
+  const normalized = normalizeForQuoteMatch(description);
 
   for (const item of items) {
-    const check = verifyQuote(item.sourceQuote, description);
+    const check = verifyAgainstNormalized(item.sourceQuote, normalized);
     if (check.ok) kept.push(item);
     else dropped.push({ item, reason: check.reason ?? 'unverified' });
   }

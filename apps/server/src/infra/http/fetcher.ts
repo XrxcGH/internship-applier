@@ -5,6 +5,8 @@
  * source adapter is well-behaved by construction rather than by remembering to be.
  */
 import { logger } from '../logger';
+import { config } from '../../config';
+import { assertPublicHost } from './publicHost';
 import { isAggregatorUrl } from '../../core/discovery/sourcingPolicy';
 
 const USER_AGENT = 'internship-applier/0.1 (+local personal job-search tool)';
@@ -323,6 +325,21 @@ const MAX_REDIRECTS = 5;
 export async function politeFetch(url: string, opts: FetchOptions = {}): Promise<string> {
   const u = new URL(url);
   const host = u.host;
+
+  /**
+   * Not this machine, and not its network.
+   *
+   * A person chose none of the URLs that reach here directly: they come from a board API's
+   * response, a model's answer, or a link pasted into the manual box. Without this, any of
+   * the three could point at `http://127.0.0.1:8787`, a router's admin page, or a NAS — and
+   * whatever answered was stored as a posting's description and shown as one.
+   *
+   * Skipped under test because the whole fetcher suite runs against local servers on
+   * 127.0.0.1, which is the only honest way to test an HTTP client. The rule itself is not
+   * skipped with it: `publicHost.test.ts` exercises the range logic directly, so the decision
+   * is covered even though this call site is not the thing making it.
+   */
+  if (!config.isTest) await assertPublicHost(url);
 
   if (!opts.isDocumentedApi) {
     const rules = await disallowedPaths(u.origin);
