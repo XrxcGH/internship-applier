@@ -267,7 +267,7 @@ function listHandler<T>(
 ) {
   return (next: T[], moved?: number[], clears?: string): void => {
     if (moved) editList(prefix, (p) => put(p, next), moved);
-    // , as the education editor does: most fields in here were never flagged,
+    // `raise: false`, as the education editor does: most fields in here were never flagged,
     // and putting a flag on an entry the extractor was happy with — because someone cleared
     // a date they never had — invents work at a gate that blocks on its list being empty.
     else edit((p) => put(p, next), clears, { raise: false });

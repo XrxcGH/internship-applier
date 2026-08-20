@@ -90,7 +90,7 @@ export function isDismissible(path: string): boolean {
  *
  * The G1 sign-off list is the one thing standing between the user and a confirmed profile,
  * and every row was rendered as the dotted path itself — `education.0.gpa`,
- * `experience.2.startDate`, `locationPrefs.base.region`. Nine of those paths have a hint
+ * `experience.2.startDate`, `projects.1.description`. Nine of those paths have a hint
  * beside them from ANSWERED_IN_WIZARD; every other flag, meaning anything nested inside
  * education or experience, was an internal identifier and a button, with nothing to say which
  * box on which row it referred to.
@@ -99,6 +99,12 @@ export function isDismissible(path: string): boolean {
  * student reading "education.0" and counting down to the first school is doing the compiler's
  * work. A path this cannot read comes back unchanged rather than mangled — a wrong label is
  * worse than a raw one, because it sends the user to the wrong box with confidence.
+ *
+ * The flat identity paths — `workAuthorization.status`, `locationPrefs.base.city` — are among
+ * the ones returned unchanged, and deliberately: each already has a sentence beside it from
+ * ANSWERED_IN_WIZARD naming the control that answers it, so the row is not a bare identifier
+ * the way an `education.0.gpa` was. This docstring once listed one of them as an example of
+ * what it fixes, which it does not.
  */
 const FIELD_NAMES: Record<string, string> = {
   gpa: 'GPA',

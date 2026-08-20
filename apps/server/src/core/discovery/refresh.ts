@@ -112,7 +112,7 @@ export async function refreshPostings(
     /**
      * A stored address on a board this tool will not open is not checked, and says so.
      *
-     * This loop walks every open posting and es its canonical URL, filtered
+     * This loop walks every open posting and `politeFetch`es its canonical URL, filtered
      * only on is_open — no host check anywhere. A posting brought in through the paste path
      * carries the aggregator address as its canonical URL BY DESIGN: that path exists so a
      * student can bring a Handshake or LinkedIn posting without this tool ever contacting

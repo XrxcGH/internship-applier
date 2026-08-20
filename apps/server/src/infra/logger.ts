@@ -30,16 +30,20 @@ const REDACTED_PATHS = [
   // Was missing while every other PII field had a wildcard, so a nested address slipped
   // through the one mechanism meant to make call sites safe by default.
   '*.address',
-  // Some source URLs carry credentials in the query string (Adzuna app_id/app_key), and
-  // both the retry log and HttpError put the URL in the record. Nested only: a bare `url`
-  // here censored the top-level field too, which is where the three lines that exist to
-  // SHOW a URL put it — the listening address on startup, the retry-backoff line, and the
-  // refresh check. All three printed `url: "[redacted]"`, and the scrubUrl call feeding the
-  // retry line could never reach the output. Credential-bearing URLs are scrubbed at the
-  // call site, and HttpError scrubs in its constructor, so the value in `err.url` is
-  // already safe before this list sees it.
-  '*.url',
-  'err.url',
+  // NO `url` PATH HERE, AND THAT IS THE POINT.
+  //
+  // Some source URLs carry credentials in the query string (Adzuna app_id/app_key), so this
+  // list used to hold `'*.url'` and `'err.url'`. The comment beside them already explained
+  // why they were unnecessary — credential-bearing URLs are scrubbed at the call site, and
+  // `HttpError` scrubs in its constructor, "so the value in `err.url` is already safe before
+  // this list sees it" — and then redacted the field anyway. The result: every fetch failure
+  // in the app logged `url: "[redacted]"`, so no log line ever named the address that failed.
+  // On a tool whose whole diagnostic story is "the run report says what it could not read",
+  // that is the one field worth having.
+  //
+  // Safety here is by construction rather than by censor, and it is checked: `scrubUrl` is
+  // the only way a URL reaches a log record — see the logger tests, which assert both that a
+  // failure names its host and that an Adzuna key is gone by the time it is written.
   'req.headers["x-app-token"]',
   'req.headers.authorization',
   'req.headers.cookie',
