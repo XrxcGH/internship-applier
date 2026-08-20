@@ -214,10 +214,11 @@ export function Settings() {
           <p className="text-dim u-prose">
             Everything is stored on this machine. Some of it does leave, and this is the whole list:
             the job-source lookups discovery runs, your resume when the model reads it at G1, the
-            text of a posting when its requirements are extracted, whatever is sent to the model
-            while you draft or check an answer, and the application sites themselves. Every one of
-            those model calls is counted in the ledger above, by purpose. You can take all of it
-            with you at any time.
+            search brief — role keywords and a location, nothing personal — when the web-search
+            source runs, the text of a posting when its requirements are extracted, whatever is sent
+            to the model while you draft or check an answer, and the application sites themselves.
+            Every one of those model calls is counted in the ledger above, by purpose. You can take
+            all of it with you at any time.
           </p>
           <div className="mt-4">
             <Button

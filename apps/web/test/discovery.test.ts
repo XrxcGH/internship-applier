@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SourceKind } from '@ia/shared';
 import {
+  accessBadge,
   alreadyStored,
   boardMeaning,
   durationLabel,
@@ -381,5 +382,30 @@ describe('keylessTargets', () => {
 
   it('produces targets the Run button accepts', () => {
     expect(whyCannotRun(keylessTargets([source('arbeitnow'), source('remotive')]))).toBeNull();
+  });
+});
+
+describe('accessBadge', () => {
+  const src = (over: Partial<AvailableSource>): AvailableSource => ({
+    name: 'adzuna',
+    requiresKey: true,
+    configured: false,
+    ...over,
+  });
+
+  it('says what web search actually needs, which is not a key', () => {
+    // "key set" about a signed-in Claude Code CLI would describe a credential that does
+    // not exist; "no key" would send the user hunting for one that is not the fix.
+    expect(accessBadge(src({ name: 'web_search', configured: true }))).toBe('model access');
+    expect(accessBadge(src({ name: 'web_search', configured: false }))).toBe('no model access');
+  });
+
+  it('keeps the key words for the sources that really take one', () => {
+    expect(accessBadge(src({ configured: true }))).toBe('key set');
+    expect(accessBadge(src({ configured: false }))).toBe('no key');
+  });
+
+  it('says no key needed for the keyless ones', () => {
+    expect(accessBadge(src({ name: 'github_list', requiresKey: false }))).toBe('no key needed');
   });
 });

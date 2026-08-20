@@ -114,6 +114,14 @@ interface SourceFacts {
    * board. Absent means this source is not offered as a button — see `keylessTargets`.
    */
   addReason?: string;
+  /**
+   * What the sources panel calls this source's prerequisite, when "key" is the wrong word.
+   *
+   * Web search needs no key of its own — it runs through the same model access that reads
+   * a resume — and a panel saying "key set" about a signed-in Claude Code CLI would be
+   * describing a credential that does not exist.
+   */
+  access?: { yes: string; no: string };
 }
 
 /**
@@ -183,8 +191,9 @@ const SOURCE_FACTS: Record<SourceKind, SourceFacts> = {
   },
   web_search: {
     label: 'Web search',
-    board: 'not used — no web search source is built yet',
+    board: "not used — the plan's keywords are the search",
     needsBoard: false,
+    access: { yes: 'model access', no: 'no model access' },
   },
   manual: {
     label: 'Pasted by URL',
@@ -210,6 +219,22 @@ export function boardMeaning(source: string): string {
   return FACTS[source]?.board ?? 'a board name';
 }
 
+/**
+ * The words the sources panel puts beside a source, for whether it can run today.
+ *
+ * One helper rather than a ternary in the page, because the ternary said "key set" about
+ * every configured keyed source — including web search, whose prerequisite is model access
+ * and involves no key at all when the Claude Code CLI is signed in.
+ */
+export function accessBadge(s: {
+  name: string;
+  requiresKey: boolean;
+  configured: boolean;
+}): string {
+  if (!s.requiresKey) return 'no key needed';
+  const words = FACTS[s.name]?.access ?? { yes: 'key set', no: 'no key' };
+  return s.configured ? words.yes : words.no;
+}
 export function needsBoard(source: string): boolean {
   return FACTS[source]?.needsBoard ?? false;
 }

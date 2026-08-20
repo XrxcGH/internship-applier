@@ -1,0 +1,350 @@
+/**
+ * Tier B: the live web, searched through the user's own model access — docs/04 § Tier B.
+ *
+ * This is the tier that was "designed, not built" for the whole life of the project, and the
+ * reason the tool needed URLs pasted into it: Tier A reads boards the user already knows
+ * about, and nothing searched for the ones they did not. The `web_search` kind sat reserved
+ * in the shared enum with no adapter behind it.
+ *
+ * HOW IT KEEPS THE SOURCING POLICY, which is the part worth reading twice. The model does not
+ * scrape anything: on the CLI path it uses Claude Code's WebSearch tool and on the API path
+ * the server-side web-search tool, so Anthropic's own search infrastructure runs the queries.
+ * The model's answer is a list of CANDIDATE URLs and nothing more — every page it names is
+ * then fetched by this process through `fetchManualPosting`, the same polite,
+ * robots-respecting, JSON-LD-reading path a hand-pasted URL takes. What gets stored is what
+ * the employer's own page says, never what the model claims. A page whose robots.txt refuses
+ * us is refused, counted, and reported.
+ *
+ * LinkedIn, Indeed, Handshake, Glassdoor and the like are excluded twice: the prompt tells
+ * the model to return the employer's own posting instead (nearly every aggregator listing is
+ * a repost of an ATS page this tool reads legitimately), and `siftCandidates` drops any that
+ * come back anyway, out loud. Their terms prohibit automated reads, and this repo's promise
+ * not to make them is enforced by tests.
+ */
+import { z } from 'zod';
+import { logger } from '../../../infra/logger';
+import { generate, jsonSchemaOf, modelAccessLikely, NoModelAccessError } from '../../../infra/llm';
+import { canonicalUrl } from '../normalize';
+import { fetchManualPosting } from '../manualPosting';
+import type { JobSource, NormalizedPosting, SourceQuery, SourceResult } from './types';
+
+/**
+ * Boards whose terms prohibit automated access, matched by host suffix.
+ *
+ * The prompt already tells the model not to return these; this is the belt to that promise's
+ * braces, because a model instruction is a request and this list is a rule. A candidate that
+ * lands here is dropped before any fetch is attempted — the robots check would refuse it
+ * anyway, but refusing it without the request is both faster and politer.
+ */
+export const AGGREGATOR_HOSTS = [
+  'linkedin.com',
+  'indeed.com',
+  'glassdoor.com',
+  'ziprecruiter.com',
+  'joinhandshake.com',
+  'handshake.com',
+  'monster.com',
+  'simplyhired.com',
+  'lensa.com',
+  'jobrapido.com',
+  'talent.com',
+  'bebee.com',
+];
+
+export function isAggregatorUrl(url: string): boolean {
+  if (!URL.canParse(url)) return false;
+  const host = new URL(url).hostname.toLowerCase();
+  return AGGREGATOR_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+}
+
+export interface Candidate {
+  url: string;
+  /** What the search result called it — a fallback name, never a stored fact on its own. */
+  title: string;
+  company: string;
+}
+
+export interface CandidateSift {
+  /** Fetchable candidates, canonicalized and deduped, in the order the model gave them. */
+  candidates: Candidate[];
+  aggregators: number;
+  malformed: number;
+  duplicates: number;
+  /** Candidates past the cap. Counted so the sampling is never silent. */
+  overCap: number;
+}
+
+/**
+ * The model's answer reduced to the URLs this process is willing to fetch.
+ *
+ * Everything dropped is counted by reason, because each count becomes a sentence in the run
+ * report: an aggregator link is a policy refusal, a malformed string is a model slip, and a
+ * duplicate is ordinary search-result noise. Lumping them together as "some were skipped"
+ * would make the one count that matters — the policy refusals — invisible.
+ */
+export function siftCandidates(
+  results: Array<{ url?: unknown; title?: unknown; company?: unknown }>,
+  cap: number,
+): CandidateSift {
+  const candidates: Candidate[] = [];
+  const seen = new Set<string>();
+  let aggregators = 0;
+  let malformed = 0;
+  let duplicates = 0;
+  let overCap = 0;
+
+  for (const r of results) {
+    const raw = typeof r.url === 'string' ? r.url.trim() : '';
+    if (!/^https?:\/\//i.test(raw) || !URL.canParse(raw)) {
+      malformed++;
+      continue;
+    }
+    if (isAggregatorUrl(raw)) {
+      aggregators++;
+      continue;
+    }
+    const key = canonicalUrl(raw);
+    if (seen.has(key)) {
+      duplicates++;
+      continue;
+    }
+    seen.add(key);
+    if (candidates.length >= cap) {
+      overCap++;
+      continue;
+    }
+    candidates.push({
+      url: raw,
+      title: typeof r.title === 'string' ? r.title.trim() : '',
+      company: typeof r.company === 'string' ? r.company.trim() : '',
+    });
+  }
+
+  return { candidates, aggregators, malformed, duplicates, overCap };
+}
+
+/**
+ * Whether a fetched title is a page's furniture rather than a posting's name.
+ *
+ * A JS-rendered careers page hands the raw-HTML reader nothing, so `fetchManualPosting`
+ * falls back to the page `<title>` or its own placeholder — and the first live run of this
+ * tier stored "Untitled posting" for Salesforce's Summer 2027 intern role and "Jobs" for
+ * Skydio's, with the real names sitting unread in the search results the model had already
+ * returned.
+ */
+export function isFurnitureTitle(title: string): boolean {
+  const t = title.trim();
+  if (t.length < 3) return true;
+  return /^(?:untitled posting|jobs?|careers?|job board|current openings?|open positions?|join (?:us|our team))$/i.test(
+    t,
+  );
+}
+
+/**
+ * Whether a fetched company name is just a fragment of the page's own hostname.
+ *
+ * `guessCompany` in manualPosting.ts derives its fallback from the URL, which on an ATS host
+ * names the VENDOR: "job-boards" for a Greenhouse page, "ashbyhq" for an Ashby one. That is
+ * never the employer, and it also breaks cross-source dedupe — the same SpaceX posting found
+ * through the Greenhouse adapter carries company "spacex", and a fingerprint built from
+ * "job-boards" will not merge with it.
+ */
+export function isHostFragment(company: string, url: string): boolean {
+  const c = company.trim().toLowerCase();
+  if (c === '') return true;
+  if (!URL.canParse(url)) return false;
+  return new URL(url).hostname.toLowerCase().split('.').includes(c);
+}
+
+/** What the model is asked to return: leads, not facts. The pages themselves are the facts. */
+const Findings = z.object({
+  results: z
+    .array(
+      z.object({
+        url: z.string(),
+        title: z.string(),
+        company: z.string(),
+      }),
+    )
+    .max(25),
+});
+
+const SYSTEM = `You are the search step of a local tool that helps one student find internships. A human reviews everything downstream; your job is only to find candidate posting pages.
+
+Rules:
+- Use web search to find internship postings that are OPEN NOW and match the brief you are given.
+- Return the EMPLOYER'S OWN application page for each posting: their careers site, or their page on boards.greenhouse.io, jobs.lever.co, jobs.ashbyhq.com, *.myworkdayjobs.com, jobs.smartrecruiters.com, or apply.workable.com.
+- NEVER return links to LinkedIn, Indeed, Glassdoor, ZipRecruiter, Handshake, or any other job aggregator. Those pages refuse automated reads. When a search result is an aggregator listing, it names the employer — search again for that employer's own posting of the same role.
+- Only return URLs you actually saw in search results. Never construct or guess a URL: a plausible-looking link that 404s wastes a fetch, and an invented one is worse.
+- Prefer variety across employers over many roles at one employer.
+- Return up to 15 results. Fewer real ones beat more doubtful ones.`;
+
+/**
+ * How many candidate pages one run will fetch.
+ *
+ * Each candidate is a real HTTP fetch of somebody's careers page, rate-limited per host, so
+ * the cap is a politeness bound as much as a time bound. `query.limit` may lower it; nothing
+ * raises it past the ceiling.
+ */
+const MAX_CANDIDATES = 10;
+const CANDIDATE_CEILING = 15;
+
+/** The JSON object in a text answer, for the CLI path when the envelope carries no object. */
+function looseJson(text: string): unknown {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end < start) return undefined;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+}
+
+export const webSearch: JobSource = {
+  kind: 'web_search',
+  // "Key" here is model access: the Claude Code CLI signed in, or ANTHROPIC_API_KEY. The
+  // sources panel words it that way rather than claiming a key exists — see accessBadge in
+  // the web app.
+  requiresKey: true,
+  isConfigured: () => modelAccessLikely(),
+
+  async fetch(q: SourceQuery): Promise<SourceResult> {
+    // The same default the keyed aggregators use: "internship" is the product's premise,
+    // not an invented role. A profile-derived brief arrives in `keywords` when there is one.
+    const brief = (q.keywords ?? []).map((k) => k.trim()).filter(Boolean);
+    const wanted = brief.length > 0 ? brief.join(', ') : 'internship';
+    const where = q.location?.trim();
+
+    let answer;
+    try {
+      answer = await generate({
+        purpose: 'web_discovery',
+        system: SYSTEM,
+        user:
+          `Find currently-open internship postings matching this brief.\n\n` +
+          `Roles and keywords: ${wanted}\n` +
+          (where ? `Location (remote postings also welcome): ${where}\n` : '') +
+          `\nSearch the web now and return the results as the required JSON.`,
+        maxTokens: 4000,
+        schema: jsonSchemaOf('WebSearchFindings', Findings),
+        webSearch: true,
+      });
+    } catch (err) {
+      if (err instanceof NoModelAccessError) {
+        // A gap, not a note: the web was not searched, which is coverage the user asked for
+        // and did not get. Skipping it quietly would read as "the web had nothing".
+        return {
+          postings: [],
+          notes: [],
+          gaps: [
+            'web_search: skipped — no model access. Sign in to the Claude Code CLI or set ' +
+              'ANTHROPIC_API_KEY in .env; until then the live web is not searched.',
+          ],
+        };
+      }
+      throw err;
+    }
+
+    const raw = answer.structured ?? looseJson(answer.text);
+    const parsed = Findings.safeParse(raw);
+    if (!parsed.success) {
+      logger.warn({ provider: answer.provider }, 'web search answer was not a findings list');
+      return {
+        postings: [],
+        notes: [],
+        gaps: [
+          "web_search: the model's answer could not be read as a list of postings, so " +
+            'nothing from the live web is in these results. Run it again.',
+        ],
+      };
+    }
+
+    if (parsed.data.results.length === 0) {
+      return {
+        postings: [],
+        notes: [`web_search: the search found no open postings for "${wanted}".`],
+      };
+    }
+
+    const cap = Math.min(q.limit ?? MAX_CANDIDATES, CANDIDATE_CEILING);
+    const sift = siftCandidates(parsed.data.results, cap);
+
+    // Every candidate the model named is fetched by THIS process, through the same
+    // robots-respecting reader a hand-pasted URL goes through. Sequential on purpose: the
+    // fetcher rate-limits per host, and a burst across ten employers' career sites is not
+    // how a polite tool behaves.
+    const postings: NormalizedPosting[] = [];
+    const unreadable: string[] = [];
+    let namedBySearch = 0;
+    for (const candidate of sift.candidates) {
+      try {
+        const { posting, usedJsonLd } = await fetchManualPosting(candidate.url);
+        /**
+         * The search result's naming, but only where the page itself stated none.
+         *
+         * The page stays the authority on every fact — description, dates, pay, location —
+         * and a page that carries structured data keeps its own naming outright. What this
+         * repairs is the JS-rendered page whose raw HTML names nothing: the reader fell back
+         * to "Untitled posting" and a vendor hostname fragment, which is strictly less true
+         * than the title the search index showed the model. G2 puts the real page in front
+         * of the user before anything else happens either way.
+         */
+        if (!usedJsonLd) {
+          let renamed = false;
+          if (isFurnitureTitle(posting.title) && candidate.title !== '') {
+            posting.title = candidate.title;
+            renamed = true;
+          }
+          if (isHostFragment(posting.company, candidate.url) && candidate.company !== '') {
+            posting.company = candidate.company;
+            renamed = true;
+          }
+          if (renamed) namedBySearch++;
+        }
+        postings.push(posting);
+      } catch (err) {
+        const host = URL.canParse(candidate.url) ? new URL(candidate.url).hostname : candidate.url;
+        unreadable.push(`${host}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const notes: string[] = [
+      `web_search: the model searched the live web and named ${parsed.data.results.length} ` +
+        `pages; ${postings.length} read cleanly. This tier samples what a search surfaces — ` +
+        'it is not a complete sweep of any board.',
+    ];
+    if (sift.aggregators > 0) {
+      notes.push(
+        `web_search: dropped ${sift.aggregators} aggregator ${
+          sift.aggregators === 1 ? 'link' : 'links'
+        } (LinkedIn, Indeed and the like) — their terms refuse automated reads, and the ` +
+          "employer's own posting is what gets fetched instead.",
+      );
+    }
+    if (namedBySearch > 0) {
+      notes.push(
+        `web_search: ${namedBySearch} ${namedBySearch === 1 ? 'posting' : 'postings'} kept the ` +
+          "search result's own name because the page stated none — worth a look at G2.",
+      );
+    }
+    if (sift.overCap > 0) {
+      notes.push(
+        `web_search: read the first ${cap} candidates and left ${sift.overCap} unfetched. ` +
+          'Run it again for another sample.',
+      );
+    }
+
+    const gaps: string[] = [];
+    if (unreadable.length > 0) {
+      gaps.push(
+        `web_search: ${unreadable.length} of ${sift.candidates.length} pages the search found ` +
+          `could not be read (${unreadable.slice(0, 2).join('; ')}${
+            unreadable.length > 2 ? '; …' : ''
+          }).`,
+      );
+    }
+
+    return { postings, notes, ...(gaps.length > 0 ? { gaps } : {}) };
+  },
+};

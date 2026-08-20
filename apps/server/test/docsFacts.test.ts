@@ -380,7 +380,7 @@ describe('docs/04 — job discovery, § Sourcing policy and § Normalization', (
    */
   it('splits the shipping sources between the two adapter files the way the registries do', () => {
     const halves =
-      /of those ship today: (.+?) in `sources\/ats\.ts`, and (.+?) in `sources\/aggregators\.ts`/.exec(
+      /of those ship today: (.+?) in `sources\/ats\.ts`; (.+?) in `sources\/aggregators\.ts`; and (.+?) in `sources\/webSearch\.ts`/.exec(
         FLAT_DOC04,
       );
     expect(halves).toBeTruthy();
@@ -980,7 +980,9 @@ describe('docs/04 — job discovery, § Pipeline reporting', () => {
   });
 
   it('is right that no server file reads BRAVE_SEARCH_API_KEY', () => {
-    expect(FLAT_DOC04).toMatch(/`BRAVE_SEARCH_API_KEY` in `\.env\.example` is read by nothing/);
+    expect(FLAT_DOC04).toMatch(
+      /`BRAVE_SEARCH_API_KEY` in `\.env\.example` is (?:still )?read by nothing/,
+    );
     for (const f of walk(path.join(REPO_ROOT, 'apps/server/src'), /\.ts$/)) {
       expect({ f, reads: readFileSync(f, 'utf8').includes('BRAVE_SEARCH_API_KEY') }).toEqual({
         f,

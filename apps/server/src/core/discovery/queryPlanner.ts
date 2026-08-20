@@ -17,8 +17,11 @@ export interface PlannedTarget {
   /**
    * Any source the runner can be pointed at. Written against the shared SourceKind rather
    * than the registries' key types, because the registries and this file are routinely
-   * extended in separate changes; only the two kinds that are not runnable targets —
-   * `web_search` (designed, not built) and `manual` (the paste-a-URL path) — are excluded.
+   * extended in separate changes; only the two kinds a PLAN must never carry are excluded.
+   * `manual` is not a runnable target at all (a pasted address is the whole target), and
+   * `web_search` is runnable but spends a model call — so only the Discover screen's
+   * button, a deliberate press labelled with the cost, ever adds it. A plan chip would put
+   * that spend into every future run silently.
    */
   source: Exclude<SourceKind, 'web_search' | 'manual'>;
   board: string;

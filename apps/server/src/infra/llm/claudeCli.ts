@@ -413,11 +413,16 @@ export const claudeCliBackend: Backend = {
       await writeFile(systemFile, req.system, 'utf8');
 
       const wantsDocuments = (req.documents?.length ?? 0) > 0;
+      const wantsWebSearch = req.webSearch === true;
 
       // `req.maxTokens` has no counterpart on this path. The CLI publishes no flag for an
       // output cap, and every flag below was checked against the real binary rather than
       // guessed, so length here is bounded by the word target the prompt already states.
       // The API path applies it as a hard limit; expect the two to differ a little.
+      //
+      // Turn budgets: a document read is a couple of Read calls; a web search is a
+      // conversation with the search tool — each query and each result read is a turn, and
+      // a discovery pass runs several queries before it has enough to answer with.
       const args = [
         '--print',
         STDIN_DIRECTIVE,
@@ -427,10 +432,17 @@ export const claudeCliBackend: Backend = {
         '--system-prompt-file',
         systemFile,
         '--max-turns',
-        wantsDocuments ? '6' : '1',
+        wantsWebSearch ? '16' : wantsDocuments ? '6' : '1',
       ];
 
-      if (wantsDocuments) {
+      if (wantsWebSearch) {
+        // WebSearch only — Anthropic's own search runs the queries, this machine fetches
+        // nothing here, and the tool that could read repository files stays ungranted. The
+        // model's answer is a list of candidate URLs; what becomes a stored posting is
+        // decided by this process fetching each one through the robots-respecting fetcher,
+        // never by the model's word.
+        args.push('--allowedTools', 'WebSearch');
+      } else if (wantsDocuments) {
         // A PDF cannot be passed inline; it has to be read from disk, which needs the
         // Read tool and an explicitly permitted directory. Only the directories holding
         // the requested files are granted, never the repository.

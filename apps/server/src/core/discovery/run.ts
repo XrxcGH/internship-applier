@@ -13,6 +13,7 @@ import { logger } from '../../infra/logger';
 import { publish } from '../../infra/events';
 import { ATS_SOURCES } from './sources/ats';
 import { AGGREGATOR_SOURCES } from './sources/aggregators';
+import { webSearch } from './sources/webSearch';
 import { dedupe } from './dedupe';
 import { fingerprint } from './dedupe';
 import type { JobSource, NormalizedPosting } from './sources/types';
@@ -21,6 +22,7 @@ import type { JobSource, NormalizedPosting } from './sources/types';
 export const ALL_SOURCES: Record<string, JobSource> = {
   ...ATS_SOURCES,
   ...AGGREGATOR_SOURCES,
+  web_search: webSearch,
 };
 
 export type SourceName = keyof typeof ALL_SOURCES;
@@ -102,12 +104,16 @@ export async function runDiscovery(
         continue;
       }
 
-      // A keyed source with no key is a real coverage gap and is reported as one.
+      // A keyed source with no key is a real coverage gap and is reported as one. The
+      // adapter may say so in `notes` (the keyed aggregators do) or in `gaps` (web_search
+      // does, since an unsearched web is coverage the user asked for and did not get) —
+      // this branch used to read only `notes`, so an adapter that chose the more honest
+      // channel had its explanation dropped on the floor.
       if (adapter.requiresKey && !adapter.isConfigured()) {
         const result = await adapter.fetch({ board: target.board });
-        report.notes = result.notes;
+        report.notes = [...result.notes, ...(result.gaps ?? [])];
         report.degraded = true;
-        skipped.push(...result.notes);
+        skipped.push(...report.notes);
         reports.push(report);
         continue;
       }
