@@ -26,6 +26,11 @@ export const ApiErrorCode = z.enum([
   'NOT_FOUND',
   'VALIDATION_FAILED',
   'SOURCE_UNAVAILABLE',
+  // The host is one this tool will not open at all — LinkedIn, Indeed, Glassdoor,
+  // Handshake. Distinct from SOURCE_UNAVAILABLE, which means a site we WOULD read did not
+  // answer: this one is a refusal of ours, not a failure of theirs, and the way forward is
+  // the paste-the-text path rather than a retry. See core/discovery/sourcingPolicy.ts.
+  'SOURCE_REFUSED',
   'NO_MODEL_ACCESS',
   'DRAFT_FAILED',
   'FILL_FAILED',

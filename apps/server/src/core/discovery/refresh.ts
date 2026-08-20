@@ -8,9 +8,16 @@ import { and, asc, eq, isNotNull, lt, sql } from 'drizzle-orm';
 import { db, schema } from '../../infra/db/client';
 import { HttpError, politeFetch, scrubUrl } from '../../infra/http/fetcher';
 import { logger } from '../../infra/logger';
+import { isAggregatorUrl } from './sourcingPolicy';
 
 export interface RefreshSummary {
   checked: number;
+  /**
+   * Open postings whose address is on a board this tool will not open, so their freshness
+   * could not be probed at all. Named rather than folded into `checked`, because a posting
+   * nobody looked at is not a posting that was found still open.
+   */
+  notChecked: number;
   closedByDeadline: number;
   closedByFetch: number;
   closedAsStale: number;
@@ -25,6 +32,7 @@ export async function refreshPostings(
   const now = opts.now ?? new Date();
   const summary: RefreshSummary = {
     checked: 0,
+    notChecked: 0,
     closedByDeadline: 0,
     closedByFetch: 0,
     closedAsStale: 0,
@@ -101,6 +109,25 @@ export async function refreshPostings(
     .all();
 
   for (const c of candidates) {
+    /**
+     * A stored address on a board this tool will not open is not checked, and says so.
+     *
+     * This loop walks every open posting and es its canonical URL, filtered
+     * only on is_open — no host check anywhere. A posting brought in through the paste path
+     * carries the aggregator address as its canonical URL BY DESIGN: that path exists so a
+     * student can bring a Handshake or LinkedIn posting without this tool ever contacting
+     * those sites, and it stores the link on the explicit undertaking that storing an address
+     * is not visiting one. Refreshing then visited it — unattended, on a timer, robots.txt
+     * request and all — which is the exact automated access the whole path was built to avoid.
+     *
+     * Counted rather than skipped in silence: a posting nobody could re-check is a posting
+     * whose freshness is unknown, and reporting it as checked would be the false-completeness
+     * this file's summary exists to prevent.
+     */
+    if (isAggregatorUrl(c.url)) {
+      summary.notChecked++;
+      continue;
+    }
     summary.checked++;
     try {
       await politeFetch(c.url, { rps: 1, timeoutMs: 12_000 });

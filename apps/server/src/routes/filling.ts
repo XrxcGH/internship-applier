@@ -37,6 +37,7 @@ import {
   discardRun,
   getRun,
   serializeRun,
+  SourceRefusedError,
   startRun,
   type StartInput,
 } from '../core/filling/run';
@@ -402,6 +403,12 @@ export async function fillingRoutes(app: FastifyInstance): Promise<void> {
       return serializeRun(run);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Our refusal, not their failure: 502 would invite a retry of something that will
+      // never be allowed to happen, and the way forward is a different screen entirely.
+      if (err instanceof SourceRefusedError) {
+        logger.info({ applicationId: req.params.id }, 'fill start refused: host is not opened');
+        return reply.code(400).send({ error: { code: 'SOURCE_REFUSED', message } });
+      }
       const conflict = RUN_CONFLICTS.find((c) => message.startsWith(c.startsWith));
       if (conflict) {
         logger.info(

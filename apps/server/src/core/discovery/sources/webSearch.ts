@@ -25,88 +25,11 @@ import { z } from 'zod';
 import { logger } from '../../../infra/logger';
 import { generate, jsonSchemaOf, modelAccessLikely, NoModelAccessError } from '../../../infra/llm';
 import { canonicalUrl } from '../normalize';
+import { isAggregatorUrl } from '../sourcingPolicy';
 import { fetchManualPosting } from '../manualPosting';
 import type { JobSource, NormalizedPosting, SourceQuery, SourceResult } from './types';
 
-/**
- * Boards whose terms prohibit automated access, matched at the registrable brand.
- *
- * The prompt already tells the model not to return these; this is the belt to that promise's
- * braces, because a model instruction is a request and this list is a rule. A candidate that
- * lands here is dropped before any fetch is attempted — the robots check would refuse it
- * anyway, but refusing it without the request is both faster and politer.
- *
- * Brands rather than hosts: see `registrableBrand` for why the previous `.com`-only list left
- * every one of these boards reachable on its country domain.
- */
-export const AGGREGATOR_BRANDS = [
-  'linkedin',
-  'indeed',
-  'glassdoor',
-  'ziprecruiter',
-  'joinhandshake',
-  'handshake',
-  'monster',
-  'simplyhired',
-  'lensa',
-  'jobrapido',
-  'talent',
-  'bebee',
-];
-
-/**
- * Public suffixes that take two labels, so the registrable name is the third from the right.
- *
- * Deliberately short: it covers the country domains these particular boards actually run, and
- * a name that is not here is simply matched one label in, which is right for every ordinary
- * TLD. A full public-suffix list is a dependency and a download, and being wrong about
- * `glassdoor.co.uk` was the entire bug.
- */
-const TWO_LABEL_SUFFIXES = new Set([
-  'co.uk',
-  'co.jp',
-  'co.in',
-  'co.nz',
-  'co.za',
-  'com.au',
-  'com.br',
-  'com.mx',
-  'com.sg',
-  'com.hk',
-]);
-
-/**
- * The brand a hostname is registered under: the label immediately left of its public suffix.
- *
- * Matched here rather than by host suffix, which is what this did and which only ever
- * covered `.com`. Every entry in the list was a `.com` host compared by equality or
- * dot-suffix, so `glassdoor.co.uk`, `monster.de` and `linkedin.cn` were not recognised as
- * aggregators at all: they were not dropped, they were fetched, and when robots.txt refused
- * them the refusal was counted as a page that could not be read rather than as the policy
- * refusal the sift exists to isolate. This file calls the list "the belt to that promise's
- * braces, because a model instruction is a request and this list is a rule" — a rule with a
- * hole in it for every country these boards operate in.
- *
- * NOT `hostname.split('.').includes(brand)`: `talent` is on the list, and `talent.acme.com`
- * is an ordinary careers subdomain. That test would drop an employer's own page AND report
- * it to the user as a policy refusal.
- */
-function registrableBrand(hostname: string): string | null {
-  // The trailing dot of a fully-qualified name, and only that: an unescaped `.` here matched
-  // any last character and quietly ate the final letter of every hostname, so "co.uk" arrived
-  // as "co.u" and no two-label suffix was ever recognised.
-  const labels = hostname.toLowerCase().replace(/\.$/, '').split('.');
-  if (labels.length < 2) return null;
-  const lastTwo = labels.slice(-2).join('.');
-  const index = TWO_LABEL_SUFFIXES.has(lastTwo) ? labels.length - 3 : labels.length - 2;
-  return index >= 0 ? (labels[index] ?? null) : null;
-}
-
-export function isAggregatorUrl(url: string): boolean {
-  if (!URL.canParse(url)) return false;
-  const brand = registrableBrand(new URL(url).hostname);
-  return brand !== null && AGGREGATOR_BRANDS.includes(brand);
-}
+export { AGGREGATOR_BRANDS, isAggregatorUrl } from '../sourcingPolicy';
 
 export interface Candidate {
   url: string;

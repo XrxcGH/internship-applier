@@ -16,6 +16,7 @@ import {
 } from '../core/discovery/run';
 import { resolveCompany, type Resolution } from '../core/discovery/resolveCompany';
 import { fetchManualPosting, readPastedPosting } from '../core/discovery/manualPosting';
+import { AGGREGATOR_REFUSAL, isAggregatorUrl } from '../core/discovery/sourcingPolicy';
 import { refreshPostings } from '../core/discovery/refresh';
 import { planQueries, type PlannedTarget } from '../core/discovery/queryPlanner';
 
@@ -314,6 +315,21 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         .code(400)
         .send({ error: { code: 'VALIDATION_FAILED', message: 'Expected { url }.' } });
     }
+    /**
+     * Refused before the request, not after.
+     *
+     * This route handed whatever URL it was given straight to , so a LinkedIn or
+     * Handshake link pasted into the box above made this process contact that host — robots.txt
+     * first, then the page — on a screen that tells the student in the very next paragraph
+     * that those sites refuse automated readers. The app predicted the refusal and made the
+     * request anyway. The message points at the box that does work for those postings.
+     */
+    if (isAggregatorUrl(parsed.data.url)) {
+      return reply
+        .code(400)
+        .send({ error: { code: 'SOURCE_REFUSED', message: AGGREGATOR_REFUSAL } });
+    }
+
     try {
       const { posting, usedJsonLd, notes } = await fetchManualPosting(parsed.data.url);
       const id = saveManualPosting(posting);

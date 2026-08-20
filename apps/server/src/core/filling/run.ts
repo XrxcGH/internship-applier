@@ -13,6 +13,7 @@
 import type { ApplicationAnswer, ConfirmedProfile } from '@ia/shared';
 import { publish } from '../../infra/events';
 import { logger } from '../../infra/logger';
+import { AGGREGATOR_REFUSAL, isAggregatorUrl } from '../discovery/sourcingPolicy';
 import { detectIntervention, openSession, type BrowserSession, type Intervention } from './browser';
 import { executePlan, describeFill, sameDocument, type FillResult } from './fill';
 import { buildFormMap, summarizeMap, type FormMap } from './formMap';
@@ -199,7 +200,30 @@ export interface StartInput {
  * Reading and filling are separate steps on purpose: it means the user sees what the tool
  * found, and what it intends to leave alone, while the form is still untouched.
  */
+export class SourceRefusedError extends Error {
+  readonly code = 'SOURCE_REFUSED' as const;
+}
+
 export async function startRun(input: StartInput): Promise<FillRun> {
+  /**
+   * Refused before the browser opens, and this is the sharpest edge of the whole policy.
+   *
+   * The browser this run drives is `launchPersistentContext` over a profile directory that
+   * exists precisely so sessions survive between runs — the student's own logins. Navigating
+   * it to an aggregator is not the ordinary automated read the rest of the tool declines: it
+   * is an automated visit CARRYING THEIR SIGNED-IN SESSION, which for Handshake is their
+   * university's careers account and the one place a ban costs them something real.
+   *
+   * Reachable because the paste path stores the pasted address as `apply_url` — by design, as
+   * the student's way back — and G2 copies it onto the application row, where this run reads
+   * it. So the careful path, the one built to avoid contacting those sites, ended at a
+   * signed-in browser pointed straight at them. Nothing else in the fill path checked: before
+   * this, `isAggregatorUrl` had exactly one caller in the whole repo.
+   */
+  if (isAggregatorUrl(input.applyUrl)) {
+    throw new SourceRefusedError(AGGREGATOR_REFUSAL);
+  }
+
   // Claimed before anything is awaited, and held across the discard, the launch and the read.
   // A second start for this application used to arrive while the first was still inside
   // `openSession`: it found a run whose `session` was undefined, so the discard closed
