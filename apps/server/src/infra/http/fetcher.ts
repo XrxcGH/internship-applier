@@ -372,7 +372,13 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
        * cycle is otherwise a stack overflow, and `Location` is resolved against the current
        * URL because a relative one is legal and common.
        */
-      if (res.status >= 300 && res.status < 400) {
+      // 304 is a 3xx and is NOT a redirect: it is the answer to a conditional request and
+      // carries no Location, so this branch threw `304 with no Location header` on it and the
+      // handler below — which returns the cached body — became unreachable. Every ETag and
+      // Last-Modified revalidation failed instead of hitting cache, which is the opposite of
+      // what docs/04 § Politeness says this code does. 305 and 306 are also not redirects a
+      // client follows: one is a dead proxy directive and the other was withdrawn.
+      if (res.status >= 300 && res.status < 400 && ![304, 305, 306].includes(res.status)) {
         const location = res.headers.get('location');
         if (location === null) {
           throw new HttpError(`${res.status} with no Location header`, res.status, url);
@@ -404,10 +410,28 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
             next,
           );
         }
-        // The body of a POST is not replayed across a redirect: the vendor endpoint this
-        // option exists for does not redirect, and re-POSTing a query to wherever a 302
-        // points is how one query's answer ends up somewhere nobody asked.
-        return politeFetch(next, { ...opts, hopsLeft: hopsLeft - 1, jsonBody: undefined });
+        /**
+         * Neither the body nor the caller's headers cross an origin.
+         *
+         * The POST body because re-POSTing a query to wherever a 302 points is how one query's
+         * answer ends up somewhere nobody asked, and the vendor endpoint that option exists
+         * for does not redirect anyway.
+         *
+         * The headers because on this codebase they are a CREDENTIAL. The only caller that
+         * sets any is the USAJOBS adapter, and what it sets is the user's own API key — so a
+         * 30x from that host, or from anything down a chain starting there, handed the key to
+         * whatever the Location named. Browsers and curl both strip authorization on a
+         * cross-origin redirect for exactly this reason. Same-origin they are kept, since that
+         * is the ordinary case of an API redirecting within itself and the key is meant for
+         * that host.
+         */
+        const crossOrigin = new URL(next).origin !== u.origin;
+        return politeFetch(next, {
+          ...opts,
+          hopsLeft: hopsLeft - 1,
+          jsonBody: undefined,
+          ...(crossOrigin ? { headers: undefined } : {}),
+        });
       }
 
       if (res.status === 304 && hit) {

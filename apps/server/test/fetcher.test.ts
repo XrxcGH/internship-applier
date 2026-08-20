@@ -197,6 +197,24 @@ async function hostWithHeaders(
   return `http://127.0.0.1:${String(address.port)}`;
 }
 
+/** Records the credential header each request carried, so a leak is visible. */
+async function hostRecording(
+  received: Array<string | undefined>,
+  reply: (url: string) => { status: number; body: string; headers?: Record<string, string> },
+): Promise<string> {
+  const server = createServer((req, res) => {
+    received.push(req.headers['authorization-key'] as string | undefined);
+    const out = reply(req.url ?? '/');
+    res.writeHead(out.status, { 'content-type': 'text/plain', ...(out.headers ?? {}) });
+    res.end(out.body);
+  });
+  running.push(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('no port');
+  return `http://127.0.0.1:${String(address.port)}`;
+}
+
 describe('following a redirect', () => {
   it('reads the DESTINATION host robots.txt, not the one it started at', async () => {
     // The whole point. The first host allows everything; the second forbids the path the
@@ -277,5 +295,67 @@ describe('following a redirect', () => {
       url === '/robots.txt' ? { status: 404, body: '' } : { status: 302, body: '' },
     );
     await expect(politeFetch(`${start}/go`)).rejects.toThrow(/no Location header/);
+  });
+});
+
+/**
+ * Two things a redirect must not carry, and one status that is not a redirect at all.
+ */
+describe('what survives a redirect, and what does not', () => {
+  it('does not mistake a 304 for a redirect', async () => {
+    // 304 is a 3xx and is NOT a redirect: it answers a conditional request and carries no
+    // Location. The redirect branch caught it first and threw `304 with no Location header`,
+    // which made the ETag/Last-Modified handler below it unreachable — every revalidation
+    // failed where docs/04 § Politeness says it hits cache. Asserted on a COLD cache, because
+    // a warm one is served without a request at all and never reaches this branch.
+    const server = await hostWithHeaders((url) =>
+      url === '/robots.txt' ? { status: 404, body: '' } : { status: 304, body: '' },
+    );
+    // The observable difference: it used to fail with the REDIRECT branch's complaint about
+    // a missing Location. It now falls through to the ordinary not-ok path, which is correct
+    // for a 304 nobody asked a conditional question — a server should not send one — and
+    // which leaves the cached-body handler below reachable for the case that matters.
+    const err = await politeFetch(`${server}/page`, { rps: 50 }).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err?.message).not.toMatch(/no Location header/);
+    expect(err?.message).toMatch(/304/);
+  });
+
+  it('does not carry the caller’s headers across an origin', async () => {
+    // The only caller that sets any is the USAJOBS adapter, and what it sets is the user's own
+    // API key — so a 30x from that host handed the key to whatever Location named. Browsers
+    // and curl both strip authorization on a cross-origin redirect for this reason.
+    const received: Array<string | undefined> = [];
+    const target = await hostRecording(received, () => ({ status: 200, body: 'arrived' }));
+    const start = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 404, body: '' }
+        : { status: 302, body: '', headers: { location: `${target}/landed` } },
+    );
+
+    await expect(
+      politeFetch(`${start}/go`, { rps: 50, headers: { 'authorization-key': 'SECRET' } }),
+    ).resolves.toBe('arrived');
+
+    // Every request the destination saw, including its robots.txt read.
+    expect(received).not.toContain('SECRET');
+    expect(received.filter(Boolean)).toHaveLength(0);
+  });
+
+  it('keeps them on a same-origin hop, where the credential belongs', async () => {
+    // An API redirecting within itself is the ordinary case, and the key is meant for it.
+    const received: Array<string | undefined> = [];
+    const server = await hostRecording(received, (url) =>
+      url === '/go'
+        ? { status: 302, body: '', headers: { location: '/landed' } }
+        : { status: 200, body: 'same origin' },
+    );
+    await expect(
+      politeFetch(`${server}/go`, { rps: 50, headers: { 'authorization-key': 'SECRET' } }),
+    ).resolves.toBe('same origin');
+    expect(received).toContain('SECRET');
   });
 });

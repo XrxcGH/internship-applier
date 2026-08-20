@@ -34,8 +34,17 @@
 export const IMPLICIT_SUBMIT = 'button:not([type="button" i])';
 
 export const FILLABLE_CONTROLS =
+  // Excluding `type=password` is a safety exclusion, not a tidy-up. The scanner numbers every
+  // element matching this selector, and `locate()` resolves an `__index__N` locator as
+  // `.nth(N)` over the same selector — so a password box was both counted in the numbering
+  // and a legal target for the index fallback. `fillOne`'s defence of that fallback rests on
+  // this list excluding everything nothing may touch, and it did not exclude this.
+  //
+  // Nothing in this codebase may ever fill one: `checkRedline` returns a `credential` redline
+  // on `type=password` before any classification runs. So excluding it here costs no coverage
+  // and closes the one route by which a planned index could still land on it.
   'input:not([type=hidden]):not([type=submit]):not([type=button])' +
-  ':not([type=image]):not([type=reset]), ' +
+  ':not([type=image]):not([type=reset]):not([type=password]), ' +
   `textarea, select, [role=combobox]:not(${IMPLICIT_SUBMIT}), ` +
   `[contenteditable=true]:not(${IMPLICIT_SUBMIT})`;
 
