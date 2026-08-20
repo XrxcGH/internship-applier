@@ -73,16 +73,26 @@ export function Nav({
           ? 'Still asking the server.'
           : 'The server is not answering, so nothing here is live.');
 
+  /**
+   * Pipeline order, so the bar itself says what to do next.
+   *
+   * Eight items were presented as peers with no ordering cue, and Voice sat third — one of
+   * only THREE destinations a first-time student can reach, since the four gated ones answer
+   * 409 until G1 is confirmed. So the bar offered Overview, Profile and, as the apparent next
+   * step, the one screen with nothing to do with finding a job: Voice is for teaching the
+   * drafter how you write, which matters at G3, long after there is something to draft
+   * against. It sits after Applications now, where it is used.
+   */
   const items: NavItem[] = [
     { id: 'home', label: 'Overview', blocked: running },
     { id: 'setup', label: 'Profile', blocked: running },
-    { id: 'voice', label: 'Voice', blocked: running },
     // Ahead of the queue because it is what fills the queue, and locked with it: every
     // /api/discovery route answers 409 until a profile is confirmed, since eligibility
     // would have nothing to check a posting against.
     { id: 'discovery', label: 'Discover', blocked: locked },
     { id: 'queue', label: 'Queue', blocked: locked },
     { id: 'applications', label: 'Applications', blocked: locked },
+    { id: 'voice', label: 'Voice', blocked: running },
     { id: 'tracker', label: 'Tracker', blocked: locked },
     { id: 'settings', label: 'Settings', blocked: running },
   ];

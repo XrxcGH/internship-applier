@@ -123,7 +123,11 @@ export function Applications({ onBack }: { onBack: () => void }) {
                     ) : a.answerCount === 0 ? (
                       <Badge>no questions yet</Badge>
                     ) : ready ? (
-                      <Badge tone="verified">ready</Badge>
+                      // Not 'ready'. The Tracker files this same record under Preparing and
+                      // badges it 'answers ready', and reserves 'Ready for you' for an
+                      // application whose form is filled and waiting on a human to submit. One
+                      // word meant two opposite things depending on which screen you were on.
+                      <Badge tone="verified">answers approved</Badge>
                     ) : (
                       <Badge tone="caution">in review</Badge>
                     )}

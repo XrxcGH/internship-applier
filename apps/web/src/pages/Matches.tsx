@@ -69,6 +69,16 @@ export function Matches({
   const [error, setError] = useState<string | null>(null);
   /** Approvals made this session, so triage never has to stop to go look at them. */
   const [approved, setApproved] = useState(0);
+  /**
+   * Decisions of any kind made this session, so the empty state can tell two cases apart.
+   *
+   * `act` and `reject` drop the decided row from `rows` locally rather than reloading, so
+   * deciding the last posting in a band empties the list — and the empty state then told the
+   * student "either nothing has been searched yet, or what is stored has not been scored" and
+   * sent them to Discover, about postings they had personally just triaged, with the counts
+   * chip beside it still showing them.
+   */
+  const [decided, setDecided] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
 
   // The nav lives above this screen and unmounting it would throw the in-flight guard away,
@@ -158,6 +168,7 @@ export function Matches({
       setBusy(action === 'approved' ? 'Approving' : action === 'saved' ? 'Saving' : 'Skipping');
       try {
         const r = await decide(selected, action, reason, tags);
+        setDecided((n) => n + 1);
         if (action === 'approved' && r.applicationId) setApproved((n) => n + 1);
         setRows((prev) => {
           const i = prev.findIndex((x) => x.id === selected);
@@ -183,6 +194,7 @@ export function Matches({
       setBusy('Rejecting');
       try {
         await decide(selected, 'rejected', label, [tag]);
+        setDecided((n) => n + 1);
         setRows((prev) => {
           const i = prev.findIndex((x) => x.id === selected);
           const next = prev.filter((x) => x.id !== selected);
@@ -357,16 +369,28 @@ export function Matches({
       {!loaded && !error && <p className="text-dim a-pulse">Reading the queue…</p>}
 
       {loaded && rows.length === 0 && !error && (
-        <Empty title="Nothing in the queue.">
-          <p>
-            Either nothing has been searched yet, or what is stored has not been scored. Discover
-            does both, and it also takes a single posting URL you paste in. Recompute, above, scores
-            whatever is already here — and widening the band shows what was filtered out, and why.
-          </p>
+        /* Two different empty queues, and only one of them is a problem. Reaching the end of
+           a band you have just triaged is the ordinary, successful ending of this screen, and
+           it was met with the diagnosis written for a queue that had never been filled. */
+        <Empty title={decided > 0 ? 'That is the whole band.' : 'Nothing in the queue.'}>
+          {decided > 0 ? (
+            <p>
+              You decided {decided} {decided === 1 ? 'posting' : 'postings'} just now, and there are
+              none left in this band. Widen the band above to see what was filtered out and why, or
+              search again for more.
+            </p>
+          ) : (
+            <p>
+              Either nothing has been searched yet, or what is stored has not been scored. Discover
+              does both, and it also takes a single posting URL you paste in. Recompute, above,
+              scores whatever is already here — and widening the band shows what was filtered out,
+              and why.
+            </p>
+          )}
           {onOpenDiscovery && (
             <div className="mt-4 flex justify-center">
               <Button variant="primary" onClick={onOpenDiscovery}>
-                Go to Discover
+                {decided > 0 ? 'Search for more' : 'Go to Discover'}
                 <ArrowRight aria-hidden size={15} />
               </Button>
             </div>
