@@ -11,46 +11,48 @@
 @import '@fontsource/ibm-plex-mono/500.css';
 @import 'tailwindcss';
 
-/* ─────────────────────────────────────────────── palette — "warm stone"
+/* ─────────────────────────────────────────────── palette — "blueprint"
 
-   ONE family, and everything belongs to it. The previous palette was a cool graphite base
-   with an azure accent and three signal hues borrowed from three different places — green,
-   amber, coral — so five unrelated hues shared a screen and the eye read the interface as a
-   dashboard rather than as a document. This is a single warm-neutral ramp with one deep sage
-   accent, and the three signals are that same sage walked around the wheel at matched chroma:
-   moss, ochre, terracotta. They still mean exactly one thing each and are never decoration —
-   if something is green here, it passed a check — but they now sit together rather than
-   competing.
+   ONE hue, and the neutrals belong to it. Every surface, rule and text tone here is the same
+   blue-violet ink at a different lightness — TINTED, not gray. That is the whole idea: a
+   true-gray neutral plus an accent is the shape almost every interface defaults to, and so is
+   the warm beige-and-stone scheme that replaced it here briefly. Neither reads as a decision
+   anybody made. A palette whose greys are all one hue does, and it costs nothing.
+
+   The accent is a clear cyan from the same cool half of the wheel, and the three signals sit
+   at matched chroma beside it: mint, gold, rose. They still mean exactly one thing each and
+   are never decoration — if something is green here, it passed a check.
 
    Colour is no longer the only carrier of any state. Every signal is paired with a Lucide
    icon at its call site, so the meaning survives a monochrome screen and a colour-blind
    reader, which is what let the hues be quietened this far in the first place.
 
-   Every colour below was measured, not eyeballed — scripts/../contrast, recomputed on every
-   change to this block. All eight text colours clear WCAG AA (4.5:1) against all three
-   surfaces in both themes; the lowest is 4.86 (light `--accent-dim`) and 5.21 (dark
-   `--ink-faint`). `--rule` is a deliberate hairline with no contrast target; `--rule-strong`
-   is the structural divider and clears ~3:1 on the surfaces it divides. */
+   Every colour below was measured, not eyeballed, and recomputed on every change to this
+   block. All eight text colours clear WCAG AA (4.5:1) against all three surfaces in both
+   themes; the lowest is 4.65 (light `--accent-dim`) and 5.48 (dark `--accent-dim`).
+   `--rule` is a deliberate hairline with no contrast target; `--rule-strong` is the
+   structural divider and clears 3:1 on every surface it divides, which took two passes —
+   the first draft of this palette had it at 2.57 in dark. */
 
 :root,
 :root[data-theme='dark'] {
-  --paper: #171613;
-  --paper-raised: #201e1a;
-  --paper-sunk: #100f0d;
-  --ink: #efece5;
-  --ink-dim: #b5afa4;
-  --ink-faint: #978f83;
-  --rule: #343128;
-  --rule-strong: #6e6759;
-  --accent: #a6c3ac;
-  --accent-dim: #7b9883;
-  --verified: #8fc09b;
-  --caution: #d6b06b;
-  --redline: #de9585;
+  --paper: #0d1220;
+  --paper-raised: #151b2c;
+  --paper-sunk: #080b15;
+  --ink: #e9ecf7;
+  --ink-dim: #a7aecb;
+  --ink-faint: #8b93b3;
+  --rule: #242b42;
+  --rule-strong: #5d6789;
+  --accent: #67d3e8;
+  --accent-dim: #4a9cb5;
+  --verified: #63d3a4;
+  --caution: #e3bd6b;
+  --redline: #ef8f95;
 
-  --glow-alpha: 0.06;
-  --grid-alpha: 0.04;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.32), 0 10px 30px -14px rgb(0 0 0 / 0.5);
+  --glow-alpha: 0.07;
+  --grid-alpha: 0.045;
+  --shadow: 0 1px 2px rgb(3 6 14 / 0.4), 0 10px 30px -14px rgb(3 6 14 / 0.6);
 }
 
 /* The light palette is written out twice on purpose, and the two copies must stay
@@ -68,44 +70,44 @@
    the light palette back on every load with no way to escape it. */
 
 :root[data-theme='light'] {
-  --paper: #f4f2ee;
-  --paper-raised: #fbfaf8;
-  --paper-sunk: #e7e3dc;
-  --ink: #1b1917;
-  --ink-dim: #4a453e;
-  --ink-faint: #635d54;
-  --rule: #d8d3ca;
-  --rule-strong: #8c8477;
-  --accent: #3f5a48;
-  --accent-dim: #4c6755;
-  --verified: #37633f;
-  --caution: #7a5a15;
-  --redline: #9a4433;
+  --paper: #f1f3fa;
+  --paper-raised: #fbfcfe;
+  --paper-sunk: #e2e6f2;
+  --ink: #121729;
+  --ink-dim: #414965;
+  --ink-faint: #59617e;
+  --rule: #cbd1e3;
+  --rule-strong: #7b83a1;
+  --accent: #0f5f77;
+  --accent-dim: #2b6d83;
+  --verified: #136b4c;
+  --caution: #7a5410;
+  --redline: #a8353f;
 
   --glow-alpha: 0.05;
   --grid-alpha: 0.04;
-  --shadow: 0 1px 2px rgb(27 25 23 / 0.05), 0 10px 30px -16px rgb(27 25 23 / 0.22);
+  --shadow: 0 1px 2px rgb(18 23 41 / 0.06), 0 10px 30px -16px rgb(18 23 41 / 0.2);
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --paper: #f4f2ee;
-    --paper-raised: #fbfaf8;
-    --paper-sunk: #e7e3dc;
-    --ink: #1b1917;
-    --ink-dim: #4a453e;
-    --ink-faint: #635d54;
-    --rule: #d8d3ca;
-    --rule-strong: #8c8477;
-    --accent: #3f5a48;
-    --accent-dim: #4c6755;
-    --verified: #37633f;
-    --caution: #7a5a15;
-    --redline: #9a4433;
+    --paper: #f1f3fa;
+    --paper-raised: #fbfcfe;
+    --paper-sunk: #e2e6f2;
+    --ink: #121729;
+    --ink-dim: #414965;
+    --ink-faint: #59617e;
+    --rule: #cbd1e3;
+    --rule-strong: #7b83a1;
+    --accent: #0f5f77;
+    --accent-dim: #2b6d83;
+    --verified: #136b4c;
+    --caution: #7a5410;
+    --redline: #a8353f;
 
     --glow-alpha: 0.05;
     --grid-alpha: 0.04;
-    --shadow: 0 1px 2px rgb(27 25 23 / 0.05), 0 10px 30px -16px rgb(27 25 23 / 0.22);
+    --shadow: 0 1px 2px rgb(18 23 41 / 0.06), 0 10px 30px -16px rgb(18 23 41 / 0.2);
   }
 }
 

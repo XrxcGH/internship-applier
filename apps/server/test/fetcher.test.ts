@@ -170,3 +170,112 @@ describe('a request that carries a body', () => {
     expect(await politeFetch(`${origin}/jobs`, { isDocumentedApi: true })).toBe('answer 1');
   });
 });
+
+/**
+ * Where a redirect actually goes is a host nobody checked.
+ *
+ * Node's fetch defaults to `redirect: 'follow'`, so a 301 to another origin was fetched with
+ * that origin's robots.txt never read, its rate-limit bucket never touched, and the sourcing
+ * rule never re-applied — every caller checks the string it is about to pass, and nothing
+ * re-checked the destination. Aggregator listings are reached through exactly this shape: a
+ * short link, or an employer page that bounces to a board.
+ */
+
+/** A host that can answer with headers, which the plain helper above cannot. */
+async function hostWithHeaders(
+  reply: (url: string) => { status: number; body: string; headers?: Record<string, string> },
+): Promise<string> {
+  const server = createServer((req, res) => {
+    const out = reply(req.url ?? '/');
+    res.writeHead(out.status, { 'content-type': 'text/plain', ...(out.headers ?? {}) });
+    res.end(out.body);
+  });
+  running.push(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('no port');
+  return `http://127.0.0.1:${String(address.port)}`;
+}
+
+describe('following a redirect', () => {
+  it('reads the DESTINATION host robots.txt, not the one it started at', async () => {
+    // The whole point. The first host allows everything; the second forbids the path the
+    // redirect lands on, and that refusal has to be the one that counts.
+    const blocked = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 200, body: 'User-agent: *\nDisallow: /private' }
+        : { status: 200, body: 'secret' },
+    );
+    const start = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 404, body: '' }
+        : { status: 301, body: '', headers: { location: `${blocked}/private/job` } },
+    );
+
+    await expect(politeFetch(`${start}/go`)).rejects.toThrow(/robots\.txt disallows \/private/);
+  });
+
+  it('follows one that is allowed, and answers with the destination body', async () => {
+    const target = await hostWithHeaders((url) =>
+      url === '/robots.txt' ? { status: 404, body: '' } : { status: 200, body: 'arrived' },
+    );
+    const start = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 404, body: '' }
+        : { status: 302, body: '', headers: { location: `${target}/job` } },
+    );
+
+    await expect(politeFetch(`${start}/go`)).resolves.toBe('arrived');
+  });
+
+  it('resolves a relative Location against the address it came from', async () => {
+    // Legal and common, and a naive `new URL(location)` would throw on it.
+    const server = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 404, body: '' }
+        : url === '/go'
+          ? { status: 302, body: '', headers: { location: '/landed' } }
+          : { status: 200, body: 'relative ok' },
+    );
+    await expect(politeFetch(`${server}/go`)).resolves.toBe('relative ok');
+  });
+
+  // Six sequential round trips against a live local server, each a full re-entry with its
+  // own robots read. It fits inside the default timeout alone and not always under the load
+  // of the whole suite, which is a property of the harness rather than of the code.
+  it('gives up on a cycle rather than recursing forever', { timeout: 20_000 }, async () => {
+    const server = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 404, body: '' }
+        : { status: 302, body: '', headers: { location: '/loop' } },
+    );
+    // `rps` raised only so the test is not fighting the rate limiter: every hop is a full
+    // re-entry and takes its own token, so five hops at the default 1/s is five seconds — the
+    // limiter doing its job, and longer than the default test timeout.
+    await expect(politeFetch(`${server}/loop`, { rps: 50 })).rejects.toThrow(
+      /More than 5 redirects/,
+    );
+  });
+
+  it('refuses a redirect that lands on a board this tool will not open', async () => {
+    // The one check that cannot wait for the recursion: politeFetch does not know its
+    // caller's policy, but it does know no path in this app may open these hosts.
+    const start = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 404, body: '' }
+        : {
+            status: 301,
+            body: '',
+            headers: { location: 'https://www.linkedin.com/jobs/view/123' },
+          },
+    );
+    await expect(politeFetch(`${start}/go`)).rejects.toThrow(/does not\s+open/);
+  });
+
+  it('says so when a redirect names nowhere to go', async () => {
+    const start = await hostWithHeaders((url) =>
+      url === '/robots.txt' ? { status: 404, body: '' } : { status: 302, body: '' },
+    );
+    await expect(politeFetch(`${start}/go`)).rejects.toThrow(/no Location header/);
+  });
+});

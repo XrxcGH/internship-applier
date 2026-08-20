@@ -12,11 +12,11 @@ So: editorial type, rules and marginalia, stamps for state changes, and a surfac
 as a working surface rather than a canvas. Dark is the primary theme and light is a real
 alternative, not an inversion.
 
-> The palette below is **warm stone** — a single warm-neutral ramp with one deep sage accent.
-> It replaced "drafting table" (cool graphite, azure accent), which had itself replaced a
-> warm scheme before that; this document described each older one long after it was gone, so
-> every hex value and contrast ratio here is re-measured against `apps/web/src/index.css` as
-> it ships rather than carried over.
+> The palette below is **blueprint** — one blue-violet ink family whose neutrals are tinted
+> rather than gray, with a cyan accent. It replaced "warm stone" (a warm-neutral ramp, sage
+> accent), which replaced "drafting table" (cool graphite, azure); this document described
+> each older one long after it was gone, so every hex value and contrast ratio here is
+> re-measured against `apps/web/src/index.css` as it ships rather than carried over.
 
 What this deliberately isn't: a purple gradient on white, a grid of rounded cards with
 drop shadows, Inter at three weights, an emoji in every heading.
@@ -41,30 +41,36 @@ Scale is a modular 1.2 ratio off a 16px base, with display sizes set tighter
 
 ## Color
 
-ONE family, and everything belongs to it. A warm-neutral ramp, one deep sage accent, and
-three signal colours that are that same sage walked around the wheel at matched chroma —
-moss, ochre, terracotta. Defined as CSS custom properties in `apps/web/src/index.css`; both
-themes ship.
+ONE hue, and the neutrals belong to it. Every surface, rule and text tone is the same
+blue-violet ink at a different lightness — tinted, not gray — with a cyan accent from the same
+cool half of the wheel and three signals at matched chroma beside it. Defined as CSS custom
+properties in `apps/web/src/index.css`; both themes ship.
 
 ```
                      dark (default)      light
---paper              #171613             #f4f2ee      the page
---paper-raised       #201e1a             #fbfaf8      cards, panels
---paper-sunk         #100f0d             #e7e3dc      wells, tracks
---ink                #efece5             #1b1917      body
---ink-dim            #b5afa4             #4a453e      secondary
---ink-faint          #978f83             #635d54      eyebrows, small print
---rule               #343128             #d8d3ca      hairlines
---rule-strong        #6e6759             #8c8477      structural dividers
---accent             #a6c3ac             #3f5a48      THE accent. Used sparingly.
---verified           #8fc09b             #37633f      claim supported, rule passed
---caution            #d6b06b             #7a5a15      unknown / needs your input
---redline            #de9585             #9a4433      redlined field, unsupported claim
+--paper              #0d1220             #f1f3fa      the page
+--paper-raised       #151b2c             #fbfcfe      cards, panels
+--paper-sunk         #080b15             #e2e6f2      wells, tracks
+--ink                #e9ecf7             #121729      body
+--ink-dim            #a7aecb             #414965      secondary
+--ink-faint          #8b93b3             #59617e      eyebrows, small print
+--rule               #242b42             #cbd1e3      hairlines
+--rule-strong        #5d6789             #7b83a1      structural dividers
+--accent             #67d3e8             #0f5f77      THE accent. Used sparingly.
+--verified           #63d3a4             #136b4c      claim supported, rule passed
+--caution            #e3bd6b             #7a5410      unknown / needs your input
+--redline            #ef8f95             #a8353f      redlined field, unsupported claim
 ```
 
-The previous palette drew its accent and its three signals from four unrelated places — azure,
+Why tinted neutrals. A true-gray ramp plus one accent is the shape almost every interface
+defaults to, and the warm beige-and-stone scheme that briefly replaced it here is the other
+default. Neither reads as a decision anybody made. A palette whose greys are all one hue
+does, and it costs nothing — the tint is small enough that no surface reads as coloured, and
+large enough that the whole screen agrees with itself.
+
+An earlier palette drew its accent and its three signals from four unrelated places — azure,
 green, amber, coral — so five hues shared a screen and the interface read as a dashboard
-rather than as a document. These sit in one family, which is what lets them be quiet.
+rather than as a document.
 
 Discipline: **the accent is the only decorative colour.** Moss, ochre and terracotta are
 reserved for the verification states in docs/05 and docs/06 — if something is green it means

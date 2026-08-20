@@ -5,6 +5,7 @@
  * source adapter is well-behaved by construction rather than by remembering to be.
  */
 import { logger } from '../logger';
+import { isAggregatorUrl } from '../../core/discovery/sourcingPolicy';
 
 const USER_AGENT = 'internship-applier/0.1 (+local personal job-search tool)';
 const DEFAULT_RPS = 1;
@@ -76,6 +77,13 @@ function rememberResponse(url: string, entry: CacheEntry): void {
 export interface FetchOptions {
   /** Requests per second for this host. Defaults to 1. */
   rps?: number;
+  /**
+   * Redirect hops left. Internal — callers leave it alone.
+   *
+   * A redirect to another origin is a request to a host nobody checked, so it is followed by
+   * RE-ENTERING this function rather than by `fetch` following it silently. See the loop.
+   */
+  hopsLeft?: number;
   headers?: Record<string, string>;
   /** Skip robots.txt. Only for documented API endpoints, never for page fetches. */
   isDocumentedApi?: boolean;
@@ -288,6 +296,14 @@ async function disallowedPaths(origin: string): Promise<Robots> {
   return value;
 }
 
+/**
+ * How many redirects one address may take before this gives up.
+ *
+ * Five is what browsers and curl settle on. Each hop is a full re-entry — its own robots.txt
+ * read, its own rate-limit token — so a chain is not free, and a cycle has to end somewhere.
+ */
+const MAX_REDIRECTS = 5;
+
 export async function politeFetch(url: string, opts: FetchOptions = {}): Promise<string> {
   const u = new URL(url);
   const host = u.host;
@@ -335,8 +351,64 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
         ...(opts.jsonBody !== undefined
           ? { method: 'POST', body: JSON.stringify(opts.jsonBody) }
           : {}),
+        // Followed by hand, below. See the block that reads this.
+        redirect: 'manual',
         signal: opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? 20_000),
       });
+
+      /**
+       * A redirect is a request to a host this function has not checked yet.
+       *
+       * Node's fetch defaults to `redirect: 'follow'`, so a 301 to another origin was fetched
+       * with that origin's robots.txt never consulted, its rate-limit bucket never touched,
+       * and — for the discovery and manual paths — the aggregator rule never re-applied, since
+       * every caller checks the string it was about to pass and nothing re-checks where it
+       * actually went. Aggregator listings are reached through exactly this shape: a short
+       * link, or an employer page that bounces to a board. docs/04 § Politeness states the
+       * stronger claim, that robots.txt is respected for any generic page fetch.
+       *
+       * So it re-enters `politeFetch` for the new address, which puts the new host through
+       * every check the original went through. Bounded by a hop count, because a redirect
+       * cycle is otherwise a stack overflow, and `Location` is resolved against the current
+       * URL because a relative one is legal and common.
+       */
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        if (location === null) {
+          throw new HttpError(`${res.status} with no Location header`, res.status, url);
+        }
+        const hopsLeft = opts.hopsLeft ?? MAX_REDIRECTS;
+        if (hopsLeft <= 0) {
+          throw new HttpError(
+            `More than ${MAX_REDIRECTS} redirects starting at this address, so it was not ` +
+              'followed any further.',
+            508,
+            url,
+          );
+        }
+        const next = new URL(location, url).toString();
+        /**
+         * The sourcing policy, re-applied to where the redirect actually goes.
+         *
+         * Every caller checks the string it is ABOUT to pass and nothing re-checks the
+         * destination, so a short link or an employer page that bounces to a board would have
+         * reached the board with the rule satisfied on the wrong URL. This is the one check
+         * that cannot wait for the recursion: politeFetch does not know its caller's policy,
+         * but it does know that no path in this app may open these hosts.
+         */
+        if (isAggregatorUrl(next)) {
+          throw new HttpError(
+            `This address redirects to ${new URL(next).hostname}, which this tool does not ` +
+              'open. Nothing was fetched from it.',
+            403,
+            next,
+          );
+        }
+        // The body of a POST is not replayed across a redirect: the vendor endpoint this
+        // option exists for does not redirect, and re-POSTing a query to wherever a 302
+        // points is how one query's answer ends up somewhere nobody asked.
+        return politeFetch(next, { ...opts, hopsLeft: hopsLeft - 1, jsonBody: undefined });
+      }
 
       if (res.status === 304 && hit) {
         rememberResponse(url, { ...hit, at: Date.now() });
