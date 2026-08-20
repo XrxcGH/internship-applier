@@ -190,6 +190,32 @@ export function workLocations(prefs: LocationPrefs): Array<{ city: string; regio
 }
 
 /**
+ * What the student is looking for. Exported on its own because the re-extraction path has
+ * to parse this ONE column without parsing the whole profile row — see getUserEnteredFacts.
+ */
+export const Preferences = z.object({
+  companySizes: z.array(z.string()).default([]),
+  industries: z.array(z.string()).default([]),
+  minStipend: z.number().optional(),
+  excludeCompanies: z.array(z.string()).default([]),
+  /**
+   * The kinds of role to search for, when the user has said.
+   *
+   * Empty means "work it out from my resume", which is what every plan did unconditionally
+   * before this existed: `inferRoleFamilies` read the resume, the planner ADDED any filter
+   * the caller passed to that inference rather than letting it replace one, and so an
+   * inferred family could not be removed by any means the interface offered. A student
+   * whose resume mentions a coding class got software-engineering queries for as long as
+   * they owned the profile, whatever they were actually looking for.
+   *
+   * Non-empty REPLACES the inference outright. An explicit answer to "what are you looking
+   * for" is better evidence than anything read off a resume, and a preference the tool
+   * argues with is not a preference.
+   */
+  roleFamilies: z.array(z.string()).default([]),
+});
+
+/**
  * Every role family the planner can search for, and the list the profile editor offers.
  *
  * Here rather than in the server's queryPlanner because both ends need it and a second copy
@@ -311,29 +337,12 @@ export const CandidateProfile = z.object({
   languages: z.array(z.object({ name: z.string(), proficiency: z.string() })).default([]),
   availability: Availability,
   locationPrefs: LocationPrefs,
-  preferences: z
-    .object({
-      companySizes: z.array(z.string()).default([]),
-      industries: z.array(z.string()).default([]),
-      minStipend: z.number().optional(),
-      excludeCompanies: z.array(z.string()).default([]),
-      /**
-       * The kinds of role to search for, when the user has said.
-       *
-       * Empty means "work it out from my resume", which is what every plan did unconditionally
-       * before this existed: `inferRoleFamilies` read the resume, the planner ADDED any filter
-       * the caller passed to that inference rather than letting it replace one, and so an
-       * inferred family could not be removed by any means the interface offered. A student
-       * whose resume mentions a coding class got software-engineering queries for as long as
-       * they owned the profile, whatever they were actually looking for.
-       *
-       * Non-empty REPLACES the inference outright. An explicit answer to "what are you looking
-       * for" is better evidence than anything read off a resume, and a preference the tool
-       * argues with is not a preference.
-       */
-      roleFamilies: z.array(z.string()).default([]),
-    })
-    .default({ companySizes: [], industries: [], excludeCompanies: [], roleFamilies: [] }),
+  preferences: Preferences.default({
+    companySizes: [],
+    industries: [],
+    excludeCompanies: [],
+    roleFamilies: [],
+  }),
   derived: DerivedProfile,
   /** Null until gate G1 passes. Nothing downstream may read an unconfirmed profile. */
   confirmedAt: z.string().datetime().nullable().default(null),

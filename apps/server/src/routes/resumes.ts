@@ -11,7 +11,7 @@ import { describeAccess, NoModelAccessError } from '../infra/llm';
 import { extractText, mimeFromFilename, SUPPORTED_MIME } from '../core/ingestion/extractText';
 import { extractResume } from '../core/ingestion/extractProfile';
 import { toDraftProfile } from '../core/ingestion/toProfile';
-import { getProfileHeader, saveProfile } from '../core/profile/repository';
+import { getProfileHeader, getUserEnteredFacts, saveProfile } from '../core/profile/repository';
 import { sweepApprovals } from './profile';
 import { logger } from '../infra/logger';
 
@@ -148,17 +148,34 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const extraction = await extractResume({ path: filePath, mime: doc.mime, text });
-      // The id and nothing else, read straight off the columns without decrypting.
+      // The id, read straight off the columns without decrypting anything.
       //
       // Loading the whole profile to get it meant a stored row that no longer parses took
       // down the one request that would have replaced it: a single unusable field — a
       // year-only graduation date, a link with no scheme — threw here, came back as a 502,
       // and made the promise the error itself makes ("Re-uploading your resume will rebuild
-      // the profile") untrue. Nothing on this path needs to read what is already stored.
+      // the profile") untrue. That property still holds below, where the user's own answers
+      // are read column by column and any that will not parse is simply left behind.
       const existing = getProfileHeader();
       const draft = toDraftProfile(extraction);
+      /**
+       * Merged over the draft, not replaced by it.
+       *
+       * This carried across exactly one field — the id — so re-uploading a resume silently
+       * destroyed the date of birth, the work authorization, the citizenships, the
+       * availability window, the chosen role families, every additional work location and
+       * every preference. Those are the facts G1 exists to collect and precisely the ones a
+       * resume cannot restate, and the control that did it is offered on the confirm step as
+       * "Upload a different resume" — a phrase that promises a better reading of the same
+       * person, not the loss of everything they typed.
+       *
+       * `getUserEnteredFacts` parses those columns one at a time and omits any that will not
+       * parse, so the property the header-only read was protecting still holds: no stored
+       * value can block a re-extraction.
+       */
+      const kept = existing ? (getUserEnteredFacts() ?? {}) : {};
       // Re-extraction keeps the existing id so history and foreign keys survive.
-      const saved = saveProfile(existing ? { ...draft, id: existing.id } : draft);
+      const saved = saveProfile(existing ? { ...draft, ...kept, id: existing.id } : draft);
       /**
        * The same approval sweep PUT /api/profile runs, because this is the same event by a
        * different door — and the more violent version of it, since a re-extraction replaces

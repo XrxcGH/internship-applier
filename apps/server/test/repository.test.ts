@@ -8,6 +8,7 @@ import {
   ENCRYPTED_COLUMNS,
   getProfile,
   getProfileHeader,
+  getUserEnteredFacts,
   isProfileConfirmed,
   saveProfile,
 } from '../src/core/profile/repository';
@@ -166,5 +167,83 @@ describe('profile repository', () => {
       saveProfile(draft(), NOW);
       expect(isProfileConfirmed()).toBe(false);
     });
+  });
+});
+
+/**
+ * What survives a re-upload, and why this reader is narrow.
+ *
+ * `POST /api/resumes/:id/extract` carried exactly one field across — the id — and took
+ * everything else from a fresh draft. So re-uploading a resume silently destroyed the date of
+ * birth, the work authorization, the citizenships, the availability window, the role families
+ * the student had chosen, every additional work location and every preference: the six facts
+ * G1 exists to collect, none of which a resume can restate, all wiped by a control the confirm
+ * step offers as "Upload a different resume".
+ */
+describe('getUserEnteredFacts', () => {
+  it('returns null when there is no profile yet', () => {
+    expect(getUserEnteredFacts()).toBeNull();
+  });
+
+  it('carries the facts a resume cannot contain', () => {
+    saveProfile(
+      draft({
+        dateOfBirth: '2006-03-15',
+        workAuthorization: { country: 'US', status: 'citizen', needsSponsorship: false },
+        citizenships: ['US'],
+        availability: { start: '2027-06-01', end: '2027-08-20', flexible: false },
+        preferences: {
+          companySizes: [],
+          industries: ['robotics'],
+          excludeCompanies: ['Acme'],
+          roleFamilies: ['robotics'],
+        },
+        locationPrefs: {
+          base: { city: 'Half Moon Bay', region: 'CA', country: 'US' },
+          additionalBases: [{ city: 'Los Angeles', region: 'CA', country: 'US', label: 'school' }],
+          maxCommuteKm: 50,
+          remoteOk: false,
+          hybridOk: true,
+          relocateTo: ['Seattle'],
+        },
+      }),
+      NOW,
+    );
+
+    const kept = getUserEnteredFacts();
+    expect(kept?.dateOfBirth).toBe('2006-03-15');
+    expect(kept?.workAuthorization).toMatchObject({ status: 'citizen' });
+    expect(kept?.citizenships).toEqual(['US']);
+    expect(kept?.availability).toMatchObject({ start: '2027-06-01', flexible: false });
+    expect(kept?.preferences).toMatchObject({
+      roleFamilies: ['robotics'],
+      excludeCompanies: ['Acme'],
+    });
+    expect(kept?.locationPrefs?.additionalBases).toHaveLength(1);
+    expect(kept?.locationPrefs?.relocateTo).toEqual(['Seattle']);
+    expect(kept?.locationPrefs?.remoteOk).toBe(false);
+  });
+
+  it('does NOT carry the home city, which a resume does state', () => {
+    // The fresh extraction is the newer evidence for where somebody lives. Everything else in
+    // that object is the student's own answer and is kept.
+    saveProfile(draft(), NOW);
+    expect(getUserEnteredFacts()?.locationPrefs).not.toHaveProperty('base');
+  });
+
+  it('survives a column that will not parse, and keeps the rest', () => {
+    // The property the header-only read was protecting: no stored value may block a
+    // re-extraction. A field is parsed on its own, and one that fails is simply absent, so
+    // the draft's default stands in its place rather than the whole request failing.
+    saveProfile(draft({ citizenships: ['US'] }), NOW);
+    db.update(schema.profile)
+      .set({ availability: { start: 'not-a-date', flexible: 'yes' } as never })
+      .run();
+
+    const kept = getUserEnteredFacts();
+    expect(kept).not.toBeNull();
+    expect(kept?.availability).toBeUndefined();
+    expect(kept?.citizenships).toEqual(['US']);
+    expect(kept?.workAuthorization).toMatchObject({ status: 'citizen' });
   });
 });

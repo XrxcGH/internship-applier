@@ -5,8 +5,14 @@
  * one-line change and can't be forgotten at a call site.
  */
 import { eq } from 'drizzle-orm';
-import { ZodError } from 'zod';
-import { CandidateProfile } from '@ia/shared';
+import { z, ZodError } from 'zod';
+import {
+  Availability,
+  CandidateProfile,
+  LocationPrefs,
+  Preferences,
+  WorkAuthorization,
+} from '@ia/shared';
 import { db, schema } from '../../infra/db/client';
 import { decryptField, encryptField } from '../../infra/crypto/fieldCrypto';
 import { deriveProfile } from '../ingestion/deriveFields';
@@ -227,4 +233,78 @@ export function confirmProfile(now: Date = new Date()): CandidateProfile {
 export function isProfileConfirmed(): boolean {
   const rows = db.select({ confirmedAt: schema.profile.confirmedAt }).from(schema.profile).all();
   return rows.some((r) => r.confirmedAt !== null);
+}
+
+/**
+ * The facts a resume cannot contain, read narrowly so a broken row cannot block a re-upload.
+ *
+ * `POST /api/resumes/:id/extract` used to carry exactly one field across — the id — and take
+ * everything else from a fresh draft. So re-uploading a resume silently discarded the date of
+ * birth, the work authorization, the citizenships, the availability window, the role families
+ * the student had chosen, every additional work location, and every preference: precisely the
+ * six facts G1 exists to collect, none of which a resume can restate, all of them wiped by a
+ * button the confirm step offers as "Upload a different resume".
+ *
+ * Deliberately NOT `getProfile()`. That path parses the whole row, and the reason this route
+ * reads only the header is written above its call site: one unusable stored field — a
+ * year-only graduation date, a link with no scheme — threw, came back a 502, and made the
+ * error's own promise that "re-uploading your resume will rebuild the profile" untrue. So each
+ * field here is parsed on its own and a field that will not parse is simply absent, leaving
+ * the draft's default in its place. A re-extraction still cannot be blocked by stored data.
+ *
+ * `locationPrefs.base` is not carried: a resume does state where somebody lives, and the fresh
+ * extraction is the newer evidence for it. The rest of that object is the student's own
+ * answer and is kept.
+ */
+export function getUserEnteredFacts(): Partial<CandidateProfile> | null {
+  const row = db
+    .select({
+      id: schema.profile.id,
+      dateOfBirth: schema.profile.dateOfBirth,
+      workAuthorization: schema.profile.workAuthorization,
+      citizenships: schema.profile.citizenships,
+      availability: schema.profile.availability,
+      locationPrefs: schema.profile.locationPrefs,
+      preferences: schema.profile.preferences,
+    })
+    .from(schema.profile)
+    .limit(1)
+    .all()[0];
+  if (!row) return null;
+
+  const out: Partial<CandidateProfile> = {};
+  /** Keeps a field only if it survives its own schema. One bad field cannot cost the others. */
+  const keep = <K extends keyof CandidateProfile>(
+    key: K,
+    schemaFor: { safeParse: (v: unknown) => { success: boolean; data?: unknown } },
+    raw: unknown,
+  ): void => {
+    if (raw === null || raw === undefined) return;
+    const parsed = schemaFor.safeParse(raw);
+    if (parsed.success) out[key] = parsed.data as CandidateProfile[K];
+  };
+
+  try {
+    // The row id is the additional authenticated data every encrypted column is sealed with.
+    const dob =
+      row.dateOfBirth == null || row.dateOfBirth === ''
+        ? null
+        : decryptField(row.dateOfBirth, row.id);
+    if (dob) out.dateOfBirth = dob;
+  } catch {
+    // An undecryptable date of birth is one the user will have to re-enter; it must not stop
+    // the other five from surviving, nor the re-extraction itself.
+  }
+  keep('workAuthorization', WorkAuthorization, row.workAuthorization);
+  keep('citizenships', z.array(z.string()), row.citizenships);
+  keep('availability', Availability, row.availability);
+  keep('preferences', Preferences, row.preferences);
+
+  // The base city comes from the new resume; everything else here the student typed.
+  const prefs = LocationPrefs.safeParse(row.locationPrefs);
+  if (prefs.success) {
+    const { base: _ignored, ...rest } = prefs.data;
+    out.locationPrefs = rest as CandidateProfile['locationPrefs'];
+  }
+  return out;
 }
