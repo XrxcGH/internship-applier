@@ -262,7 +262,29 @@ async function readValue(loc: Locator, field: FormField): Promise<string> {
       return (await loc.isChecked()) ? 'checked' : '';
     }
     if (field.control === 'combobox' || field.control === 'richtext') {
-      return ((await loc.getAttribute('data-value')) ?? (await loc.innerText())).trim();
+      /**
+       * The sources a real widget actually keeps its value in, in that order.
+       *
+       * `controlOf` calls anything carrying `role="combobox"` a combobox before it looks at
+       * the tag — which is right, and means `<input role="combobox">` lands here. That is the
+       * shape ARIA 1.2 prescribes and the one every major component library ships. Reading
+       * `innerText()` off an input returns the empty string, because an input has no text
+       * content: its value lives in `.value`. So read-back compared "" against what had just
+       * been typed and reported a MISMATCH on every one of them — a filled field flagged for
+       * the user to go and check, on the commonest dropdown shape on the web.
+       */
+      const declared = await loc.getAttribute('data-value');
+      if (declared !== null) return declared.trim();
+
+      // `inputValue()` throws on an element that is not a form control, which is exactly how
+      // a div-based combobox is told apart from an input-based one.
+      try {
+        const value = await loc.inputValue();
+        if (value.trim() !== '') return value.trim();
+      } catch {
+        // Not an input. Its text is its value.
+      }
+      return (await loc.innerText()).trim();
     }
     return await loc.inputValue();
   } catch {
@@ -454,7 +476,30 @@ async function fillOne(page: Page, action: FillAction, documentUrl?: string): Pr
         const owns =
           (await loc.getAttribute('aria-controls')) ?? (await loc.getAttribute('aria-owns'));
         const listbox = owns ? frame.locator(`[id="${owns.replace(/["\\]/g, '\\$&')}"]`) : null;
-        const scope = listbox && (await listbox.count()) > 0 ? listbox : frame;
+        /**
+         * Never the whole frame. A widget that declares nothing is scoped to what contains it.
+         *
+         * The fallback here was `frame`, so a hand-rolled ATS dropdown — the exact shape
+         * `IMPLICIT_SUBMIT` exists for — had `chooseOption` pick the FIRST matching option
+         * anywhere in the document. Yes/no options are duplicated across every yes/no question
+         * on an application form, so "Yes" for "are you authorized to work" and "Yes" for "do
+         * you require sponsorship" are indistinguishable by value or label: the answer to one
+         * question could be clicked in another, and the read-back would then compare the right
+         * value against the right box and call it filled.
+         *
+         * The scope is the NEAREST ancestor that actually contains options — not a fixed number
+         * of levels up, which is a guess about markup nobody controls, and not the form, which
+         * is the frame again under another name. A widget's own listbox is by construction the
+         * closest one enclosing both it and its options; a neighbouring question's is further
+         * out, past the first ancestor that qualifies.
+         */
+        const nearby = loc.locator("xpath=ancestor::*[.//*[@role='option']][1]");
+        const scope =
+          listbox && (await listbox.count()) > 0
+            ? listbox
+            : (await nearby.count()) > 0
+              ? nearby
+              : frame;
         const optionLoc = scope.locator(SAFE_OPTION);
         const offered = await optionLoc.evaluateAll((els) =>
           els.map((el) => ({

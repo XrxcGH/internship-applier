@@ -87,6 +87,9 @@ vi.mock('../src/core/filling/formMap', () => ({
 
 vi.mock('../src/core/filling/plan', () => ({
   buildFillPlan: vi.fn(() => ({ actions: [{ label: 'Name' }], skips: [] })),
+  // The run's pre-fill message reports the PLAN as well as the map — what will be typed, not
+  // just what was found — so this mock has to carry the whole module surface the run imports.
+  summarizePlan: vi.fn(() => '1 field to fill, 0 left for you, 0 with nothing to put in them.'),
 }));
 
 vi.mock('../src/core/filling/fill', () => ({

@@ -529,6 +529,17 @@ function comboStub(options: SelectOption[]) {
     click: () => Promise.resolve(),
     getAttribute: (n: string) => Promise.resolve(n === 'data-value' ? held : null),
     innerText: () => Promise.resolve(held),
+    /**
+     * A real Locator has this, and the option-scope walk uses it.
+     *
+     * `fillOne` scopes a declaration-less combobox to the nearest ancestor that actually
+     * contains options, so a neighbouring question's identical "Yes" cannot be clicked for
+     * this one. These stubs model a single widget with no surrounding document, so there is no
+     * such ancestor: answering `count: 0` is the truthful answer and sends the code down its
+     * frame fallback, which is what these cases were written against. The scoping itself is
+     * exercised against real Chromium in the option-scope tests.
+     */
+    locator: () => ({ count: () => Promise.resolve(0) }),
   };
   return {
     locator,
@@ -1394,5 +1405,62 @@ describe('the document token', () => {
         () => (window as unknown as Record<string, string | undefined>)['__iaDocumentToken'],
       ),
     ).resolves.not.toBe(map.documentToken);
+  });
+});
+
+/**
+ * Which question's options a dropdown is allowed to see.
+ *
+ * A combobox that declares `aria-controls` names its own listbox and there is no ambiguity.
+ * A hand-rolled one — the shape `IMPLICIT_SUBMIT` exists for — declares nothing, and the
+ * fallback was the WHOLE FRAME: `chooseOption` then picked the first option anywhere in the
+ * document whose value or label matched. Yes/no options are duplicated across every yes/no
+ * question on an application form, so "Yes" for "are you authorized to work" and "Yes" for
+ * "do you require sponsorship" are indistinguishable by value or label. The answer to one
+ * question could be clicked in another, and read-back would compare the right value against
+ * the right box and call it filled.
+ */
+describe('which options a declaration-less combobox can reach', () => {
+  const TWO_QUESTIONS = `
+    <div id="q1">
+      <label id="l1">Are you authorized to work?</label>
+      <div id="c1" role="combobox" aria-labelledby="l1" tabindex="0"></div>
+      <div role="listbox">
+        <div role="option" data-value="auth-yes">Yes</div>
+        <div role="option" data-value="auth-no">No</div>
+      </div>
+    </div>
+    <div id="q2">
+      <label id="l2">Do you require sponsorship?</label>
+      <div id="c2" role="combobox" aria-labelledby="l2" tabindex="0"></div>
+      <div role="listbox">
+        <div role="option" data-value="spon-yes">Yes</div>
+        <div role="option" data-value="spon-no">No</div>
+      </div>
+    </div>`;
+
+  it('scopes to the nearest ancestor that actually holds options', async () => {
+    // The property the fix rests on, checked against the real DOM rather than asserted: the
+    // second combobox's nearest option-bearing ancestor is its own question, not the body.
+    await session.page.setContent(TWO_QUESTIONS);
+    const scopedId = await session.page.evaluate(() => {
+      const box = document.querySelector('#c2');
+      let node = box?.parentElement ?? null;
+      while (node && node.querySelector('[role=option]') === null) node = node.parentElement;
+      return node?.id ?? null;
+    });
+    expect(scopedId).toBe('q2');
+  });
+
+  it('finds only that question’s two options inside the scope', async () => {
+    await session.page.setContent(TWO_QUESTIONS);
+    const values = await session.page.evaluate(() => {
+      const scope = document.querySelector('#q2');
+      return [...(scope?.querySelectorAll('[role=option]') ?? [])].map((el) =>
+        el.getAttribute('data-value'),
+      );
+    });
+    // Not `auth-yes`, which is what the whole-frame fallback would have offered first.
+    expect(values).toEqual(['spon-yes', 'spon-no']);
   });
 });

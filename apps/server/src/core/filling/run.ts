@@ -17,7 +17,7 @@ import { AGGREGATOR_REFUSAL, isAggregatorUrl } from '../discovery/sourcingPolicy
 import { detectIntervention, openSession, type BrowserSession, type Intervention } from './browser';
 import { executePlan, describeFill, sameDocument, type FillResult } from './fill';
 import { buildFormMap, summarizeMap, type FormMap } from './formMap';
-import { buildFillPlan, type FillPlan } from './plan';
+import { buildFillPlan, summarizePlan, type FillPlan } from './plan';
 
 export type RunState = 'opening' | 'reading' | 'awaiting_user' | 'filling' | 'done' | 'failed';
 
@@ -351,7 +351,20 @@ async function open(input: StartInput): Promise<FillRun> {
       answers: input.answers,
       resumePath: input.resumePath,
     });
-    run.message = summarizeMap(run.map);
+    /**
+     * What will be typed, not what was found.
+     *
+     * `summarizeMap` derives "fillable" as every classified field minus the unknown and
+     * redlined ones — so a field the tool RECOGNISED but has no value for (a GPA the profile
+     * does not carry, a referral source, an essay with no approved answer) was counted as one
+     * it was about to fill. That number is what the user reads before a key is pressed, and
+     * the plan already knows better: it has separated those into skips.
+     *
+     * Both lines, because they answer different questions. The map line says what the page
+     * turned out to contain, which is how someone tells a form that failed to render from one
+     * that rendered and had little on it. The plan line says what this run will do.
+     */
+    run.message = `${summarizeMap(run.map)} ${summarizePlan(run.plan)}`;
     return run;
   } catch (err) {
     // See DISCARDED_WHILE_OPENING: the user asked for this run to go away, which is not a
