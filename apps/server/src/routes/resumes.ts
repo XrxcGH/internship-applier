@@ -9,7 +9,12 @@ import { config } from '../config';
 import { db, schema } from '../infra/db/client';
 import { encryptField } from '../infra/crypto/fieldCrypto';
 import { describeAccess, NoModelAccessError } from '../infra/llm';
-import { extractText, mimeFromFilename, SUPPORTED_MIME } from '../core/ingestion/extractText';
+import {
+  extractText,
+  mimeFromFilename,
+  storedResumeFilename,
+  SUPPORTED_MIME,
+} from '../core/ingestion/extractText';
 import { extractResume } from '../core/ingestion/extractProfile';
 import { toDraftProfile } from '../core/ingestion/toProfile';
 import { getProfileHeader, getUserEnteredFacts, saveProfile } from '../core/profile/repository';
@@ -43,7 +48,9 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
     const bytes = await file.toBuffer();
     const id = ulid();
     const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const stored = path.join(config.paths.resumes, `${id}${path.extname(file.filename) || ''}`);
+    // The extension comes from the validated type, never from the name the student's file
+    // arrived under. See `extensionForMime` for what a name was able to do to this path.
+    const stored = path.join(config.paths.resumes, storedResumeFilename(id, mime));
 
     await mkdir(config.paths.resumes, { recursive: true });
     await writeFile(stored, bytes, { mode: 0o600 });
