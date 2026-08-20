@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGGREGATOR_REFUSAL, isAggregatorUrl } from '../src/core/discovery/sourcingPolicy';
+import { SourceRefusedError, startRun } from '../src/core/filling/run';
 
 /**
  * The promise the paste path is built on, held everywhere instead of in one adapter.
@@ -26,6 +27,26 @@ const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 
 function read(rel: string): string {
   return readFileSync(path.join(SERVER_SRC, rel), 'utf8');
+}
+
+/**
+ * The file with its comments removed.
+ *
+ * This test greps each URL-opening file for the policy, and `core/filling/run.ts` explains in
+ * prose why the policy exists — including the sentence "`isAggregatorUrl` had exactly one
+ * caller in the whole repo". That sentence satisfied the grep, so deleting the import and the
+ * guard itself left this test passing, on the check standing in for the one runtime test the
+ * signed-in browser path did not have. A comment describing a rule is not the rule.
+ */
+function codeOf(rel: string): string {
+  // Line by line, not by regex over the whole file. A block-comment pattern cannot tell a
+  // comment from a string that happens to contain one, and the very handler this test exists
+  // to find is registered against a glob containing a slash-star — which sent a lazy block
+  // matcher off to the next star-slash and swallowed the code in between.
+  return read(rel)
+    .split('\n')
+    .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
+    .join('\n');
 }
 
 describe('which hosts this tool refuses to open', () => {
@@ -103,11 +124,16 @@ describe('every subsystem that opens a URL consults the policy', () => {
       file: 'routes/discovery.ts',
       why: 'fetches whatever URL the manual paste-a-URL route is given',
     },
+    {
+      file: 'core/filling/browser.ts',
+      why: 'is a real browser that follows redirects on its own, carrying the signed-in profile',
+    },
   ];
 
   for (const { file, why } of CALLERS) {
     it(`${file} — ${why}`, () => {
-      expect(read(file)).toMatch(/isAggregatorUrl/);
+      // A CALL, in code with the comments stripped — not the identifier appearing anywhere.
+      expect(codeOf(file)).toMatch(/isAggregatorUrl\s*\(/);
     });
   }
 
@@ -126,5 +152,64 @@ describe('every subsystem that opens a URL consults the policy', () => {
     // built for exactly this posting.
     expect(AGGREGATOR_REFUSAL).toMatch(/paste its text/i);
     expect(AGGREGATOR_REFUSAL).toMatch(/Handshake, LinkedIn or Indeed/);
+  });
+});
+
+/**
+ * The guard on the signed-in browser, which is the highest-consequence one and had no test.
+ *
+ * Grepping the whole test tree for `SourceRefusedError` or `SOURCE_REFUSED` returned nothing
+ * before this, so neither the refusal in `startRun` nor the 400 the route maps it to was
+ * covered — while the source-level check that stood in for them was satisfied by a comment.
+ */
+describe('the fill path refuses a board this tool will not open', () => {
+  it('refuses before the browser is launched', async () => {
+    // Ordering is the point: the refusal has to come before `openSession`, because launching
+    // the persistent context is what puts the student's logins in play.
+    await expect(
+      startRun({
+        applicationId: 'app_test',
+        applyUrl: 'https://www.linkedin.com/jobs/view/123',
+        profile: {} as never,
+        answers: [],
+      }),
+    ).rejects.toBeInstanceOf(SourceRefusedError);
+  });
+
+  it('carries the refusal message that names the way forward', async () => {
+    const err = await startRun({
+      applicationId: 'app_test',
+      applyUrl: 'https://app.joinhandshake.com/jobs/1',
+      profile: {} as never,
+      answers: [],
+    }).catch((e: unknown) => e as SourceRefusedError);
+    expect(err).toBeInstanceOf(SourceRefusedError);
+    const refused = err as SourceRefusedError;
+    expect(refused.code).toBe('SOURCE_REFUSED');
+    expect(refused.message).toMatch(/paste its text/i);
+  });
+
+  it('checks where the browser LANDED, not only where it was sent', () => {
+    // A real browser follows 3xx, meta-refresh and `location =` by itself, so the string
+    // checked before `goto` is not necessarily the host that ends up with the session. Read
+    // off the source because reaching it at runtime needs a live redirecting server; what is
+    // pinned is that the check exists on both paths and reads the CURRENT url.
+    const code = codeOf('core/filling/run.ts');
+    expect(code).toMatch(/function refuseIfAggregator/);
+    expect(code).toMatch(/run\.session\?\.page\.url\(\)/);
+    // After the navigation, and again before anything is typed.
+    expect(code).toMatch(/goto\([\s\S]{0,120}refuseIfAggregator\(run\)/);
+    const drive = code.slice(code.indexOf('async function drive'));
+    expect(drive.slice(0, 600)).toMatch(/refuseIfAggregator\(run\)/);
+  });
+
+  it('aborts the request in the browser itself, so nothing reaches the host', () => {
+    // Stronger than checking the URL afterwards: a route handler refuses the REQUEST, so no
+    // cookies, no Referer and no TLS handshake reach a site this tool has promised not to
+    // visit. Scoped to document navigations so a page's fonts and images still load.
+    const code = codeOf('core/filling/browser.ts');
+    expect(code).toMatch(/context\.route\(/);
+    expect(code).toMatch(/resourceType\(\) === 'document'/);
+    expect(code).toMatch(/route\.abort\(/);
   });
 });

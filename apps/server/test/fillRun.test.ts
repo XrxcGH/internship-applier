@@ -29,6 +29,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   opened: 0,
   closed: 0,
+  /**
+   * Where the stubbed page reports itself to be after a navigation.
+   *
+   * A real browser follows redirects itself, so the run re-checks the LANDED url against the
+   * sourcing policy — an employer 'Apply' link that bounces to a board would otherwise put the
+   * signed-in profile on it. Default is an ordinary employer page; a test that wants the
+   * refusal sets this.
+   */
+  landsOn: 'https://careers.acme.com/apply',
   /** Held by `openSession` while set, so a launch can be caught mid-flight. */
   openGate: null as Promise<void> | null,
   /** Held by `detectIntervention` while set, which is the window defect 1 lived in. */
@@ -48,7 +57,15 @@ vi.mock('../src/core/filling/browser', () => ({
     // listens for.
     const session = {
       context: {},
-      page: { goto: async () => undefined, isClosed: () => session.closedByUser },
+      page: {
+        goto: async () => undefined,
+        isClosed: () => session.closedByUser,
+        // A real Playwright Page has this, and the run reads it to check where a navigation
+        // actually LANDED — a browser follows redirects on its own, so the URL it was sent to
+        // is not necessarily the host that ends up with the session. A stub without it is a
+        // model of a Page that cannot exist.
+        url: () => h.landsOn,
+      },
       closedByUser: false,
       close: async () => {
         h.closed += 1;
@@ -114,6 +131,7 @@ beforeEach(() => {
   h.executing = 0;
   h.peakExecuting = 0;
   h.executed = 0;
+  h.landsOn = 'https://careers.acme.com/apply';
 });
 
 afterEach(async () => {
@@ -295,5 +313,45 @@ describe('a fill the user stops while it is typing', () => {
 
     await expect(continueRun(input('app-1'))).rejects.toThrow(/stopped while it was filling/i);
     expect(getRun('app-1')).toBeUndefined();
+  });
+});
+
+/**
+ * Where the navigation LANDED, which a browser decides for itself.
+ *
+ * `startRun` checks the string it is about to open, and then Playwright takes over — and a
+ * real browser follows 3xx, meta-refresh and `location =` on its own. So an employer "Apply"
+ * link that bounces to LinkedIn, Indeed, Handshake or Glassdoor put the PERSISTENT, SIGNED-IN
+ * profile on that host, the form mapper read it, and a continue would have typed the
+ * student's name, email and approved answers into it. `politeFetch` closed the identical hole
+ * for plain fetches by re-checking every hop; this is the browser's half of that.
+ */
+describe('a page that redirects somewhere this tool will not go', () => {
+  it('refuses after the navigation, before anything reads the page', async () => {
+    h.landsOn = 'https://www.linkedin.com/jobs/view/9';
+    await expect(startRun(input('app-1'))).rejects.toThrow(/does not open/i);
+  });
+
+  it('names the host it actually landed on, not the one it was given', async () => {
+    // The student pasted an employer URL and got a refusal; without the host they would have
+    // no way to tell that the redirect, rather than their link, is what stopped it.
+    h.landsOn = 'https://app.joinhandshake.com/jobs/5';
+    await expect(startRun(input('app-1'))).rejects.toThrow(/app\.joinhandshake\.com/);
+  });
+
+  it('closes the browser rather than leaving it parked on that host', async () => {
+    // A refusal that left the session open would leave the signed-in profile sitting on the
+    // page, holding the profile-directory lock every later run needs.
+    h.landsOn = 'https://www.indeed.com/viewjob?jk=1';
+    await startRun(input('app-1')).catch(() => undefined);
+    expect(h.closed).toBeGreaterThan(0);
+    expect(getRun('app-1')).toBeUndefined();
+  });
+
+  it('lets an ordinary employer page through', async () => {
+    // The other direction, which matters just as much: a refusal that fired on a normal
+    // careers page would break the feature entirely.
+    h.landsOn = 'https://careers.acme.com/apply?step=2';
+    await expect(startRun(input('app-1'))).resolves.toMatchObject({ applicationId: 'app-1' });
   });
 });

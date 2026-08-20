@@ -21,6 +21,8 @@ import { chromium, type BrowserContext, type Page } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { config } from '../../config';
 import { logger } from '../../infra/logger';
+import { scrubUrl } from '../../infra/http/fetcher';
+import { isAggregatorUrl } from '../discovery/sourcingPolicy';
 
 export interface SessionOptions {
   /** Headless is for the fixture site only. */
@@ -66,6 +68,39 @@ export async function openSession(opts: SessionOptions = {}): Promise<BrowserSes
     // hide `navigator.webdriver` from bot detection, which is exactly the evasion this
     // file's header and docs/07 promise not to do. It was here, and it made those
     // promises false. The browser identifies as automated because it is.
+  });
+
+  /**
+   * The sourcing policy, enforced at the network layer rather than at the call site.
+   *
+   * `startRun` tests the URL it is ABOUT to open, and then a real browser takes over. Chromium
+   * follows 3xx by itself, and meta-refresh and `location =` besides — so an employer "Apply"
+   * link that bounces to LinkedIn, Indeed, Handshake or Glassdoor put THIS profile on that
+   * host, and this profile is the persistent one carrying the student's own logins. The form
+   * mapper would then read that page and a continue would type their name, email and approved
+   * answers into it.
+   *
+   * `politeFetch` closed the identical hole for HTTP fetches by re-checking each redirect hop.
+   * A route handler is the browser's equivalent and is stronger than checking `page.url()`
+   * after the fact: it refuses the REQUEST, so nothing is sent to the host at all — no cookies,
+   * no Referer, no TLS handshake carrying SNI — where a post-hoc check only notices after the
+   * page has already been fetched with the session attached.
+   *
+   * Scoped to top-level document navigations. A careers page legitimately loads fonts, images
+   * and analytics from all over, and aborting a subresource would break pages this tool is
+   * meant to fill; what the policy is about is which SITE the student's browser visits.
+   */
+  await context.route('**/*', (route) => {
+    const request = route.request();
+    if (request.resourceType() === 'document' && isAggregatorUrl(request.url())) {
+      logger.warn(
+        { url: scrubUrl(request.url()) },
+        'blocked a navigation to a board this tool does not open',
+      );
+      void route.abort('blockedbyclient');
+      return;
+    }
+    void route.continue();
   });
 
   const page = context.pages()[0] ?? (await context.newPage());

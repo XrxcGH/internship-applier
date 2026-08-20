@@ -204,6 +204,29 @@ export class SourceRefusedError extends Error {
   readonly code = 'SOURCE_REFUSED' as const;
 }
 
+/**
+ * Where the browser ACTUALLY IS, checked against the policy — not where it was asked to go.
+ *
+ * `startRun` tests the URL it is about to open and then hands it to a real browser, which
+ * follows 3xx, meta-refresh and `location =` on its own. `openSession` installs a route
+ * handler that aborts a document request to one of these hosts, which is the primary defence
+ * and refuses the request outright; this is the second, for the cases a request filter cannot
+ * see — a page already open from an earlier call, a history navigation, a handler installed
+ * after a redirect chain has begun.
+ *
+ * Run before anything READS the page and before anything types into it. The order matters:
+ * reading a page is cheap and typing into it is not, and the value being typed is the
+ * student's name, email and approved answers.
+ */
+function refuseIfAggregator(run: FillRun): void {
+  const here = run.session?.page.url();
+  if (here !== undefined && isAggregatorUrl(here)) {
+    throw new SourceRefusedError(
+      `This application's page redirected to ${new URL(here).hostname}. ${AGGREGATOR_REFUSAL}`,
+    );
+  }
+}
+
 export async function startRun(input: StartInput): Promise<FillRun> {
   /**
    * Refused before the browser opens, and this is the sharpest edge of the whole policy.
@@ -303,6 +326,8 @@ async function open(input: StartInput): Promise<FillRun> {
     }
     run.session = session;
     await run.session.page.goto(input.applyUrl, { waitUntil: 'domcontentloaded' });
+    // Where it landed, which is not always where it was sent.
+    refuseIfAggregator(run);
 
     run.state = 'reading';
     const blocked = await detectIntervention(run.session.page);
@@ -332,6 +357,22 @@ async function open(input: StartInput): Promise<FillRun> {
     // See DISCARDED_WHILE_OPENING: the user asked for this run to go away, which is not a
     // failure to report and not a run to hand back.
     if (err instanceof Error && err.message === DISCARDED_WHILE_OPENING) throw err;
+    /**
+     * A refusal is ours, not the site's, and it has to travel as one.
+     *
+     * Turned into a `failed` run it would reach the route as a 502 saying the page broke —
+     * inviting a retry of something that will never be permitted, and blaming an employer for
+     * a rule this tool applies to itself. routes/filling.ts maps SourceRefusedError to a 400
+     * naming the paste-the-text path, and it can only do that if the error arrives.
+     *
+     * The session is closed on the way past: a refusal that left the browser parked on that
+     * host would defeat the point of refusing, and would hold the profile-directory lock every
+     * later run needs.
+     */
+    if (err instanceof SourceRefusedError) {
+      await discardRun(input.applicationId);
+      throw err;
+    }
     run.state = 'failed';
     run.message = err instanceof Error ? err.message : String(err);
     logger.error({ err, applicationId: input.applicationId }, 'fill run failed to start');
@@ -376,6 +417,11 @@ async function drive(run: FillRun, input: StartInput): Promise<FillRun> {
   if (!run.session) {
     throw new Error('No open fill run for this application. Start one first.');
   }
+
+  // Again here, because this re-reads and types into whatever the page currently shows — and
+  // between the start of a run and a continue, the person has been using that browser: they
+  // signed in, they clicked through a wizard, they may be somewhere else entirely.
+  refuseIfAggregator(run);
 
   // Everything past this point ends in a state the user can act on, the same way starting a
   // run does. A throw from the re-read or from the fill used to leave the run parked in
