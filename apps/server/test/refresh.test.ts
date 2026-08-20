@@ -93,3 +93,94 @@ describe('refreshPostings', () => {
     expect(openIds()).toEqual(['fresh']);
   });
 });
+
+/**
+ * A stored address on a board this tool will not open.
+ *
+ * `POST /api/discovery/paste` exists so a student can bring a Handshake, LinkedIn or Indeed
+ * posting WITHOUT this tool contacting those sites, and it stores their address as the
+ * posting's identity on the undertaking that storing an address is not visiting one. This
+ * loop walks every open posting and fetches its canonical URL, filtered on `is_open` alone —
+ * so refreshing issued an unattended, timed GET at app.joinhandshake.com, robots.txt request
+ * and all. The careful path armed the visit it was built to avoid.
+ */
+function seedAggregator(): void {
+  sqlite.prepare('DELETE FROM job_posting').run();
+  for (const [id, url] of [
+    ['h1', 'https://app.joinhandshake.com/jobs/1'],
+    ['l1', 'https://www.linkedin.com/jobs/view/2'],
+    ['a1', 'https://boards.greenhouse.io/acme/jobs/3'],
+  ] as const) {
+    db.insert(schema.jobPosting)
+      .values({
+        id,
+        company: 'Acme',
+        title: `Intern ${id}`,
+        canonicalUrl: url,
+        applyUrl: url,
+        fingerprint: `acme|intern ${id}|nyc`,
+        descriptionText: 'A job.',
+        isOpen: true,
+        closesAt: null,
+        firstSeenAt: '2026-07-01T00:00:00Z',
+        lastSeenAt: '2026-08-01T00:00:00Z',
+      })
+      .run();
+  }
+}
+
+describe('refreshing a posting whose address this tool will not open', () => {
+  it('does not fetch it, and counts it as unchecked rather than as checked', async () => {
+    // Counted rather than skipped in silence: a posting nobody could re-check is a posting
+    // whose freshness is unknown, and reporting it as checked would be exactly the false
+    // completeness this summary exists to prevent.
+    seedAggregator();
+    const real = globalThis.fetch;
+    const reached: string[] = [];
+    globalThis.fetch = (async (input: unknown) => {
+      reached.push(String(input));
+      return new Response('', { status: 404 });
+    }) as typeof globalThis.fetch;
+
+    try {
+      const summary = await refreshPostings({ now: NOW, checkUrls: true, limit: 10 });
+      expect(summary.notChecked).toBe(2);
+      expect(reached.join(' ')).not.toMatch(/joinhandshake|linkedin/);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it('still checks the ones it is allowed to open', async () => {
+    seedAggregator();
+    const real = globalThis.fetch;
+    const reached: string[] = [];
+    globalThis.fetch = (async (input: unknown) => {
+      reached.push(String(input));
+      return new Response('ok', { status: 200 });
+    }) as typeof globalThis.fetch;
+
+    try {
+      const summary = await refreshPostings({ now: NOW, checkUrls: true, limit: 10 });
+      expect(summary.checked).toBe(1);
+      expect(reached.join(' ')).toMatch(/boards\.greenhouse\.io/);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it('does not close a posting merely because it could not be checked', async () => {
+    // The worst possible reading of "unchecked": a Handshake posting the student pasted
+    // themselves disappearing from their queue because this tool declined to visit it.
+    seedAggregator();
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('', { status: 404 })) as typeof globalThis.fetch;
+    try {
+      await refreshPostings({ now: NOW, checkUrls: true, limit: 10 });
+      expect(openIds()).toContain('h1');
+      expect(openIds()).toContain('l1');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});

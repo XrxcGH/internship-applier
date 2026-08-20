@@ -281,3 +281,48 @@ describe('what the database file is readable by', () => {
     expect(mode & 0o077).toBe(0);
   });
 });
+
+/**
+ * A date of birth that will not decrypt, on the path whose whole promise is that no stored
+ * value can block a re-extraction.
+ *
+ * `getUserEnteredFacts` reads six columns and parses each on its own, so one bad field costs
+ * only itself. The date of birth is the odd one out: it is the only ENCRYPTED column in that
+ * set, so its failure mode is a throw from the cipher rather than a Zod parse failure, and it
+ * is caught separately. That catch had no test — and it is the one guarding a field a student
+ * cannot re-enter from a resume, on the request that would otherwise have replaced everything.
+ */
+describe('getUserEnteredFacts when the date of birth will not decrypt', () => {
+  it('keeps the other five facts', () => {
+    saveProfile(draft({ citizenships: ['US'] }), NOW);
+    // Ciphertext that is not ours. `decryptField` throws rather than returning nonsense,
+    // which is the behaviour this catch exists for.
+    db.update(schema.profile).set({ dateOfBirth: 'not-a-sealed-value' }).run();
+
+    const kept = getUserEnteredFacts();
+    expect(kept).not.toBeNull();
+    expect(kept?.dateOfBirth).toBeUndefined();
+    expect(kept?.citizenships).toEqual(['US']);
+    expect(kept?.workAuthorization).toMatchObject({ status: 'citizen' });
+    expect(kept?.availability).toBeTruthy();
+    expect(kept?.preferences).toBeTruthy();
+  });
+
+  it('does not throw, so a re-upload is still possible', () => {
+    // The property the narrow read exists to protect: no stored value can block a
+    // re-extraction. A student whose profile is damaged has exactly one way out, and it is
+    // this request.
+    saveProfile(draft(), NOW);
+    db.update(schema.profile).set({ dateOfBirth: 'not-a-sealed-value' }).run();
+    expect(() => getUserEnteredFacts()).not.toThrow();
+  });
+
+  it('leaves the field absent rather than null, so the draft default stands', () => {
+    // Absent means "carry nothing across for this"; an explicit null would OVERWRITE whatever
+    // the fresh extraction produced, which for a field a resume cannot contain is the same
+    // data loss the merge was built to stop.
+    saveProfile(draft(), NOW);
+    db.update(schema.profile).set({ dateOfBirth: 'not-a-sealed-value' }).run();
+    expect('dateOfBirth' in (getUserEnteredFacts() ?? {})).toBe(false);
+  });
+});

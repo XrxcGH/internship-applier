@@ -19,7 +19,7 @@ import {
 // Moved out of the wizard when the experience, project and skill editors arrived and needed
 // it too — a component file importing from a page is the wrong direction. The editors those
 // helpers serve are covered in profileEditors.test.ts.
-import { remapListFlags } from '../src/lib/profileEdit';
+import { remapListFlags, remapTypedBoxes } from '../src/lib/profileEdit';
 import { moveListItem } from '../src/lib/profileEdit';
 
 /**
@@ -878,5 +878,85 @@ describe('the education list handler', () => {
     expect(next).toHaveLength(4);
     expect(next[3]?.institution).toBe('');
     expect(moved).toBeUndefined();
+  });
+});
+
+/**
+ * The permutation the education editor hands up when a school moves or goes.
+ *
+ * Every flag and every typed GPA box on that list is addressed BY POSITION —
+ * `education.1.gpa` — so removing a row from the middle without a permutation leaves each
+ * flag below it pointing at its neighbour: the GPA warning for the second school landing on
+ * the third, over whatever that school really has. `remapListFlags` and `remapTypedBoxes` both
+ * consume it, and each was tested against a permutation written by hand in its own file. What
+ * the EDITOR actually produces was asserted in neither.
+ */
+describe('the permutation the education editor produces', () => {
+  /** Every element in a rendered tree, flattened. */
+  function nodes(node: unknown, out: Array<Record<string, unknown>> = []) {
+    if (Array.isArray(node)) {
+      for (const n of node) nodes(n, out);
+      return out;
+    }
+    if (!isValidElement(node)) return out;
+    const props = node.props as Record<string, unknown>;
+    out.push(props);
+    nodes(props['children'], out);
+    return out;
+  }
+
+  /** Drives one of the editor's controls and reports what it handed up. */
+  function press(action: 'remove' | 'up' | 'down', index: number, rows: number) {
+    let moved: number[] | undefined;
+    let next: unknown[] | undefined;
+
+    const element = createElement(EducationEditor, {
+      entries: Array.from({ length: rows }, (_, i) => school({ institution: `S${String(i)}` })),
+      flagged: () => false,
+      typed: {},
+      onEntry: () => undefined,
+      onTyped: () => undefined,
+      onList: (list: EducationEntry[], m?: number[]) => {
+        next = list;
+        moved = m;
+      },
+    });
+
+    const label =
+      action === 'remove'
+        ? `Remove school ${String(index + 1)}`
+        : `Move school ${String(index + 1)} ${action}`;
+
+    const rendered = (element.type as (p: unknown) => unknown)(element.props);
+    const hit = nodes(rendered).find((p) => p['aria-label'] === label);
+    expect(hit, label).toBeTruthy();
+    (hit?.['onClick'] as (() => void) | undefined)?.();
+
+    return { moved, next };
+  }
+
+  it('says which old row each new row came from, when one is removed', () => {
+    // Position is the NEW index and the value is the OLD one, which is the shape both
+    // remappers read. Removing the middle of three: new 0 was old 0, new 1 was old 2.
+    const { moved, next } = press('remove', 1, 3);
+    expect(moved).toEqual([0, 2]);
+    expect(next).toHaveLength(2);
+  });
+
+  it('omits the removed row entirely, which is what marks it gone rather than moved', () => {
+    expect(press('remove', 1, 3).moved).not.toContain(1);
+  });
+
+  it('swaps exactly two positions on a move, leaving the rest alone', () => {
+    expect(press('down', 0, 3).moved).toEqual([1, 0, 2]);
+  });
+
+  it('produces a permutation the two remappers agree on', () => {
+    // They run on one list change and would corrupt each other if they read it differently.
+    const moved = press('remove', 1, 3).moved!;
+    expect(remapListFlags(['education.2.gpa'], 'education', moved)).toEqual(['education.1.gpa']);
+    expect(remapTypedBoxes({ 'education.2.gpa.value': '4.0' }, 'education', moved)).toEqual({
+      'education.1.gpa.value': '4.0',
+    });
   });
 });
