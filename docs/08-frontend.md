@@ -139,10 +139,18 @@ Writing samples in, measured style profile out, described in plain language.
 
 ### Settings — `settings` (`pages/Settings.tsx`)
 
-Four sections: model access with a connection test, what it has cost, export everything, and
-delete everything. **Not built:** API-key entry — Discover reports which sources have a key
-and names the `.env` variables, but nothing in the interface writes one — the scoring-weight
-editor with learned adjustments, and the answer-library editor that this doc used to list.
+Five sections: model access with a connection test, what it has cost, the boards this
+machine has stored with a switch for each, export everything, and delete everything.
+
+The board list is the control `routes/discovery.ts` had been citing as the reason it is safe
+to write a resolved board down at all — "the source can be switched off in Settings" — while
+Settings had no such control. It matters more now that a board answering 404/410/422 switches
+itself off during a run: without a way back, one bad answer dropped a board from every future
+plan for good.
+
+**Not built:** API-key entry — Discover reports which sources have a key and names the
+`.env` variables, but nothing in the interface writes one — the scoring-weight editor with
+learned adjustments, and the answer-library editor that this doc used to list.
 
 ## Component inventory
 

@@ -67,10 +67,10 @@ Errors use a consistent envelope:
 | `POST` | `/api/discovery/run` | Runs the plan. Progress via SSE; the summary is returned when it finishes. |
 | `GET` | `/api/discovery/runs` | Recent run summaries. |
 | `GET` | `/api/discovery/runs/:id` | One summary: per-source counts, errors, skips, duplicates. |
-| `GET` | `/api/discovery/stats` | Posting counts by source and freshness. |
+`GET /api/discovery/stats` — `{ total, open }`: every stored posting, and how many are still open. Nothing is grouped by source and nothing reports freshness.
 | `GET` | `/api/postings` | The raw posting table, for inspection. |
 | `POST` | `/api/discovery/manual` | Body: `{ url }`. The paste-a-URL path — fetch, normalize, store one posting. |
-| `POST` | `/api/companies/resolve` | Body: `{ name }` → detected ATS and board slug, by probing the three keyless vendors. |
+`POST /api/companies/resolve` — probes six vendors per slug candidate (Greenhouse, Lever, Ashby, SmartRecruiters, Workable by GET, Workday by a bounded POST), across up to three candidates. docs/04 § Company target list states the request bound.
 | `POST` | `/api/discovery/refresh` | Re-check open/closed and deadlines across the table. |
 | `POST` | `/api/postings/:id/refresh` | The same, for one posting. |
 

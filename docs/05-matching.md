@@ -188,8 +188,8 @@ listed".
 | Required-skill coverage | 30 | Fraction of `necessity: 'required'` skill requirements matched against the user's skill names. Exact match on a normalized name, then a small hand-written alias table (`js`/`node` → javascript, `k8s` → kubernetes, and a handful more). The alias list is deliberately short: a wrong alias inflates a score silently. |
 | Preferred-skill coverage | 12 | Same over `preferred`. |
 | Role-family alignment | 18 | Fraction of the posting title's terms that appear in the user's own vocabulary — experience titles, skill names and project names — after dropping stopwords and the words every internship title carries (`intern`, `internship`, `summer`). Cheap, explainable, and traceable to a specific word on the user's resume. |
-| Domain/interest match | 10 | Company industry vs `preferences.industries`. |
-| Seniority fit | 10 | Distance between required experience and `derived.seniorityBand`. Penalizes both over- and under-shooting. |
+| Domain/interest match | 10 | Substring match of each stated industry against the whole job description, lowercased. There is no company-industry field anywhere — `job_posting` has no industry column and `PostingFacts` carries none — so this asks whether the word appears in the posting at all. No stated industries scores a neutral 0.5. |
+| Seniority fit | 10 | Membership, not distance: each seniority band has a fixed list of position types, and a posting scores 1.0 if its `positionType` is on the list, 0.25 if it is not, 0.5 if the posting states none. No requirement is read and nothing is measured. |
 | Location desirability | 8 | A fixed ladder, not a preference ranking: 1.0 for a posting in any place you work from, 0.9 remote, 0.8 a relocation target, 0.4 otherwise. `remoteOk` and `hybridOk` never enter this dimension — they are hard rules in stage 1, and a posting that reaches scoring has already cleared them. |
 | Compensation | 6 | Only when disclosed; unstated compensation is neutral, never penalized. |
 | Application effort | 6 | **Not built** — inverse of `apply_effort.estMinutes` + essay count is what it would compute, but nothing writes `apply_effort` (docs/03), so every posting takes the `effort === null` branch and scores the neutral 0.6 with the note "effort unknown". A one-click Greenhouse form and a 40-minute Workday wizard are ordered identically today, and 6 of the 100 weight points are a constant. |
@@ -224,7 +224,7 @@ Rejections do carry structured `reason_tags` (`wrong_role`, `wrong_location`, `c
 `too_senior`, `low_pay`, `effort`, `not_interested`), and they are persisted to
 `decision.reason_tags`. **Nothing reads them.** There is no weight adjustment, no
 five-rejection threshold, no bounded range, and no Settings panel showing learned weights
-or offering a reset — Settings has four sections and none of them is this.
+or offering a reset — Settings has five sections and none of them is this.
 
 The tags are being collected against the day this is built. Until then the ranking is the
 same for the first posting as for the five hundredth, which is worth knowing if you are

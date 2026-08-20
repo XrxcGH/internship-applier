@@ -268,7 +268,7 @@ generation risk and keeps a consistent story across applications.
 `kind: 'discovery_run'` rows are ever written, by `runDiscovery` after a run has finished, so
 `GET /api/discovery/runs/:id` can answer about it afterwards; every other column here is
 part of a design that was never used. See docs/02 § Concurrency.
-- **`llm_call`** — `id`, `purpose`, `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd`, `latency_ms`, `stop_reason`, `at`. Powers the cost panel and lets a bad prompt be traced to a bad output.
+| `cost_usd_micros` | integer | Micro-dollars — `Math.round(usd * 1_000_000)`, so an integer column holds a fraction of a cent without float drift. Divide by 1e6 to read it as dollars. |
 - **`credential_ref`** — `id`, `domain`, `label`, `storage_state_path`, `last_used_at`. **Never stores passwords.** Points at a Playwright storage-state file the user created by logging in themselves.
 - **`filter_preset`** — `id`, `name` (unique), `description`, `filters` json, `is_default`, `created_at`, `updated_at`. The named, saved filter sets in docs/05 § Presets. The table and the starter set exist; **no feature reads or writes either yet** — the one thing that touches the table is the privacy export, which includes it so that "everything stored" means everything.
 - **`setting`** — key/value JSON for app config the user can change in the UI. **Nothing writes it yet**: there is no settings API, and configuration comes from environment variables (docs/09 § Cost & privacy).

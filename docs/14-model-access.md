@@ -84,8 +84,12 @@ Two things measurement found that reading would not have:
 Three constraints shape the command, none of them obvious:
 
 1. **`--bare` cannot be used.** It skips credential discovery and then requires an
-   `ANTHROPIC_API_KEY` — exactly what we do not have. Tools, skills, and MCP are disabled
-   with `--allowedTools ''` instead.
+   `ANTHROPIC_API_KEY` — exactly what we do not have. Tools, skills and MCP are disabled with
+   `--allowedTools` carrying a name that matches no tool, which is what the code passes and
+   what § Verified below explains. NOT an empty string: `--allowedTools ""` parses fine from a
+   shell, but an empty argv element is dropped when the .cmd shim is spawned through cmd.exe
+   and the CLI then rejects the flag as missing its argument. This line said the empty-string
+   form for as long as the same document explained two sections lower why it does not work.
 
 2. **Long text cannot go on the command line.** Windows caps a command line near 8191
    characters, and drafting prompts carry an evidence block plus writing samples. The
@@ -96,9 +100,18 @@ Three constraints shape the command, none of them obvious:
    Code's default prompt frames the model as a coding agent working in a repository, which
    is the wrong voice for a job application.
 
-Reading a resume PDF is the one case that needs a tool: a document cannot be passed inline,
-so that call adds `--allowedTools Read` and `--add-dir` for the directory holding the file
-— that directory only, never the repository.
+Two calls need a tool, and each is granted exactly one.
+
+Reading a resume PDF needs `Read`, because a document cannot be passed inline: that call adds
+`--allowedTools Read` and `--add-dir` for the directory holding the file — that directory
+only, never the repository.
+
+The web-search discovery source needs `WebSearch`, and nothing else: Anthropic's own search
+infrastructure runs the queries, the model answers with candidate URLs, and every page it
+names is fetched by this process through the robots-respecting fetcher rather than by the
+model. The tool that could read files on this machine stays ungranted on that path. This
+section claimed the resume was the only such call while the opening paragraph of the same
+document listed the web search as one of the four things that can use a model.
 
 ### The failure mode worth knowing about
 

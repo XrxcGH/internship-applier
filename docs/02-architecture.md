@@ -251,9 +251,14 @@ internship-applier/
 - Response cache keyed by URL + ETag, 6h default TTL, so re-running discovery is cheap.
 - Identifiable User-Agent. `robots.txt` respected for any generic page fetch (source APIs
   are exempt as documented API surfaces).
-- LLM calls: `claude-opus-5` for extraction, drafting and rationale. `claude-haiku-4-5` is
-  mapped for bulk field classification, but nothing requests that purpose — classification
-  is entirely deterministic today.
+- LLM calls: `claude-opus-5` for extraction and drafting. `claude-haiku-4-5` runs the
+  web-search discovery source, where the judgement is "which URLs" and the facts come from
+  this process fetching the pages itself.
+
+  Rationale is NOT among them, though this line listed it: `core/matching/rationale.ts`
+  imports only types and composes its sentences in TypeScript, and docs/05 says so outright
+  — "There is no prompt and no model call." A reader auditing what this tool sends anywhere
+  would have counted one call too many, in the document that exists to be that audit.
 
   **Not built:** prompt caching. No call anywhere sends a cache breakpoint. The paragraph
   this replaces also had the contents wrong: drafting never sends the confirmed profile at

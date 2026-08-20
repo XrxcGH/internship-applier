@@ -134,13 +134,18 @@ sessions are Playwright storage-state files created by the user logging in thems
 
 Stated plainly because the user deserves to know:
 
+One row per call site that actually reaches a model, checked against the `generate` calls in
+apps/server/src. Two rows here used to describe work that is entirely deterministic — field
+classification makes no model call at all, and FactGuard has a model layer that nothing
+invokes — while the row for the web search was missing, which is the direction that matters:
+this table is presented as the closed list of what leaves the machine.
+
 | Purpose | Sent | Not sent |
 | --- | --- | --- |
 | Resume extraction | The resume file / its text | Nothing else |
-| Requirement extraction | Job description text | No profile data at all |
-| Field classification | Form labels + surrounding text | No profile data |
+| Web-search discovery | The search brief only: role keywords and a location | No profile data, no resume, no posting text |
+| Requirement extraction (API key only) | Job description text | No profile data at all |
 | Answer drafting | Profile summary, retrieved evidence, writing samples, posting context | **DOB, SSN-like fields, full street address, phone** — excluded from the prompt-assembly path by an allowlist, not a blocklist |
-| FactGuard | The draft + the same evidence set | — |
 
 The drafting prompt is assembled from an explicit allowlist of profile fields. Adding a new
 sensitive field to the schema does not silently start sending it.

@@ -30,11 +30,14 @@ It points git at `.githooks`, whose pre-commit hook refuses commits containing y
 the database, a `.env`, or an Anthropic key. Git does not use that directory until you say
 so, so a fresh clone has no such protection.
 
-Drafting answers needs a model. It will use the [Claude Code
+Three things need a model: reading your resume into a profile, drafting an answer, and the
+web-search discovery source — the one that finds postings nobody told it about, which spends
+one model call per run and only when you press its button. Each will use the [Claude Code
 CLI](https://code.claude.com/docs) if you have one installed and signed in, against a
-subscription you already pay for, or an `ANTHROPIC_API_KEY` if you set one. **Everything
-else works without either**: discovery, matching, eligibility, fact-checking, and the
-writing checks all run on your machine. See
+subscription you already pay for, or an `ANTHROPIC_API_KEY` if you set one.
+
+**Everything else works without either**: the board adapters, matching, eligibility,
+fact-checking, and the writing checks all run on your machine. See
 [`docs/14-model-access.md`](docs/14-model-access.md).
 
 ---
