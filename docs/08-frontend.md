@@ -62,8 +62,16 @@ to the overview.
 
 ### Overview — `home`
 
-Server status, runtime, uptime, table count and whether a profile exists; the four gates
-stated plainly; the milestone list. The entry point into G1 when no profile is established.
+Whether a profile exists, the four gates stated plainly, and the milestone list. The entry
+point into G1 when no profile is established.
+
+The runtime string, an uptime counter and a table count used to head this screen, above
+everything else the app had to say — a health-check readout served to a student before they
+were told what to do. A "Status" row went with them: `HealthResponse.status` is
+`z.literal('ok')`, so any other answer fails the client-side parse and renders the
+cannot-reach-the-server branch instead, and the row could only ever read "ok". The one state
+worth keeping is a database that does not answer inside an otherwise fine response, which is
+now a redline notice rather than a labelled field. `/api/health` still returns all of it.
 
 ### Onboarding — `setup` (App.tsx renders `pages/Onboarding.tsx`)
 

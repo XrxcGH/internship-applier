@@ -115,6 +115,17 @@ function readApplicantLocations(value: unknown): string[] {
 export interface ManualResult {
   posting: NormalizedPosting;
   usedJsonLd: boolean;
+  /**
+   * Which of the two naming fields the structured data actually supplied.
+   *
+   * `usedJsonLd` is `Boolean(ld)` and a node is admitted on its @type alone, while the title
+   * and the company are filled per field with their own fallbacks. So a JobPosting node that
+   * carries a description and no `hiringOrganization` reports `usedJsonLd: true` while its
+   * company is `guessCompany(url)` — literally "job-boards" for a Greenhouse address. A
+   * caller repairing names on the strength of the page-level flag skipped that field because
+   * some OTHER field was structured.
+   */
+  namedByJsonLd: { title: boolean; company: boolean };
   notes: string[];
 }
 
@@ -126,6 +137,9 @@ export async function fetchManualPosting(url: string): Promise<ManualResult> {
   const ld = collectJsonLd(html)[0];
   const pageText = stripHtml(html);
 
+  const titleFromLd = typeof ld?.title === 'string' && ld.title.trim() !== '';
+  const companyFromLd =
+    typeof ld?.hiringOrganization?.name === 'string' && ld.hiringOrganization.name.trim() !== '';
   const title = ld?.title ?? guessTitle(html) ?? 'Untitled posting';
   const company = ld?.hiringOrganization?.name ?? guessCompany(url);
   const description = ld?.description ? stripHtml(ld.description) : pageText;
@@ -202,7 +216,12 @@ export async function fetchManualPosting(url: string): Promise<ManualResult> {
     atsVendor: detectVendor(url, html),
   };
 
-  return { posting, usedJsonLd: Boolean(ld), notes };
+  return {
+    posting,
+    usedJsonLd: Boolean(ld),
+    namedByJsonLd: { title: titleFromLd, company: companyFromLd },
+    notes,
+  };
 }
 
 function mapUnit(unit?: string): 'hour' | 'week' | 'month' | 'year' {
@@ -342,5 +361,6 @@ export function readPastedPosting(input: PastedPosting): ManualResult {
     atsVendor: 'unknown',
   };
 
-  return { posting, usedJsonLd: false, notes };
+  // Pasted text has no structured data by definition, and the student supplied both names.
+  return { posting, usedJsonLd: false, namedByJsonLd: { title: true, company: true }, notes };
 }
