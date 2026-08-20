@@ -151,8 +151,32 @@ describe('what an ARIA role must not smuggle through', () => {
     <input id="ce-submit" type="submit" contenteditable="true" aria-label="Essay">
     <input id="opt-submit" type="submit" role="option" value="Yes">
     <button id="btn-combo" role="combobox">Pick</button>
+
+    <!-- The same bug one level down: the wrapper is excluded by nothing, and a click lands on
+         whatever is under the cursor rather than on the element that was located. Playwright's
+         actionability check accepts a hit target that is a descendant, so the click reached
+         the child and posted the application. Both shapes verified submitting in Chromium. -->
+    <div id="wrap-submit" role="combobox" aria-label="Email"
+         style="position:relative;width:240px;height:34px">
+      <input type="submit" value="Email"
+             style="position:absolute;left:0;top:0;width:100%;height:100%">
+    </div>
+    <div id="wrap-button" role="combobox" aria-label="Country"><button>Go</button></div>
+    <div id="wrap-pw" role="combobox" aria-label="Secret"><input type="password"></div>
+    <div id="wrap-opt" role="option"><input type="submit" value="Yes"></div>
+
+    <!-- A label forwards activation to its control wherever the click lands, and with a for= attribute
+         that control need not be inside it — which no :has() selector can see. -->
+    <label id="label-wrap" role="combobox" aria-label="Phone"><input type="submit" value="P"></label>
+    <label id="label-for" role="combobox" for="far-submit" aria-label="City">City</label>
+    <input id="far-submit" type="submit" value="go">
+
     <input id="ok-text" type="text" aria-label="Name">
+    <textarea id="ok-area" aria-label="Why"></textarea>
+    <select id="ok-select"><option>a</option></select>
     <div id="ok-combo" role="combobox" tabindex="0"></div>
+    <div id="ok-ce" contenteditable="true">type here</div>
+    <div id="ok-opt" role="option">Choice A</div>
   </form>`;
 
   it('matches no submit-capable control, whatever role it wears', async () => {
@@ -169,6 +193,25 @@ describe('what an ARIA role must not smuggle through', () => {
     }
   });
 
+  it('matches nothing that merely CONTAINS a control that can submit', async () => {
+    // A click lands on whatever is under the cursor, not on the element that was located, and
+    // Playwright's actionability check is satisfied by a descendant hit target. Every one of
+    // these passed the element-only exclusions and posted the application on the first click.
+    const matched = await inTraps(FILLABLE_CONTROLS);
+    for (const trap of ['wrap-submit', 'wrap-button', 'wrap-pw', 'label-wrap', 'label-for']) {
+      expect(matched, trap).not.toContain(trap);
+    }
+    expect(await inTraps(SAFE_OPTION)).not.toContain('wrap-opt');
+  });
+
+  it('refuses a label whatever it points at, because `for` reaches outside the subtree', async () => {
+    // `label-for` contains nothing at all — its submit button is a sibling. No `:has()` can
+    // see that, so labels are excluded outright rather than by what they happen to wrap.
+    const { NEVER_TOUCH } = await import('../src/core/filling/selectors');
+    expect(NEVER_TOUCH).toContain(':not(label)');
+    expect(await inTraps(FILLABLE_CONTROLS)).not.toContain('label-for');
+  });
+
   it('matches no submit-capable option either, one level down', async () => {
     // Options are clicked when an answer is picked from a dropdown, so the same rule applies.
     expect(await inTraps(SAFE_OPTION)).not.toContain('opt-submit');
@@ -178,8 +221,10 @@ describe('what an ARIA role must not smuggle through', () => {
     // The other direction, and the one that matters if the exclusion is written too widely:
     // an ordinary text box and a div-based combobox must stay reachable.
     const matched = await inTraps(FILLABLE_CONTROLS);
-    expect(matched).toContain('ok-text');
-    expect(matched).toContain('ok-combo');
+    for (const ok of ['ok-text', 'ok-area', 'ok-select', 'ok-combo', 'ok-ce']) {
+      expect(matched, ok).toContain(ok);
+    }
+    expect(await inTraps(SAFE_OPTION)).toContain('ok-opt');
   });
 
   it('states the exclusion once, so four clauses cannot drift into four rules', async () => {

@@ -52,9 +52,37 @@ function isCommentOnly(line: string): boolean {
  *
  * `input:not([type=submit])` is the scanner deliberately refusing to touch submit controls.
  * A guard that flagged it would be arguing for its own removal.
+ *
+ * Parentheses are counted rather than matched with `[^)]*`, which stopped at the first `)` it
+ * saw. That was fine while every exclusion was flat, and wrong the moment one nested:
+ * `:not(:has(input[type=submit]))` had only its inner half removed, so the scanner read the
+ * leftovers as a line targeting a submit control and failed the build over the exclusion that
+ * exists to stop exactly that. A guard whose false alarm is "you excluded it too carefully"
+ * teaches the next person to weaken the exclusion.
  */
 function dropExclusions(line: string): string {
-  return line.replace(/:not\([^)]*\)/g, '');
+  let out = '';
+  for (let i = 0; i < line.length;) {
+    if (!line.startsWith(':not(', i)) {
+      out += line[i];
+      i++;
+      continue;
+    }
+    let depth = 0;
+    let j = i + ':not'.length;
+    for (; j < line.length; j++) {
+      if (line[j] === '(') depth++;
+      else if (line[j] === ')' && --depth === 0) break;
+    }
+    // An unbalanced `:not(` means the exclusion is split across lines, and this scanner reads
+    // one line at a time. Dropping the rest would hide whatever follows it, so it stays.
+    if (depth !== 0) {
+      out += line.slice(i);
+      break;
+    }
+    i = j + 1;
+  }
+  return out;
 }
 
 interface Rule {

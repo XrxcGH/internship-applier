@@ -54,15 +54,48 @@ export const IMPLICIT_SUBMIT = 'button:not([type="button" i])';
  * So the exclusion is expressed once, here, and applied to every clause — including the ones
  * for `input`, which no longer state their own version of it. A rule written out four times
  * is a rule that will be four different rules by the end of the year.
+ *
+ * THEN THE SAME BUG CAME BACK ONE LEVEL DOWN. Every clause above tests the matched element,
+ * and a click does not land on an element — it lands on whatever is under the cursor. A
+ * wrapper carrying the role, with the submit control as its CHILD, is excluded by nothing:
+ *
+ *     <div role="combobox" autocomplete="email" style="position:relative">
+ *       <input type="submit" style="position:absolute;inset:0;width:100%;height:100%">
+ *     </div>
+ *
+ * The div is not a button and not an input, so it passed; Playwright's actionability check
+ * accepts a hit target that is a descendant of the located element; the click landed on the
+ * child and the application was POSTed. `<label role="combobox">` around the same input does
+ * it without any CSS, because clicking a label forwards activation to its control wherever
+ * the click lands — and with `for=` that control need not even be inside it, which is why
+ * every label is excluded outright rather than just those that happen to wrap one. Both
+ * verified in Chromium. The tool then reported the field as `skipped` and printed "Nothing has
+ * been submitted."
+ *
+ * So the rule is: not this element, and not anything it contains. What this still cannot see
+ * is an ordinary `<div role="combobox" onclick="form.submit()">`, because no selector can —
+ * that is a limit of the approach and not an oversight in the list.
  */
 export const NEVER_TOUCH =
+  // The element itself.
   ':not(button:not([type="button" i]))' +
   ':not(input[type=hidden])' +
   ':not(input[type=submit])' +
   ':not(input[type=image])' +
   ':not(input[type=reset])' +
   ':not(input[type=button])' +
-  ':not(input[type=password])';
+  ':not(input[type=password])' +
+  // Anything it CONTAINS. Spelled out here rather than built from a named constant, because
+  // `scripts/g4-scan.ts` reads the source a line at a time: a constant holding
+  // `input[type=submit]` reads to it as a line targeting a submit control, and it would fail
+  // the build over the exclusion written to prevent exactly that.
+  ':not(:has(button:not([type="button" i])))' +
+  ':not(:has(input[type=submit]))' +
+  ':not(:has(input[type=image]))' +
+  ':not(:has(input[type=reset]))' +
+  ':not(:has(input[type=password]))' +
+  // And a label, whatever it wraps or points at.
+  ':not(label)';
 
 export const FILLABLE_CONTROLS =
   // Every clause carries `NEVER_TOUCH`, including the plain `input` one, which used to spell

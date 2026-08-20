@@ -294,6 +294,11 @@ describe('G4 — no auto-submit path exists', () => {
       "await loc.pressSequentially('Ada Lovelace');",
       "await page.keyboard.insertText('\\n');",
       "const SELECTORS = 'input:not([type=hidden]):not([type=submit])';",
+      // A NESTED exclusion. `:not\([^)]*\)` stopped at the first `)`, left
+      // `input[type=submit]))` behind, and failed the build over the very exclusion that
+      // stops a wrapper's submit child from being clicked. A guard whose false alarm reads
+      // "you excluded it too carefully" teaches the next person to exclude it less.
+      'const NEVER = \':not(:has(input[type=submit])):not(:has(button:not([type=\\"button\\" i])))\';',
       ' * merely that no `.click()` was written. Not clicking submit is',
     ]) {
       expect(scanSource('sample.ts', sample), sample).toEqual([]);

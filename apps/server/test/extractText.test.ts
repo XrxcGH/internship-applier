@@ -24,7 +24,11 @@ describe('reading an uploaded document', () => {
 
   beforeAll(async () => {
     dir = await mkdtemp(path.join(tmpdir(), 'ia-extract-'));
-  });
+    // `extractText` imports mammoth lazily, so whichever docx case ran first paid for loading
+    // it and intermittently blew the 5s default while the rest of the suite was competing for
+    // the machine. Paid here instead, where the budget is explicit.
+    await import('mammoth');
+  }, 60_000);
 
   afterAll(async () => {
     await rm(dir, { recursive: true, force: true });
