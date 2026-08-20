@@ -512,3 +512,80 @@ describe('a response that will not stop arriving', () => {
     expect(await politeFetch(`${origin}/job/1`, { rps: 100 })).toBe('<p>A normal posting</p>');
   });
 });
+
+/**
+ * Where a robots.txt is allowed to send this.
+ *
+ * It used to be a bare `fetch`, and a bare `fetch` follows redirects — Node's default is
+ * `redirect: 'follow'`, up to twenty hops, to anywhere. So the one request in the module whose
+ * entire purpose is politeness was the one with no private-address check, no aggregator check
+ * and no hop cap on its destination. A host answering `301 Location:
+ * http://127.0.0.1:11434/api/tags` got this process to issue an attacker-chosen GET inside the
+ * user's own network; `Location: https://www.linkedin.com/...` got it to fetch a board this
+ * tool refuses to open, from the student's own address.
+ *
+ * Redirects are still followed — a site moving its robots.txt to `www` is ordinary, and
+ * refusing outright would read as a complete disallow and quietly stop reading that employer.
+ * They are followed one at a time, with every hop checked.
+ */
+describe('a robots.txt that redirects', () => {
+  /** A host whose robots.txt bounces somewhere, and whose pages are otherwise fine. */
+  async function bouncingRobots(to: string | ((n: number) => string)): Promise<string> {
+    let hop = 0;
+    const server = createServer((req, res) => {
+      if ((req.url ?? '').startsWith('/robots.txt')) {
+        hop++;
+        res.writeHead(301, { location: typeof to === 'string' ? to : to(hop) });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('a job posting');
+    });
+    running.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    return `http://127.0.0.1:${String(address.port)}`;
+  }
+
+  it('will not be sent to a board this tool does not open', async () => {
+    const origin = await bouncingRobots('https://www.linkedin.com/robots.txt');
+    // Refused, and refused as unreadable — which this file already treats as a complete
+    // disallow, so the page is not fetched either.
+    await expect(politeFetch(`${origin}/job/1`, { rps: 100 })).rejects.toThrow(/could not be read/);
+  }, 30_000);
+
+  it('gives up on a redirect that never lands, rather than following it twenty times', async () => {
+    const origin = await bouncingRobots((n) => `/robots.txt?n=${String(n)}`);
+    await expect(politeFetch(`${origin}/job/1`, { rps: 100 })).rejects.toThrow(/could not be read/);
+  }, 30_000);
+
+  it('still follows an ordinary move, so a site that relocates its file is still read', async () => {
+    const server = createServer((req, res) => {
+      const url = req.url ?? '';
+      if (url === '/robots.txt') {
+        res.writeHead(301, { location: '/static/robots.txt' });
+        res.end();
+        return;
+      }
+      if (url === '/static/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('User-agent: *\nDisallow: /private/\n');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('a job posting');
+    });
+    running.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    const origin = `http://127.0.0.1:${String(address.port)}`;
+
+    // The relocated file is read, and its rules are obeyed: the allowed path comes back and
+    // the disallowed one is refused.
+    expect(await politeFetch(`${origin}/job/1`, { rps: 100 })).toBe('a job posting');
+    await expect(politeFetch(`${origin}/private/x`, { rps: 100 })).rejects.toThrow(/robots/i);
+  }, 30_000);
+});

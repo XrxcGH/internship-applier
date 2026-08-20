@@ -124,13 +124,28 @@ function frameFor(page: Page, field: FormField, documentUrl?: string): Frame | u
 /**
  * Index locators are a last resort from the scanner, and they are the ones most likely to
  * be stale. Resolving them here keeps that fragility in one place.
+ *
+ * EVERY locator is narrowed to `FILLABLE_CONTROLS`, not just the index fallback, because the
+ * scan and the fill are separated by seconds and the page owns what happens in between. A
+ * stored locator is a plain CSS string — `#q2` — and it was handed to `frame.locator()` with
+ * nothing checking that it still resolved to something fillable. So a page served two
+ * ordinary text inputs, nothing in the markup excluded by anything, and swapped the second
+ * for a `<button>` with no `type` attribute — which IS `type="submit"` — the moment the FIRST
+ * field received a real key event, which `pressSequentially` guarantees. Verified in
+ * Chromium: `#q2` resolved to the button, the default branch clicked it before `fill()` could
+ * throw, and the application was posted. The selector work in selectors.ts cannot help here,
+ * because the element was perfectly legal when it was scanned.
+ *
+ * `and()` makes the locator resolve to nothing instead. The field then fails BEFORE the
+ * click rather than after it, and the student is told a control it needs is not there — which
+ * is true, and is the answer a mutating page has earned.
  */
 function locate(frame: Frame, field: FormField): Locator {
   const m = /^__index__(\d+)(?::\d+)?$/.exec(field.locator);
   if (m) {
     return frame.locator(FILLABLE_CONTROLS).nth(Number(m[1]));
   }
-  return frame.locator(field.locator);
+  return frame.locator(field.locator).and(frame.locator(FILLABLE_CONTROLS));
 }
 
 /**

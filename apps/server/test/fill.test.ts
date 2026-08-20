@@ -21,6 +21,7 @@ import {
   type FixtureServer,
 } from '@ia/fixtures';
 import { detectIntervention, openSession, type BrowserSession } from '../src/core/filling/browser';
+import { FILLABLE_CONTROLS } from '../src/core/filling/selectors';
 import { CONFIDENCE_FLOOR } from '../src/core/filling/classify';
 import { buildFormMap, frameKey } from '../src/core/filling/formMap';
 import { buildFillPlan, summarizePlan } from '../src/core/filling/plan';
@@ -592,6 +593,31 @@ function fieldOf(over: Partial<FormField>): FormField {
   } as FormField;
 }
 
+/**
+ * Gives a stub the `and()` that `locate` narrows every locator with.
+ *
+ * `locate` intersects the stored selector with FILLABLE_CONTROLS, because the page can swap a
+ * text input for a submit button between the scan and the fill — see fill.ts. Every stub here
+ * stands for a control that IS fillable, so the intersection is the stub itself; returning it
+ * unchanged is what real Playwright would do for these elements.
+ *
+ * What that means is that these cases cannot demonstrate the guard, only that it does not get
+ * in the way. The guard itself is proved against real Chromium in fixture.test.ts, where a
+ * page actually mutates under the filler.
+ *
+ * Mutated rather than copied: the stubs close over their own state and several tests read it
+ * back afterwards, so a spread would leave the assertions watching a discarded object.
+ */
+/** Stands in for a selector a stub has nothing for. Only ever used as the argument to `and()`. */
+const UNMATCHED = { count: () => Promise.resolve(0), nth: () => UNMATCHED };
+
+function withAnd(loc: unknown): unknown {
+  if (loc !== null && typeof loc === 'object' && !('and' in loc)) {
+    (loc as { and: () => unknown }).and = () => loc;
+  }
+  return loc;
+}
+
 function pageOfFrames(
   frames: { url: string | (() => string); locator: unknown | ((sel: string) => unknown) }[],
   keyboard: { insertText?: (t: string) => Promise<void> } = {},
@@ -599,8 +625,22 @@ function pageOfFrames(
   const built = frames.map((f) => ({
     url: () => (typeof f.url === 'function' ? f.url() : f.url),
     isDetached: () => false,
-    locator: (sel: string) =>
-      typeof f.locator === 'function' ? (f.locator as (s: string) => unknown)(sel) : f.locator,
+    locator: (sel: string) => {
+      // `locate` asks for FILLABLE_CONTROLS twice over: `.nth(n)` on it for an index locator,
+      // which the stubs answer properly, and as the right-hand side of `and()`, which they
+      // have no entry for. Only the second needs help, and it is told apart by the stub
+      // failing to produce anything rather than by matching on the selector — the index path
+      // asks for the same string and must keep getting the real answer.
+      let resolved: unknown;
+      try {
+        resolved =
+          typeof f.locator === 'function' ? (f.locator as (s: string) => unknown)(sel) : f.locator;
+      } catch {
+        resolved = undefined;
+      }
+      if (resolved === undefined || resolved === null) return UNMATCHED;
+      return withAnd(resolved);
+    },
   }));
   return {
     mainFrame: () => built[0],
@@ -1463,4 +1503,71 @@ describe('which options a declaration-less combobox can reach', () => {
     // Not `auth-yes`, which is what the whole-frame fallback would have offered first.
     expect(values).toEqual(['spon-yes', 'spon-no']);
   });
+});
+
+/**
+ * A page that changes what a locator points at, between the scan and the fill.
+ *
+ * The two are separated by seconds and the page owns what happens in between. A stored
+ * locator is a plain CSS string, and it used to be handed to `frame.locator()` with nothing
+ * checking that it still resolved to something fillable — so a page could serve two ordinary
+ * text inputs, nothing in the markup excluded by anything, and swap the second for a
+ * `<button>` with no `type` attribute (which IS `type="submit"`) the moment the FIRST field
+ * received a real key event, which `pressSequentially` guarantees.
+ *
+ * Verified in Chromium before `locate` narrowed every locator: `#q2` resolved to the button,
+ * the click landed before `fill()` could throw, and the form was submitted. Nothing in
+ * selectors.ts can prevent that — the element was entirely legal when it was scanned — which
+ * is why this runs against a real browser and not the stubs above.
+ */
+describe('a form that mutates under the filler', () => {
+  const MUTATING = `<form id="f" action="/submitted" method="POST">
+    <input id="q1" type="text" aria-label="Full name">
+    <input id="q2" type="text" aria-label="Email address">
+  </form>
+  <script>
+    window.__submitted = false;
+    document.getElementById('f').addEventListener('submit', function (e) {
+      e.preventDefault();
+      window.__submitted = true;
+    });
+    document.getElementById('q1').addEventListener('keydown', function once() {
+      document.getElementById('q1').removeEventListener('keydown', once);
+      var b = document.createElement('button');
+      b.id = 'q2';
+      b.textContent = 'Email address';
+      document.getElementById('q2').replaceWith(b);
+    });
+  </script>`;
+
+  it('does not click a control that became a submit button after the scan', async () => {
+    const page = await session.context.newPage();
+    try {
+      await page.setContent(MUTATING);
+
+      // What the scan legitimately sees: two text inputs.
+      const scanned = await page.evaluate(
+        (sel) => [...document.querySelectorAll(sel)].map((el) => el.id),
+        FILLABLE_CONTROLS,
+      );
+      expect(scanned).toEqual(['q1', 'q2']);
+
+      // Type into the first, which is what triggers the swap.
+      await page.locator('#q1').pressSequentially('Rosa Alvarez', { delay: 5 });
+      expect(await page.evaluate(() => document.getElementById('q2')?.tagName)).toBe('BUTTON');
+
+      // The narrowed locator now matches nothing, so there is nothing to click.
+      const narrowed = page.locator('#q2').and(page.locator(FILLABLE_CONTROLS));
+      expect(await narrowed.count()).toBe(0);
+      // And the unnarrowed one still resolves it, which is what made this reachable.
+      expect(await page.locator('#q2').count()).toBe(1);
+
+      await narrowed.click({ timeout: 1500 }).catch(() => undefined);
+      expect(
+        await page.evaluate(() => (window as unknown as { __submitted: boolean }).__submitted),
+      ).toBe(false);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
 });

@@ -300,6 +300,57 @@ const ROBOTS_RETRY_MS = 5 * 60 * 1000;
  * Missing `Allow:` support stays missing on purpose: ignoring an Allow can only make this
  * refuse a fetch it could have made, and that is the direction to be wrong in.
  */
+/**
+ * How many redirects a robots.txt gets. RFC 9309 § 2.3.1.2 asks for at least five.
+ */
+const MAX_ROBOTS_REDIRECTS = 5;
+
+/**
+ * The robots.txt request, under the same rules as every other request in this file.
+ *
+ * It used to be a bare `fetch`, and a bare `fetch` follows redirects: Node's default is
+ * `redirect: 'follow'`, up to twenty hops, to anywhere. So the one request in this module
+ * whose entire purpose is politeness was the one with no private-address check, no aggregator
+ * check and no hop cap on where it ended up. A host answering `301 Location:
+ * http://127.0.0.1:11434/api/tags` — or 192.168.1.1, or 169.254.169.254 — got this process to
+ * issue an attacker-chosen GET inside the user's own network. `Location:
+ * https://www.linkedin.com/jobs/view/123` got it to fetch a board this tool refuses to open,
+ * from the student's own address, past the boundary the whole sourcing policy exists to hold.
+ *
+ * Redirects are still followed, because a site moving its robots.txt to `www` is ordinary and
+ * refusing outright would read as a complete disallow and quietly stop reading that employer.
+ * They are followed one at a time, with every hop checked, which is what the main loop does.
+ */
+async function fetchRobots(url: string): Promise<Response> {
+  let at = url;
+
+  for (let hop = 0; ; hop++) {
+    if (!config.isTest) await assertPublicHost(at);
+    if (isAggregatorUrl(at)) {
+      throw new HttpError(`robots.txt redirects to ${new URL(at).hostname}`, 403, at);
+    }
+
+    const res = await fetch(at, {
+      headers: { 'user-agent': USER_AGENT },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(8000),
+    });
+
+    // 304/305/306 carry a Location that does not mean "go here"; only the redirect statuses do.
+    const redirecting = res.status === 301 || res.status === 302 || res.status === 303;
+    const permanent = res.status === 307 || res.status === 308;
+    if (!redirecting && !permanent) return res;
+
+    const location = res.headers.get('location');
+    // A redirect nobody can follow is a robots.txt nobody can read, which this file already
+    // treats as a complete disallow rather than as permission.
+    if (location === null || hop >= MAX_ROBOTS_REDIRECTS) {
+      return new Response(null, { status: 502, statusText: 'unfollowable robots.txt redirect' });
+    }
+    at = new URL(location, at).toString();
+  }
+}
+
 async function disallowedPaths(origin: string): Promise<Robots> {
   const cached = robots.get(origin);
   if (cached && (!cached.value.unreadable || Date.now() - cached.at < ROBOTS_RETRY_MS)) {
@@ -309,10 +360,7 @@ async function disallowedPaths(origin: string): Promise<Robots> {
   const paths = new Set<string>();
   let unreadable: string | null = null;
   try {
-    const res = await fetch(`${origin}/robots.txt`, {
-      headers: { 'user-agent': USER_AGENT },
-      signal: AbortSignal.timeout(8000),
-    });
+    const res = await fetchRobots(`${origin}/robots.txt`);
 
     /**
      * What a robots.txt we did not get back actually means.
