@@ -168,10 +168,22 @@ export function RunningHead({
 }) {
   return (
     <header className="a-rise a-step-1 mb-12">
-      <div className="flex items-baseline justify-between gap-4">
-        <span className="u-eyebrow">{gate ? `gate ${gate}` : 'no gate pending'}</span>
-      </div>
-      <h1 className="u-display mt-3 text-[3.25rem] leading-[1.02] sm:text-[4rem]">{section}</h1>
+      {/* Nothing at all when there is no gate, rather than "no gate pending" — which this
+          component cannot know. It takes a `gate` prop and no session state, so on Voice
+          and Settings (blocked on `running`, never on the gate) a first-time user read "no
+          gate pending" on one screen while Home said "gate G1" for the same session. The
+          whole row goes, and the h1's top margin with it, or an empty flex row leaves a gap
+          where the eyebrow used to be. */}
+      {gate && (
+        <div className="flex items-baseline justify-between gap-4">
+          <span className="u-eyebrow">{`gate ${gate}`}</span>
+        </div>
+      )}
+      <h1
+        className={`u-display text-[3.25rem] leading-[1.02] sm:text-[4rem] ${gate ? 'mt-3' : ''}`}
+      >
+        {section}
+      </h1>
       <hr className="u-rule a-draw a-step-2 mt-6" />
       {lede && <p className="text-dim u-prose a-rise a-step-3 mt-6 text-[1.125rem]">{lede}</p>}
     </header>

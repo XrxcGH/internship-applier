@@ -559,3 +559,33 @@ export const addPastedPosting = (input: {
 export function unavailableReason(name: string): string | null {
   return FACTS[name]?.unavailable ?? null;
 }
+
+export interface StoredSource {
+  id: string;
+  kind: string;
+  label: string;
+  enabled: boolean;
+  /** On the table, written by nothing in apps/server — see the Settings comment. */
+  lastRunAt: string | null;
+  postings: number;
+}
+
+/**
+ * The boards this machine has written down, and the switch for each.
+ *
+ * Both endpoints have existed and been documented since M2 with nothing in the interface
+ * calling them, while two comments in `routes/discovery.ts` offered "the source can be
+ * switched off in Settings" as the mitigation that justifies writing a resolution row at
+ * all. There was no such control. It matters more now that a board answering 404/410/422
+ * switches ITSELF off: without this, one bad answer removed a board from every future plan
+ * with no way back — and Workday is deliberately never guessed, so a Workday board could not
+ * even be re-resolved by pinning the company again.
+ */
+export const listStoredSources = () => request<StoredSource[]>('/api/sources');
+
+export const setSourceEnabled = (id: string, enabled: boolean) =>
+  request<{ id: string; enabled: boolean }>(`/api/sources/${id}`, {
+    method: 'PUT',
+    headers: json,
+    body: JSON.stringify({ enabled }),
+  });

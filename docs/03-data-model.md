@@ -50,8 +50,8 @@ One row. The confirmed identity and eligibility facts everything else keys off.
 | `certifications` | json | `Certification[]` |
 | `languages` | json | `{name, proficiency}[]` |
 | `availability` | json | `{start, end, hours_per_week?, flexible: bool}` |
-| `location_prefs` | json | `{base, max_commute_km, remote_ok, hybrid_ok, relocate_to[]}` |
-| `preferences` | json | `{company_sizes[], industries[], min_stipend?, exclude_companies[]}` |
+| `location_prefs` | json | `{base, additional_bases[], max_commute_km, remote_ok, hybrid_ok, relocate_to[]}` — `base` is the address a form is filled from; `additional_bases` are further places you can work in person, equal to it for searching and matching |
+| `preferences` | json | `{company_sizes[], industries[], min_stipend?, exclude_companies[], role_families[]}` — `role_families` empty means "infer from the resume"; non-empty replaces that inference |
 | `derived` | json | Computed, not user-entered — see below |
 | `confirmed_at` | text | **Null until G1 passes.** Nothing downstream may read an unconfirmed profile. |
 | `needs_review` | json | `string[]` of field paths the extractor was unsure about |

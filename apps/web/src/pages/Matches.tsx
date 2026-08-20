@@ -353,156 +353,165 @@ export function Matches({
         </Empty>
       )}
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
-        {/* list */}
-        <ul
-          ref={listRef}
-          className="u-card divide-rule/50 max-h-[calc(100dvh-13rem)] divide-y overflow-y-auto lg:sticky lg:top-20"
-        >
-          {rows.map((m) => {
-            const days = daysUntil(m.closesAt);
-            const badge = BADGE[m.eligibility]!;
-            return (
-              <li key={m.id} data-id={m.id}>
-                <button
-                  onClick={() => setSelected(m.id)}
-                  aria-current={selected === m.id ? 'true' : undefined}
-                  className={`relative w-full px-4 py-3.5 text-left transition-colors ${
-                    selected === m.id ? 'bg-accent/10' : 'hover:bg-ink/[0.04]'
-                  }`}
-                >
-                  {selected === m.id && (
-                    <span
-                      className="absolute inset-y-0 left-0 w-[2px]"
-                      style={{ background: 'var(--accent)' }}
-                    />
-                  )}
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="truncate text-[1rem]">{m.title}</span>
-                    <span className="u-data text-faint shrink-0 text-[0.75rem]">{m.score}</span>
-                  </div>
-                  <div className="text-dim mt-0.5 truncate text-[0.9375rem]">{m.company}</div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                    <span
-                      className="u-data text-[0.6875rem] tracking-widest uppercase"
-                      style={{ color: badge.color }}
-                    >
-                      {badge.label}
-                    </span>
-                    <span className="u-data text-faint text-[0.75rem]">{locationLabel(m)}</span>
-                    {days !== null && (
+      {/* The whole grid, not just the <ul>. The list carries `u-card` — border, radius,
+          shadow, backdrop blur — and rendered with zero children whenever the queue is empty,
+          during the first fetch, and after a failed load: a 21rem-wide, 2px-tall bordered
+          sliver sitting beside an empty detail column, under the empty state that had already
+          explained there was nothing. Guarding only the list would leave the grid's own gap
+          behind. Applications.tsx already guards the identical shape. */}
+      {rows.length > 0 && (
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
+          {/* list */}
+          <ul
+            ref={listRef}
+            className="u-card divide-rule/50 max-h-[calc(100dvh-13rem)] divide-y overflow-y-auto lg:sticky lg:top-20"
+          >
+            {rows.map((m) => {
+              const days = daysUntil(m.closesAt);
+              const badge = BADGE[m.eligibility]!;
+              return (
+                <li key={m.id} data-id={m.id}>
+                  <button
+                    onClick={() => setSelected(m.id)}
+                    aria-current={selected === m.id ? 'true' : undefined}
+                    className={`relative w-full px-4 py-3.5 text-left transition-colors ${
+                      selected === m.id ? 'bg-accent/10' : 'hover:bg-ink/[0.04]'
+                    }`}
+                  >
+                    {selected === m.id && (
                       <span
-                        className="u-data text-[0.75rem]"
-                        style={{ color: days < 7 ? 'var(--redline)' : 'var(--ink-faint)' }}
-                      >
-                        {days < 0 ? 'closed' : `${days}d left`}
-                      </span>
+                        className="absolute inset-y-0 left-0 w-[2px]"
+                        style={{ background: 'var(--accent)' }}
+                      />
                     )}
-                  </div>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-
-        {/* detail */}
-        <div>
-          {current && detail && (
-            <>
-              <Section n="01" title="The posting" step={3}>
-                <div className="u-card px-5 py-5">
-                  <h3 className="u-display mb-1 text-3xl">{detail.posting.title}</h3>
-                  <p className="text-dim">{detail.posting.company}</p>
-                  <dl className="u-data text-faint border-rule mt-4 flex flex-wrap gap-x-5 gap-y-1.5 border-t pt-3 text-[0.75rem]">
-                    <span>{locationLabel(current)}</span>
-                    <span>{termLabel(detail.posting.term)}</span>
-                    <span>{payLabel(detail.posting.compensation)}</span>
-                    <span>{detail.posting.positionType ?? 'type not stated'}</span>
-                    <span>{detail.posting.atsVendor}</span>
-                  </dl>
-                  <p className="mt-5 u-prose text-[1rem] leading-relaxed">
-                    {detail.match.rationale}
-                  </p>
-                </div>
-              </Section>
-
-              <Section n="02" title="Requirements, with the text that decided each" step={4}>
-                <RequirementChecklist
-                  rules={detail.match.rules}
-                  requirements={detail.requirements}
-                />
-              </Section>
-
-              <Section n="03" title={`Fit — ${detail.match.score}/100`} step={5}>
-                <ScoreBreakdownBars breakdown={detail.match.breakdown} />
-                <p className="text-faint mt-4 u-prose text-[0.9375rem] italic">
-                  This score only orders the queue. It <strong>never</strong> filters anything out.
-                </p>
-              </Section>
-
-              <Section n="04" title="Your call" step={6}>
-                {rejecting ? (
-                  <div>
-                    <p className="text-dim mb-3 text-[1rem]">Why not this one?</p>
-                    <div className="flex flex-wrap gap-2">
-                      {REJECT_REASONS.map((r) => (
-                        <Button key={r.tag} onClick={() => void reject(r.tag, r.label)}>
-                          {r.label}
-                        </Button>
-                      ))}
-                      <Button onClick={() => setRejecting(false)}>Cancel</Button>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-[1rem]">{m.title}</span>
+                      <span className="u-data text-faint shrink-0 text-[0.75rem]">{m.score}</span>
                     </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap gap-3">
-                      <Button variant="solid" onClick={() => void act('approved')}>
-                        Approve (A)
-                      </Button>
-                      <Button onClick={() => void act('saved')}>Save (L)</Button>
-                      <Button onClick={() => void act('skipped')}>Skip (S)</Button>
-                      <Button variant="danger" onClick={() => setRejecting(true)}>
-                        Reject (X)
-                      </Button>
-                      <a
-                        href={detail.posting.applyUrl}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="u-data border-rule text-dim hover:text-ink hover:border-rule-strong hover:bg-ink/[0.04] inline-flex items-center rounded border px-4 py-2 tracking-wide uppercase transition-colors"
+                    <div className="text-dim mt-0.5 truncate text-[0.9375rem]">{m.company}</div>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                      <span
+                        className="u-data text-[0.6875rem] tracking-widest uppercase"
+                        style={{ color: badge.color }}
                       >
-                        Open posting ↗
-                      </a>
+                        {badge.label}
+                      </span>
+                      <span className="u-data text-faint text-[0.75rem]">{locationLabel(m)}</span>
+                      {days !== null && (
+                        <span
+                          className="u-data text-[0.75rem]"
+                          style={{ color: days < 7 ? 'var(--redline)' : 'var(--ink-faint)' }}
+                        >
+                          {days < 0 ? 'closed' : `${days}d left`}
+                        </span>
+                      )}
                     </div>
-                    {/* The second sentence is here because Save, Skip and Reject look like
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+
+          {/* detail */}
+          <div>
+            {current && detail && (
+              <>
+                <Section n="01" title="The posting" step={3}>
+                  <div className="u-card px-5 py-5">
+                    <h3 className="u-display mb-1 text-3xl">{detail.posting.title}</h3>
+                    <p className="text-dim">{detail.posting.company}</p>
+                    <dl className="u-data text-faint border-rule mt-4 flex flex-wrap gap-x-5 gap-y-1.5 border-t pt-3 text-[0.75rem]">
+                      <span>{locationLabel(current)}</span>
+                      <span>{termLabel(detail.posting.term)}</span>
+                      <span>{payLabel(detail.posting.compensation)}</span>
+                      <span>{detail.posting.positionType ?? 'type not stated'}</span>
+                      <span>{detail.posting.atsVendor}</span>
+                    </dl>
+                    <p className="mt-5 u-prose text-[1rem] leading-relaxed">
+                      {detail.match.rationale}
+                    </p>
+                  </div>
+                </Section>
+
+                <Section n="02" title="Requirements, with the text that decided each" step={4}>
+                  <RequirementChecklist
+                    rules={detail.match.rules}
+                    requirements={detail.requirements}
+                  />
+                </Section>
+
+                <Section n="03" title={`Fit — ${detail.match.score}/100`} step={5}>
+                  <ScoreBreakdownBars breakdown={detail.match.breakdown} />
+                  <p className="text-faint mt-4 u-prose text-[0.9375rem] italic">
+                    This score only orders the queue. It <strong>never</strong> filters anything
+                    out.
+                  </p>
+                </Section>
+
+                <Section n="04" title="Your call" step={6}>
+                  {rejecting ? (
+                    <div>
+                      <p className="text-dim mb-3 text-[1rem]">Why not this one?</p>
+                      <div className="flex flex-wrap gap-2">
+                        {REJECT_REASONS.map((r) => (
+                          <Button key={r.tag} onClick={() => void reject(r.tag, r.label)}>
+                            {r.label}
+                          </Button>
+                        ))}
+                        <Button onClick={() => setRejecting(false)}>Cancel</Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap gap-3">
+                        <Button variant="solid" onClick={() => void act('approved')}>
+                          Approve (A)
+                        </Button>
+                        <Button onClick={() => void act('saved')}>Save (L)</Button>
+                        <Button onClick={() => void act('skipped')}>Skip (S)</Button>
+                        <Button variant="danger" onClick={() => setRejecting(true)}>
+                          Reject (X)
+                        </Button>
+                        <a
+                          href={detail.posting.applyUrl}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="u-data border-rule text-dim hover:text-ink hover:border-rule-strong hover:bg-ink/[0.04] inline-flex items-center rounded border px-4 py-2 tracking-wide uppercase transition-colors"
+                        >
+                          Open posting ↗
+                        </a>
+                      </div>
+                      {/* The second sentence is here because Save, Skip and Reject look like
                         three outcomes and behave like one. Each is written down as its own
                         decision on the server, and nothing in this interface reads any of
                         them back: there is no saved list, no decided view and no undo, so
                         someone who pressed Save meaning "come back to this" watched the
                         posting leave the queue for good and went looking for a screen that
                         does not exist. Say so until one does. */}
-                    <p className="text-faint mt-4 u-prose text-[0.9375rem]">
-                      Approving creates an application you review at gate G3. It does not submit
-                      anything — you do that <em>yourself</em>, on the real page. Save and Skip both
-                      take the posting out of the queue, as does Reject. Each is recorded as its own
-                      decision, but nothing here reads any of them back yet, so treat all three as
-                      final.
-                    </p>
-                  </>
-                )}
-              </Section>
+                      <p className="text-faint mt-4 u-prose text-[0.9375rem]">
+                        Approving creates an application you review at gate G3. It does not submit
+                        anything — you do that <em>yourself</em>, on the real page. Save and Skip
+                        both take the posting out of the queue, as does Reject. Each is recorded as
+                        its own decision, but nothing here reads any of them back yet, so treat all
+                        three as final.
+                      </p>
+                    </>
+                  )}
+                </Section>
 
-              <details className="u-card-flat mt-8 px-5 py-4">
-                <summary className="u-eyebrow hover:text-ink cursor-pointer transition-colors">
-                  Full job description
-                </summary>
-                <div className="text-dim mt-4 u-prose text-[0.9375rem] leading-relaxed whitespace-pre-wrap">
-                  {detail.posting.descriptionText.slice(0, 8000)}
-                </div>
-              </details>
-            </>
-          )}
+                <details className="u-card-flat mt-8 px-5 py-4">
+                  <summary className="u-eyebrow hover:text-ink cursor-pointer transition-colors">
+                    Full job description
+                  </summary>
+                  <div className="text-dim mt-4 u-prose text-[0.9375rem] leading-relaxed whitespace-pre-wrap">
+                    {detail.posting.descriptionText.slice(0, 8000)}
+                  </div>
+                </details>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <footer className="a-rise a-step-8 mt-12">
         <hr className="u-rule mb-3" />

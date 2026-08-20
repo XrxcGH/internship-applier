@@ -179,8 +179,15 @@ export function Badge({
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="u-card-flat px-6 py-12 text-center">
-      <p className="text-dim">{title}</p>
-      {children && <div className="text-faint mt-3 text-[1rem]">{children}</div>}
+      {/* Capped at the measure and centred as a column, not sprayed across the frame.
+          Centred text is the one case where an uncapped measure is worst, because both
+          edges move and the eye loses the start of every line. `u-prose` rather than a
+          hand-picked width: docs/12 fixes the standard at ~68ch and that is the token every
+          other prose block on these pages carries. */}
+      <div className="u-prose mx-auto">
+        <p className="text-dim">{title}</p>
+        {children && <div className="text-faint mt-3 text-[1rem]">{children}</div>}
+      </div>
     </div>
   );
 }

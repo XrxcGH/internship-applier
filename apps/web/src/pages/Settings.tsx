@@ -10,6 +10,7 @@ import {
   type DeletePreview,
   type ModelAccess,
 } from '../lib/api';
+import { listStoredSources, setSourceEnabled, type StoredSource } from '../lib/discovery';
 import { Page, RunningHead, Section } from '../components/Chrome';
 import { Badge, Button, Empty, Notice, TextField } from '../components/Controls';
 
@@ -36,6 +37,7 @@ export function Settings() {
   const [access, setAccess] = useState<ModelAccess | null>(null);
   const [costs, setCosts] = useState<CostSummary | null>(null);
   const [preview, setPreview] = useState<DeletePreview | null>(null);
+  const [storedSources, setStoredSources] = useState<StoredSource[] | null>(null);
   const [confirmText, setConfirmText] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +62,7 @@ export function Settings() {
     void getModelAccess().then(setAccess).catch(fail);
     void getCosts().then(setCosts).catch(fail);
     void getDeletePreview().then(setPreview).catch(fail);
+    void listStoredSources().then(setStoredSources).catch(fail);
   }, []);
 
   useEffect(refresh, [refresh]);
@@ -76,6 +79,20 @@ export function Settings() {
       // A failed self-test answers with 503 and a useful message; show it as the result
       // rather than as a crash, because "not signed in yet" is the expected first answer.
       setTestResult({ ok: false, detail: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleSource = async (id: string, enabled: boolean): Promise<void> => {
+    setBusy('source');
+    setError(null);
+    try {
+      await setSourceEnabled(id, enabled);
+      // Re-read rather than patching in place, so the row shown is the row stored.
+      setStoredSources(await listStoredSources());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -202,7 +219,57 @@ export function Settings() {
         )}
       </Section>
 
-      <Section n="03" title="Your data" step={5}>
+      {/* The control two comments in routes/discovery.ts have been offering as the reason
+          it is safe to write a resolution row down at all. It did not exist. It matters more
+          now that a board answering 404/410/422 switches itself off during a run: without a
+          way back, one bad answer dropped a board from every future plan for good, and a
+          Workday board is never guessed, so pinning the company again would not restore it. */}
+      <Section n="03" title="Boards this machine has stored" step={5}>
+        {!storedSources && !error && <p className="text-dim a-pulse">Reading the list…</p>}
+        {storedSources?.length === 0 && (
+          <Empty title="No board has been written down yet.">
+            A board is stored when Discover resolves it, or when a run finds a posting on it.
+          </Empty>
+        )}
+        {storedSources && storedSources.length > 0 && (
+          <>
+            <p className="text-dim u-prose mb-4">
+              A board switched off here is left out of every plan and every run. Switching one back
+              on is how you recover a board a run dropped after it stopped answering.
+            </p>
+            <ul className="u-card-flat divide-rule/60 divide-y px-5">
+              {storedSources.map((src) => (
+                <li key={src.id} className="flex flex-wrap items-center justify-between gap-4 py-3">
+                  <div className="min-w-0">
+                    <span className="u-data text-[0.9375rem]">{src.label}</span>
+                    {/* The posting count and nothing else. `last_run_at` is on the table and
+                        no code in apps/server writes it, so every row would have read "never
+                        run" — a false statement about boards this machine has searched today,
+                        printed beside a true one. A column nobody fills is not a fact. */}
+                    <span className="text-faint ml-3 text-[0.875rem]">
+                      {src.postings} {src.postings === 1 ? 'posting' : 'postings'} stored
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <Badge tone={src.enabled ? 'verified' : 'caution'}>
+                      {src.enabled ? 'on' : 'off'}
+                    </Badge>
+                    <Button
+                      size="sm"
+                      disabled={busy !== null}
+                      onClick={() => void toggleSource(src.id, !src.enabled)}
+                    >
+                      {src.enabled ? 'Switch off' : 'Switch on'}
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </Section>
+
+      <Section n="04" title="Your data" step={6}>
         <div className="u-card-flat px-5 py-5">
           {/* This list named three things and left out the two largest. Your resume goes
               to the model whole at G1, before there is any answer to draft, and the full
