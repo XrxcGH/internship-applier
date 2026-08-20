@@ -239,9 +239,30 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
           },
         });
       }
-      return reply
-        .code(404)
-        .send({ error: { code: 'NOT_FOUND', message: (err as Error).message } });
+      /**
+       * A missing profile is a 404. A broken one is not.
+       *
+       * `confirmProfile` can throw four different things and only one of them means "nothing
+       * is there": the other three are a stored row that will not decrypt, one that will not
+       * parse, and a write that failed. All four landed on this hardcoded 404 with the
+       * message "No profile yet. Upload a resume first." — so a student whose profile was
+       * CORRUPT was told to do the thing they had already done, and doing it again would not
+       * have helped, because a re-upload merges over the row that will not read.
+       */
+      if (code === 'NOT_FOUND') {
+        return reply
+          .code(404)
+          .send({ error: { code: 'NOT_FOUND', message: (err as Error).message } });
+      }
+      logger.error({ err }, 'profile confirmation failed');
+      return reply.code(500).send({
+        error: {
+          code: 'INTERNAL',
+          message:
+            'Your profile could not be confirmed: it is stored but could not be read back. ' +
+            'The server log has the details.',
+        },
+      });
     }
   });
 

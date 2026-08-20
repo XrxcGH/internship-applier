@@ -6,6 +6,7 @@ import type { ApplicationStatus } from '@ia/shared';
 import { db, schema } from '../infra/db/client';
 import { isProfileConfirmed } from '../core/profile/repository';
 import { runMatching } from '../core/matching/run';
+import { logger } from '../infra/logger';
 import { discardRun } from '../core/filling/run';
 import { SET_BY } from '../core/tracking/status';
 
@@ -71,10 +72,34 @@ export async function matchRoutes(app: FastifyInstance): Promise<void> {
     try {
       return await runMatching(body.data);
     } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      return reply
-        .code(code === 'PROFILE_NOT_CONFIRMED' ? 409 : 500)
-        .send({ error: { code: code ?? 'INTERNAL', message: (err as Error).message } });
+      /**
+       * Mapped, not passed through.
+       *
+       * `code ?? 'INTERNAL'` handed whatever `.code` the thrown error happened to carry
+       * straight into the envelope — and `runMatching` writes to tables with foreign keys
+       * under `PRAGMA foreign_keys = ON`, so a better-sqlite3 failure arrives wearing
+       * `SQLITE_CONSTRAINT_FOREIGNKEY`. That is not one of the twenty codes `ApiErrorCode`
+       * declares, and `audit:error-codes` cannot see it because the audit scans for literals
+       * in the source rather than for what reaches the wire. A client switching on the code
+       * would meet a value no schema of ours contains, and the message beside it is a SQL
+       * engine's, addressed to nobody.
+       *
+       * Only the one code this route can legitimately produce leaves it; everything else is
+       * an internal failure and says so, with the detail going to the log.
+       */
+      const declared = (err as Error & { code?: string }).code === 'PROFILE_NOT_CONFIRMED';
+      if (declared) {
+        return reply.code(409).send({
+          error: { code: 'PROFILE_NOT_CONFIRMED', message: (err as Error).message },
+        });
+      }
+      logger.error({ err }, 'match recompute failed');
+      return reply.code(500).send({
+        error: {
+          code: 'INTERNAL',
+          message: 'Scoring did not finish. The server log has the details.',
+        },
+      });
     }
   });
 

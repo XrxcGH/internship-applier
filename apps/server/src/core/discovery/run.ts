@@ -135,9 +135,17 @@ export async function runDiscovery(
          * that had nothing open would never have been stamped, which is the opposite of what
          * "last searched" means and the case the column is most useful for.
          */
+        // `ensureSource` first, because a bare UPDATE matched no row the first time a board
+        // was searched. Source rows are written in two places: `ensureSource` from `persist()`,
+        // which runs after the whole worker loop, and the resolve route. So every guessed
+        // vendor slug and every keyless aggregator was stamped before its row existed, and the
+        // Settings list said "not searched yet" about the boards a run had just been through —
+        // which is the exact sentence this column was added to stop showing.
+        const label = `${target.source}:${target.board}`;
+        ensureSource(label);
         db.update(schema.source)
           .set({ lastRunAt: new Date().toISOString() })
-          .where(eq(schema.source.label, `${target.source}:${target.board}`))
+          .where(eq(schema.source.label, label))
           .run();
         report.found = result.postings.length;
         report.notes = [...result.notes, ...(result.gaps ?? [])];

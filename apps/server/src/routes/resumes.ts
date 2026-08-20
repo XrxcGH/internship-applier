@@ -48,8 +48,25 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
     await mkdir(config.paths.resumes, { recursive: true });
     await writeFile(stored, bytes, { mode: 0o600 });
 
+    /**
+     * A failure here is not a fallback, whatever this line used to say.
+     *
+     * It logged "will rely on the model", which is true for a PDF — those are passed to the
+     * model as bytes and `extractText` returns null for them WITHOUT throwing. So this catch
+     * cannot fire for a PDF at all. It fires only for DOCX, TXT and Markdown, and for exactly
+     * those the extractor refuses outright rather than falling back: with no text there is
+     * nothing to send. The one message this branch could ever print described the one case it
+     * could never be printed for.
+     *
+     * The upload is still accepted and the text stored as null, because the failure is worth
+     * seeing at extraction time — where the student is told, in a sentence naming the file —
+     * rather than as a rejected upload that leaves them guessing which of the two steps broke.
+     */
     const text = await extractText(stored, mime).catch((err: unknown) => {
-      logger.warn({ err }, 'local text extraction failed; will rely on the model');
+      logger.warn(
+        { err, mime, filename: file.filename },
+        'could not read any text out of this document; extraction will refuse it',
+      );
       return null;
     });
 

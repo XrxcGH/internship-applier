@@ -219,7 +219,15 @@ export function saveProfile(p: CandidateProfile, now: Date = new Date()): Candid
  */
 export function confirmProfile(now: Date = new Date()): CandidateProfile {
   const p = getProfile();
-  if (!p) throw new Error('No profile to confirm.');
+  if (!p) {
+    // Coded, so the route can tell this apart from the three OTHER things that can go wrong
+    // here — a row that will not decrypt, one that will not parse, one that will not store.
+    // All four used to arrive at the same hardcoded 404, telling a student with a corrupt
+    // profile to upload a resume they had already uploaded.
+    const err = new Error('No profile to confirm.');
+    (err as Error & { code?: string }).code = 'NOT_FOUND';
+    throw err;
+  }
   if (p.needsReview.length > 0) {
     const err = new Error(
       `${p.needsReview.length} field(s) still need your review before this can be confirmed.`,
