@@ -25,12 +25,17 @@ import type { CandidateProfile } from '@ia/shared';
  * Flagged paths that have a control somewhere, and what to call each one in a refusal.
  *
  * These are the six facts a resume never contains (REQUIRED_BY_G1 in ingestion/toProfile.ts)
- * plus the three contact fields the extractor flags when it could not read them.
+ * plus the contact fields the extractor flags when it could not read them.
+ *
+ * `phone` is deliberately NOT among them, though the extractor does flag it. The schema has
+ * it optional, so a blank phone is a complete answer — and while it was listed here,
+ * `dismissalRefusal` refused to mark the flag reviewed until a number was typed, while the
+ * client offered no dismissal button at all. Between them, clearing the phone box locked G1
+ * permanently against anyone who did not want to give one.
  */
 export const ANSWERED_IN_WIZARD: Record<string, string> = {
   fullName: 'Your name',
   email: 'Your email address',
-  phone: 'Your phone number',
   dateOfBirth: 'Your date of birth',
   'workAuthorization.status': 'Your work authorization',
   'availability.start': 'The date you can start',

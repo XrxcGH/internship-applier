@@ -143,8 +143,25 @@ export function Notice({
   tone: 'caution' | 'redline' | 'verified' | 'accent';
   children: ReactNode;
 }) {
+  /**
+   * Announced when it appears, because almost every one of these appears in response to
+   * something the user just did and none of them was announced anywhere in the app.
+   *
+   * A failed save, a refused source, a run that could not start — all of them rendered
+   * silently into the middle of a page a screen-reader user had no reason to re-read, so the
+   * button appeared to do nothing at all. 'assertive' for the redline tone alone: that one
+   * always means the thing the user asked for did not happen, which is worth interrupting
+   * for. The rest are polite and wait for a pause.
+   */
+  const live = tone === 'redline' ? 'assertive' : 'polite';
   return (
-    <div className={`u-tint-${tone} text-dim my-4 rounded px-4 py-3 text-base`}>{children}</div>
+    <div
+      role={tone === 'redline' ? 'alert' : 'status'}
+      aria-live={live}
+      className={`u-tint-${tone} text-dim my-4 rounded px-4 py-3 text-base`}
+    >
+      {children}
+    </div>
   );
 }
 

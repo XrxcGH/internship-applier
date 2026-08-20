@@ -1,3 +1,4 @@
+import { OPTIONAL_WIZARD_FIELDS, isDismissible } from '../src/lib/review';
 import { readFileSync } from 'node:fs';
 import { createElement, isValidElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -716,5 +717,40 @@ describe('WithdrawnNotice', () => {
       },
     ]);
     expect(said).toContain('I led the build team.');
+  });
+});
+
+/**
+ * A field whose blank is a real answer must not be able to lock the gate.
+ *
+ * Clearing the phone box raised a `phone` flag by `nextReviewFlags`'s default, the flag was
+ * not dismissible because `phone` sat in ANSWERED_IN_WIZARD, and the server refuses to
+ * confirm a profile while any flag stands — so the only way out of G1 was to type a number
+ * the user had deliberately declined to give. The shared schema says `phone` is optional;
+ * this is that fact, held on the client side that has to honour it.
+ */
+describe('optional wizard fields', () => {
+  it('does not re-raise a flag when an optional field is emptied', () => {
+    for (const path of ['pronouns', 'phone']) {
+      expect(OPTIONAL_WIZARD_FIELDS.has(path), path).toBe(true);
+      expect(nextReviewFlags(['other'], path, ''), path).toEqual(['other']);
+      expect(nextReviewFlags([path, 'other'], path, ''), path).toEqual(['other']);
+    }
+  });
+
+  it('offers a way to clear the flag rather than a dead instruction', () => {
+    // `isDismissible` is what decides between an "I have checked this" button and a sentence
+    // pointing at a control. An optional field must get the button, or its flag is permanent.
+    for (const path of ['pronouns', 'phone']) {
+      expect(isDismissible(path), path).toBe(true);
+    }
+  });
+
+  it('still holds the facts a resume genuinely cannot contain', () => {
+    // The other direction: these are not optional, and emptying one must re-raise.
+    for (const path of ['dateOfBirth', 'workAuthorization.status', 'locationPrefs.base.city']) {
+      expect(OPTIONAL_WIZARD_FIELDS.has(path), path).toBe(false);
+      expect(nextReviewFlags([], path, ''), path).toEqual([path]);
+    }
   });
 });

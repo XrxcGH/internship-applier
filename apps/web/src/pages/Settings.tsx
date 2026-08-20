@@ -317,7 +317,7 @@ export function Settings() {
         </div>
       </Section>
 
-      <Section n="04" title="Delete everything" step={6}>
+      <Section n="05" title="Delete everything" step={7}>
         {deleted ? (
           /* Green only when everything really went. A delete that left files behind used to
              report in the same green as one that did not, with the list of survivors dropped

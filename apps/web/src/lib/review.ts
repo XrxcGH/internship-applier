@@ -49,7 +49,6 @@ export function isAnswered(value: unknown): boolean {
 export const ANSWERED_IN_WIZARD: Record<string, string> = {
   fullName: 'Correct it on the previous step.',
   email: 'Correct it on the previous step.',
-  phone: 'Correct it on the previous step.',
   dateOfBirth: 'Fill it in above.',
   'workAuthorization.status': 'Choose one above.',
   'availability.start': 'Fill it in above.',
@@ -69,7 +68,17 @@ export const ANSWERED_IN_WIZARD: Record<string, string> = {
  * then holds. A new optional control on the wizard needs its path listed here so the two
  * halves — the control and the rule — stay in step.
  */
-export const OPTIONAL_WIZARD_FIELDS = new Set<string>(['pronouns']);
+/**
+ * A blank here is a complete answer, so the flag stays dismissible.
+ *
+ * `phone` joined `pronouns` after clearing the box was found to lock G1 shut for good. The
+ * shared schema declares it `z.string().optional()` — not giving a phone number is a legal,
+ * deliberate choice — but emptying the field re-raised a `phone` flag by `nextReviewFlags`'s
+ * default, the flag was not dismissible because `phone` sat in ANSWERED_IN_WIZARD, and the
+ * server refuses to confirm a profile while any flag stands. The only way out of the gate was
+ * to type a number the user had decided not to give.
+ */
+export const OPTIONAL_WIZARD_FIELDS = new Set<string>(['pronouns', 'phone']);
 
 /** Whether this flag may be waved off, or has to be answered on a required control instead. */
 export function isDismissible(path: string): boolean {

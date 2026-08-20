@@ -401,8 +401,13 @@ export function FillReview({
       {/* A run that is mid-flight gets a card with nothing on it to press twice. The only
           control is the way out, because stopping is the one thing a person watching the
           browser type into the wrong box actually needs. */}
+      {/* Announced, because this panel re-fetches every 1.5s and swaps its whole body as the
+          run moves opening -> filling -> done, and it told the user in words that it "updates
+          on its own" — a promise it kept for everyone except the people who cannot see it
+          happen. This is also the screen where a browser is typing into a real application
+          form, so the transitions are the ones most worth hearing. */}
       {run && !run.intervention && working(run) && (
-        <div className="u-card-flat px-5 py-5">
+        <div className="u-card-flat px-5 py-5" role="status" aria-live="polite">
           <p className="u-eyebrow mb-2">Working</p>
           <p className="text-dim">
             {workingLabel(run)} The browser is open in front of you — watch it there.{' '}

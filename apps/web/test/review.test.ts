@@ -58,10 +58,19 @@ describe('isDismissible', () => {
     }
   });
 
-  it('refuses to wave off the identity fields, which have controls on the step before', () => {
+  it('refuses to wave off the identity fields the schema insists on', () => {
+    // `fullName: z.string()` and `email: EmailAddress` — neither is optional, so a blank is
+    // not an answer and the flag has to stay until there is one.
     expect(isDismissible('fullName')).toBe(false);
     expect(isDismissible('email')).toBe(false);
-    expect(isDismissible('phone')).toBe(false);
+  });
+
+  it('DOES wave off phone, whose blank the schema accepts as an answer', () => {
+    // This asserted `false` and was pinning a bug. `phone: z.string().optional()`, so
+    // declining to give a number is a complete answer — but the flag raised on clearing the
+    // box was non-dismissible, and the server will not confirm a profile while a flag stands.
+    // The only way out of G1 was to type a number the user had chosen not to give.
+    expect(isDismissible('phone')).toBe(true);
   });
 
   it('decides on presence in the map, not on whether the hint reads as truthy', () => {

@@ -167,8 +167,19 @@ export function App() {
 
   return (
     <>
+      {/* A skip link and a main landmark, which the app had neither of.
+
+          Every screen is reached through the same eight-item nav, so a keyboard or
+          screen-reader user tabbed past all eight on every navigation to reach the content,
+          and had no landmark to jump to instead. The link is visually hidden until it takes
+          focus, which is the one time it is useful. */}
+      <a href="#main" className="u-skip-link">
+        Skip to content
+      </a>
       <Nav view={view} onNavigate={setView} profile={profile} busy={busy} />
-      {body()}
+      <main id="main" tabIndex={-1}>
+        {body()}
+      </main>
     </>
   );
 }

@@ -551,3 +551,31 @@ i {
     scroll-behavior: auto;
   }
 }
+
+/* The skip link: out of the way until it is the thing you want.
+
+   Positioned rather than `display: none`, because a hidden element cannot take focus and a
+   skip link that cannot take focus is decoration. It comes back into the page on :focus. */
+.u-skip-link {
+  /* Fixed, not absolute. Absolute positions it against the document, so tabbing into it
+     partway down a long page — the queue, a filled form — put it at the top of the DOCUMENT
+     and therefore off the screen entirely: focused, announced, and invisible. */
+  position: fixed;
+  left: 0.75rem;
+  top: -4rem;
+  z-index: 50;
+  padding: 0.625rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.25rem;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: top 150ms ease;
+}
+
+.u-skip-link:focus {
+  top: 0.75rem;
+}

@@ -242,11 +242,20 @@ export function AnswerReview({
           {/* ── the answer */}
           <div className="border-rule px-6 py-5 lg:border-r">
             {editing ? (
+              /* The box the whole of G3 is built around, and it announced itself as
+                 "edit text, blank" — no label, no aria-label, not even a placeholder, on the
+                 one screen this file has already twice been rewritten to serve: the claim
+                 highlights and the evidence list both became real buttons so a keyboard or
+                 screen-reader user could reach what they mean. The edit box those fixes exist
+                 to serve was left nameless. Named from the question rather than wrapped in
+                 the repo's TextArea, whose visible label would repeat the question already
+                 shown in this card's header. */
               <textarea
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 rows={Math.max(8, Math.ceil(text.length / 70) + 2)}
                 autoFocus
+                aria-label={`Your answer to: ${answer.questionText}`}
                 className="border-rule focus:border-accent u-prose w-full resize-y rounded border bg-transparent p-4 outline-none transition-colors"
               />
             ) : (
