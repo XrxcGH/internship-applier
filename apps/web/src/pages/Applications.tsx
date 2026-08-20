@@ -1,4 +1,4 @@
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import {
   addQuestion,
@@ -259,6 +259,20 @@ function Detail({
 
       <div className="mb-10 flex flex-wrap items-center gap-3">
         <Badge tone="accent">{app.company}</Badge>
+        {/* The posting itself, in every state. Section 01 tells the student to paste each
+            question off the application page, and the only link to that page lived inside
+            FillReview — which takes an early return when the form cannot be filled yet, which
+            is exactly the state a brand-new application is in. So the screen asked them to go
+            and read something it would not let them open. */}
+        <a
+          href={app.applyUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="u-data text-accent inline-flex min-h-9 items-center gap-1.5 underline underline-offset-4"
+        >
+          Open the posting
+          <ExternalLink aria-hidden size={13} />
+        </a>
         <Badge tone={ready ? 'verified' : 'caution'}>
           {app.answers.length === 0
             ? 'no questions yet'

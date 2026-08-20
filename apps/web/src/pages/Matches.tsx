@@ -278,7 +278,20 @@ export function Matches({
 
   return (
     <Page>
-      <RunningHead section="The queue" gate="G2" />
+      {/* Every other gated screen carries a lede saying what its gate does — G1's on
+          Onboarding, G3's on Applications, and Discover's "it arrives as a posting for you to
+          judge at G2". The screen where G2 actually happens named the gate and said nothing,
+          so the one irreversible-feeling decision on it went unexplained. */}
+      <RunningHead
+        section="The queue"
+        gate="G2"
+        lede={
+          <>
+            One posting, one decision. <strong>Approving creates an application</strong> you then
+            write and review at G3 — nothing is sent to anyone, here or there.
+          </>
+        }
+      />
 
       <div className="a-rise a-step-2 mb-6 flex flex-wrap items-center gap-2.5">
         {(

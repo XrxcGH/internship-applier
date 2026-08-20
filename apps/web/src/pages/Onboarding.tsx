@@ -770,6 +770,10 @@ export function Onboarding({
               <TextField
                 label="Phone"
                 value={profile.phone ?? ''}
+                // The three fields around this one all pass their flag; this did not, so a
+                // `phone` flag sent the student to "the previous step" and then gave them
+                // nothing to look for once they were on it.
+                flagged={flagged('phone')}
                 onChange={(e) => patch((p) => ({ ...p, phone: e.target.value }), 'phone')}
               />
             </div>
