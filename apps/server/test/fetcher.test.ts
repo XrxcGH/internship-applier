@@ -215,6 +215,24 @@ async function hostRecording(
   return `http://127.0.0.1:${String(address.port)}`;
 }
 
+/** Records the HTTP method of each request, so a replayed POST body is visible. */
+async function hostRecordingMethod(
+  methods: string[],
+  reply: (url: string) => { status: number; body: string; headers?: Record<string, string> },
+): Promise<string> {
+  const server = createServer((req, res) => {
+    methods.push(req.method ?? '');
+    const out = reply(req.url ?? '/');
+    res.writeHead(out.status, { 'content-type': 'text/plain', ...(out.headers ?? {}) });
+    res.end(out.body);
+  });
+  running.push(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('no port');
+  return `http://127.0.0.1:${String(address.port)}`;
+}
+
 describe('following a redirect', () => {
   it('reads the DESTINATION host robots.txt, not the one it started at', async () => {
     // The whole point. The first host allows everything; the second forbids the path the
@@ -357,5 +375,78 @@ describe('what survives a redirect, and what does not', () => {
       politeFetch(`${server}/go`, { rps: 50, headers: { 'authorization-key': 'SECRET' } }),
     ).resolves.toBe('same origin');
     expect(received).toContain('SECRET');
+  });
+});
+
+/**
+ * What a redirect drops on its way out of an origin, and what a locally-derived failure costs.
+ */
+describe('a redirect leaving the origin the caller named', () => {
+  it('asks the destination host its own robots.txt, exemption or no exemption', async () => {
+    // `isDocumentedApi` says "this exact URL is a vendor's published API", which is a claim
+    // about the address the CALLER named — and `fetchJson` sets it by default, so every ATS
+    // and aggregator request carries it. Spread through a cross-origin hop it became a claim
+    // about wherever Location pointed, and that host's rules were never consulted.
+    const blocked = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 200, body: 'User-agent: *\nDisallow: /' }
+        : { status: 200, body: 'should not be reached' },
+    );
+    const start = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 404, body: '' }
+        : { status: 302, body: '', headers: { location: `${blocked}/jobs` } },
+    );
+
+    await expect(
+      politeFetch(`${start}/api/jobs`, { rps: 50, isDocumentedApi: true }),
+    ).rejects.toThrow(/robots\.txt disallows/);
+  });
+
+  it('keeps the exemption on a same-origin hop, where the claim still holds', async () => {
+    // A documented API redirecting within itself is still that API.
+    const server = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 200, body: 'User-agent: *\nDisallow: /' }
+        : url === '/api/jobs'
+          ? { status: 302, body: '', headers: { location: '/api/v2/jobs' } }
+          : { status: 200, body: 'vendor api' },
+    );
+    await expect(
+      politeFetch(`${server}/api/jobs`, { rps: 50, isDocumentedApi: true }),
+    ).resolves.toBe('vendor api');
+  });
+
+  it('does not replay a POST body to wherever a 302 points', async () => {
+    // Re-POSTing a query to a host that merely redirected is how one query's answer ends up
+    // somewhere nobody asked. Only Workday's board endpoint sends a body at all.
+    const methods: string[] = [];
+    const target = await hostRecordingMethod(methods, () => ({ status: 200, body: 'arrived' }));
+    const start = await hostWithHeaders((url) =>
+      url === '/robots.txt'
+        ? { status: 404, body: '' }
+        : { status: 307, body: '', headers: { location: `${target}/landed` } },
+    );
+
+    await expect(
+      politeFetch(`${start}/query`, { rps: 50, jsonBody: { searchText: 'intern' } }),
+    ).resolves.toBe('arrived');
+    expect(methods).not.toContain('POST');
+  });
+
+  it('gives up on a cycle without re-running the attempt loop', async () => {
+    // The hop-exhaustion error is derived from a counter, not reported by a server, so
+    // retrying cannot answer differently — yet it wore status 508 and the retry rule reads the
+    // status, so the terminal hop re-fetched five times with backoff sleeps between.
+    let requests = 0;
+    const server = await hostWithHeaders((url) => {
+      if (url === '/robots.txt') return { status: 404, body: '' };
+      requests++;
+      return { status: 302, body: '', headers: { location: '/loop' } };
+    });
+
+    await expect(politeFetch(`${server}/loop`, { rps: 50 })).rejects.toThrow(/More than 5/);
+    // Six hops, and no attempt loop on the last one.
+    expect(requests).toBeLessThanOrEqual(6);
   });
 });

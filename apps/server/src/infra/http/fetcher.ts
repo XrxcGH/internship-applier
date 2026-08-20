@@ -125,14 +125,30 @@ export function scrubUrl(raw: string): string {
 export class HttpError extends Error {
   readonly url: string;
 
+  /**
+   * Whether trying the same request again could possibly answer differently.
+   *
+   * The retry rule reads the STATUS — under 500 and not 429 means give up — which is right for
+   * anything a server said and wrong for anything this process worked out for itself. The
+   * redirect-limit error is raised locally from a counter with status 508, so it fell into the
+   * retry path and the terminal hop re-ran its whole attempt loop: five requests and four
+   * backoff sleeps to re-derive a number that had not changed.
+   *
+   * Set explicitly rather than inferred from the status, because the status here is describing
+   * the situation to a human, not classifying it for the loop.
+   */
+  readonly retryable: boolean;
+
   constructor(
     message: string,
     readonly status: number,
     url: string,
+    opts: { retryable?: boolean } = {},
   ) {
     super(message);
     this.name = 'HttpError';
     this.url = scrubUrl(url);
+    this.retryable = opts.retryable ?? true;
   }
 }
 
@@ -390,6 +406,8 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
               'followed any further.',
             508,
             url,
+            // Counted here, not reported by anybody. Re-fetching cannot produce a shorter chain.
+            { retryable: false },
           );
         }
         const next = new URL(location, url).toString();
@@ -430,7 +448,23 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
           ...opts,
           hopsLeft: hopsLeft - 1,
           jsonBody: undefined,
-          ...(crossOrigin ? { headers: undefined } : {}),
+          ...(crossOrigin
+            ? {
+                headers: undefined,
+                /**
+                 * And the robots exemption is dropped with them.
+                 *
+                 * `isDocumentedApi` says "this exact URL is a vendor's published API, so its
+                 * robots.txt is not the right question to ask of it" — a claim about the address
+                 * the CALLER named, and `fetchJson` sets it by default, so every ATS and
+                 * aggregator request carries it. Spread through a cross-origin hop it became a
+                 * claim about wherever the Location pointed, and that host's rules were never
+                 * read at all. `MAX_REDIRECTS` says each hop gets "its own robots.txt check",
+                 * and for the commonest caller in the app it did not.
+                 */
+                isDocumentedApi: false,
+              }
+            : {}),
         });
       }
 
@@ -486,6 +520,9 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
       return body;
     } catch (err) {
       lastErr = err;
+      // `retryable` first: a locally-derived failure cannot change by being repeated, whatever
+      // status it wears for the reader's benefit.
+      if (err instanceof HttpError && !err.retryable) throw err;
       if (err instanceof HttpError && err.status < 500 && err.status !== 429) throw err;
       if (attempt === MAX_ATTEMPTS - 1) break;
       await sleep(backoffMs(attempt));
