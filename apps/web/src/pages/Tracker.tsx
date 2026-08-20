@@ -183,7 +183,7 @@ export function Tracker() {
 
   if (!view) {
     return (
-      <Page wide>
+      <Page>
         <RunningHead section="Tracker" />
         {error ? (
           <Notice tone="redline">{error}</Notice>
@@ -197,7 +197,7 @@ export function Tracker() {
   const { applications, reminders, stats } = view;
 
   return (
-    <Page wide>
+    <Page>
       <RunningHead
         section="Tracker"
         lede={

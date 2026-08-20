@@ -92,8 +92,11 @@ export function Applications({ onBack }: { onBack: () => void }) {
         </Empty>
       )}
 
+      {/* Three across on a monitor, two on a laptop, one on a phone. These cards are a
+          company, a title and two fields — at one per row they left most of the frame empty,
+          and at two they still did on anything above about 1600px. */}
       {list && list.length > 0 && (
-        <ul className="grid gap-4 sm:grid-cols-2">
+        <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {list.map((a, i) => {
             const ready = a.answerCount > 0 && a.approvedCount === a.answerCount;
             return (

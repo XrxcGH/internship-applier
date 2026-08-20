@@ -265,7 +265,7 @@ export function Matches({
   const current = rows.find((r) => r.id === selected);
 
   return (
-    <Page wide>
+    <Page>
       <RunningHead section="The queue" gate="G2" />
 
       <div className="a-rise a-step-2 mb-6 flex flex-wrap items-center gap-2.5">

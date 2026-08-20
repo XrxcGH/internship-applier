@@ -199,7 +199,7 @@ function Home({
   onRetry: () => void;
 }) {
   return (
-    <Page wide>
+    <Page>
       <RunningHead
         section="A working dossier"
         gate={profile === 'unconfirmed' ? 'G1' : undefined}

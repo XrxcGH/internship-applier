@@ -295,7 +295,7 @@ export function Discovery({
   const blocked = whyCannotRun(targets);
 
   return (
-    <Page wide>
+    <Page>
       <RunningHead
         section="Discover"
         lede={

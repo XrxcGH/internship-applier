@@ -180,169 +180,181 @@ export function Settings() {
         </Notice>
       )}
 
-      <Section n="01" title="Model access" step={3}>
-        {/* Yields to the banner above, as Applications already does. Keyed only on the
+      {/* Two columns from lg up. Every section here is self-contained — a panel, a ledger,
+          a list of boards — so they read as well side by side as stacked, and stacked they
+          left the right half of a monitor empty down the whole page. `items-start` so a
+          short section does not stretch to match a tall neighbour. */}
+      <div className="grid items-start gap-x-12 gap-y-0 lg:grid-cols-2">
+        <Section n="01" title="Model access" step={3}>
+          {/* Yields to the banner above, as Applications already does. Keyed only on the
             data being absent, a failed fetch pulsed "Checking…" under a red error for
             the life of the page — the page looked like it was still working on it. */}
-        {!access && !error && <p className="text-dim a-pulse">Checking…</p>}
-        {access && (
-          <div className="u-card-flat px-5 py-5">
-            <div className="mb-3 flex flex-wrap items-center gap-3">
-              <Badge tone={access.available ? 'verified' : 'caution'}>
-                {access.available ? 'connected' : 'not connected'}
-              </Badge>
-              <span className="text-dim">{access.description}</span>
-            </div>
-
-            {access.limitations.length > 0 && (
-              <ul className="mt-3 space-y-1.5">
-                {access.limitations.map((l, i) => (
-                  <li key={i} className="text-dim u-prose text-base">
-                    {l}
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <Button variant="primary" disabled={busy !== null} onClick={() => void runTest()}>
-                {busy === 'test' ? 'Testing…' : 'Test the connection'}
-              </Button>
-            </div>
-
-            {testResult && (
-              <Notice tone={testResult.ok ? 'verified' : 'caution'}>
-                <span className="whitespace-pre-wrap">{testResult.detail}</span>
-              </Notice>
-            )}
-
-            <p className="text-faint u-prose mt-4 text-sm">
-              Drafting can run through the Claude Code CLI, against a subscription you already pay
-              for, or through an Anthropic API key. Everything else here works without either.
-            </p>
-          </div>
-        )}
-      </Section>
-
-      <Section n="02" title="What it has cost" step={4}>
-        {!costs && !error && <p className="text-dim a-pulse">Reading the ledger…</p>}
-        {costs && (
-          <>
-            <p className="text-dim u-prose mb-4">{costs.note}</p>
-
-            {costs.byPurpose.length === 0 ? (
-              <Empty title="No model calls recorded.">
-                Every call gets written down as it happens, so this is a record rather than an
-                estimate.
-              </Empty>
-            ) : (
-              <div className="u-card-flat divide-rule/60 divide-y px-5 py-1">
-                {costs.byPurpose.map((p) => (
-                  <div key={p.purpose} className="flex items-baseline justify-between gap-6 py-2.5">
-                    <span className="text-base">{purposeLabel(p.purpose)}</span>
-                    <span className="u-data text-dim">
-                      {p.calls} {p.calls === 1 ? 'call' : 'calls'} · {money(p.usd)}
-                    </span>
-                  </div>
-                ))}
+          {!access && !error && <p className="text-dim a-pulse">Checking…</p>}
+          {access && (
+            <div className="u-card-flat px-5 py-5">
+              <div className="mb-3 flex flex-wrap items-center gap-3">
+                <Badge tone={access.available ? 'verified' : 'caution'}>
+                  {access.available ? 'connected' : 'not connected'}
+                </Badge>
+                <span className="text-dim">{access.description}</span>
               </div>
-            )}
-          </>
-        )}
-      </Section>
 
-      {/* The control two comments in routes/discovery.ts have been offering as the reason
+              {access.limitations.length > 0 && (
+                <ul className="mt-3 space-y-1.5">
+                  {access.limitations.map((l, i) => (
+                    <li key={i} className="text-dim u-prose text-base">
+                      {l}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <Button variant="primary" disabled={busy !== null} onClick={() => void runTest()}>
+                  {busy === 'test' ? 'Testing…' : 'Test the connection'}
+                </Button>
+              </div>
+
+              {testResult && (
+                <Notice tone={testResult.ok ? 'verified' : 'caution'}>
+                  <span className="whitespace-pre-wrap">{testResult.detail}</span>
+                </Notice>
+              )}
+
+              <p className="text-faint u-prose mt-4 text-sm">
+                Drafting can run through the Claude Code CLI, against a subscription you already pay
+                for, or through an Anthropic API key. Everything else here works without either.
+              </p>
+            </div>
+          )}
+        </Section>
+
+        <Section n="02" title="What it has cost" step={4}>
+          {!costs && !error && <p className="text-dim a-pulse">Reading the ledger…</p>}
+          {costs && (
+            <>
+              <p className="text-dim u-prose mb-4">{costs.note}</p>
+
+              {costs.byPurpose.length === 0 ? (
+                <Empty title="No model calls recorded.">
+                  Every call gets written down as it happens, so this is a record rather than an
+                  estimate.
+                </Empty>
+              ) : (
+                <div className="u-card-flat divide-rule/60 divide-y px-5 py-1">
+                  {costs.byPurpose.map((p) => (
+                    <div
+                      key={p.purpose}
+                      className="flex items-baseline justify-between gap-6 py-2.5"
+                    >
+                      <span className="text-base">{purposeLabel(p.purpose)}</span>
+                      <span className="u-data text-dim">
+                        {p.calls} {p.calls === 1 ? 'call' : 'calls'} · {money(p.usd)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </Section>
+
+        {/* The control two comments in routes/discovery.ts have been offering as the reason
           it is safe to write a resolution row down at all. It did not exist. It matters more
           now that a board answering 404/410/422 switches itself off during a run: without a
           way back, one bad answer dropped a board from every future plan for good, and a
           Workday board is never guessed, so pinning the company again would not restore it. */}
-      <Section n="03" title="Boards this machine has stored" step={5}>
-        {!storedSources && !error && <p className="text-dim a-pulse">Reading the list…</p>}
-        {storedSources?.length === 0 && (
-          <Empty title="No board has been written down yet.">
-            A board is stored when Discover resolves it, or when a run finds a posting on it.
-          </Empty>
-        )}
-        {storedSources && storedSources.length > 0 && (
-          <>
-            <p className="text-dim u-prose mb-4">
-              A board switched off here is left out of every plan and every run. Switching one back
-              on is how you recover a board a run dropped after it stopped answering.
-            </p>
-            <ul className="u-card-flat divide-rule/60 divide-y px-5">
-              {storedSources.map((src) => (
-                <li key={src.id} className="flex flex-wrap items-center justify-between gap-4 py-3">
-                  <div className="min-w-0">
-                    <span className="u-data text-sm">{src.label}</span>
-                    {/* `last_run_at` is written by the runner now, for every target it actually
+        <Section n="03" title="Boards this machine has stored" step={5}>
+          {!storedSources && !error && <p className="text-dim a-pulse">Reading the list…</p>}
+          {storedSources?.length === 0 && (
+            <Empty title="No board has been written down yet.">
+              A board is stored when Discover resolves it, or when a run finds a posting on it.
+            </Empty>
+          )}
+          {storedSources && storedSources.length > 0 && (
+            <>
+              <p className="text-dim u-prose mb-4">
+                A board switched off here is left out of every plan and every run. Switching one
+                back on is how you recover a board a run dropped after it stopped answering.
+              </p>
+              <ul className="u-card-flat divide-rule/60 divide-y px-5">
+                {storedSources.map((src) => (
+                  <li
+                    key={src.id}
+                    className="flex flex-wrap items-center justify-between gap-4 py-3"
+                  >
+                    <div className="min-w-0">
+                      <span className="u-data text-sm">{src.label}</span>
+                      {/* `last_run_at` is written by the runner now, for every target it actually
                         searches — not per stored posting, so a board searched honestly that had
                         nothing open still gets a date. It briefly was written by nothing at all,
                         and this line read "never run" beside boards searched an hour earlier, so
                         the absent case says plainly that nothing has searched it rather than
                         implying a date it does not have. */}
-                    <span className="text-faint ml-3 text-xs">
-                      {src.postings} {src.postings === 1 ? 'posting' : 'postings'} stored
-                      {src.lastRunAt
-                        ? ` · searched ${whenLabel(src.lastRunAt)}`
-                        : ' · not searched yet'}
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <Badge tone={src.enabled ? 'verified' : 'caution'}>
-                      {src.enabled ? 'on' : 'off'}
-                    </Badge>
-                    <Button
-                      size="sm"
-                      disabled={busy !== null}
-                      onClick={() => void toggleSource(src.id, !src.enabled)}
-                    >
-                      {src.enabled ? 'Switch off' : 'Switch on'}
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </Section>
+                      <span className="text-faint ml-3 text-xs">
+                        {src.postings} {src.postings === 1 ? 'posting' : 'postings'} stored
+                        {src.lastRunAt
+                          ? ` · searched ${whenLabel(src.lastRunAt)}`
+                          : ' · not searched yet'}
+                      </span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <Badge tone={src.enabled ? 'verified' : 'caution'}>
+                        {src.enabled ? 'on' : 'off'}
+                      </Badge>
+                      <Button
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() => void toggleSource(src.id, !src.enabled)}
+                      >
+                        {src.enabled ? 'Switch off' : 'Switch on'}
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </Section>
 
-      <Section n="04" title="Your data" step={6}>
-        <div className="u-card-flat px-5 py-5">
-          {/* This list named three things and left out the two largest. Your resume goes
+        <Section n="04" title="Your data" step={6}>
+          <div className="u-card-flat px-5 py-5">
+            {/* This list named three things and left out the two largest. Your resume goes
               to the model whole at G1, before there is any answer to draft, and the full
               text of a posting goes with it whenever requirements are extracted, which is
               the default on every Recompute. A closed list is worth keeping — it is what
               someone comes to this page to read — but it has to be the real one, and it
               now points at the ledger above, which counts every model call as it is made.
               Anything added that talks to the network belongs in this paragraph. */}
-          <p className="text-dim u-prose">
-            Everything is stored on this machine. Some of it does leave, and this is the whole list:
-            the job-source lookups discovery runs, your resume when the model reads it at G1, the
-            search brief — role keywords and a location, nothing personal — when the web-search
-            source runs, the text of a posting when its requirements are extracted, whatever is sent
-            to the model while you draft or check an answer, and the application sites themselves.
-            Every one of those model calls is counted in the ledger above, by purpose. You can take
-            all of it with you at any time.
-          </p>
-          <div className="mt-4">
-            <Button
-              variant="primary"
-              disabled={busy !== null}
-              onClick={() =>
-                void downloadFile('/api/privacy/export', 'internship-applier-export.json').catch(
-                  (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
-                )
-              }
-            >
-              Export everything
-            </Button>
+            <p className="text-dim u-prose">
+              Everything is stored on this machine. Some of it does leave, and this is the whole
+              list: the job-source lookups discovery runs, your resume when the model reads it at
+              G1, the search brief — role keywords and a location, nothing personal — when the
+              web-search source runs, the text of a posting when its requirements are extracted,
+              whatever is sent to the model while you draft or check an answer, and the application
+              sites themselves. Every one of those model calls is counted in the ledger above, by
+              purpose. You can take all of it with you at any time.
+            </p>
+            <div className="mt-4">
+              <Button
+                variant="primary"
+                disabled={busy !== null}
+                onClick={() =>
+                  void downloadFile('/api/privacy/export', 'internship-applier-export.json').catch(
+                    (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+                  )
+                }
+              >
+                Export everything
+              </Button>
+            </div>
+            <p className="text-faint mt-3 text-sm">
+              One JSON file, decrypted, including your resume, contact details, and every answer you
+              wrote. Keep it somewhere safe.
+            </p>
           </div>
-          <p className="text-faint mt-3 text-sm">
-            One JSON file, decrypted, including your resume, contact details, and every answer you
-            wrote. Keep it somewhere safe.
-          </p>
-        </div>
-      </Section>
+        </Section>
+      </div>
 
       <Section n="05" title="Delete everything" step={7}>
         {deleted ? (

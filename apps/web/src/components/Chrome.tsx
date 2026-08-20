@@ -96,7 +96,13 @@ export function Nav({
           eight destinations were technically reachable and practically not: one visible at a
           time, through a window narrower than a single label. Giving the track its own line
           below the wordmark hands it the full width instead. */}
-      <div className="mx-auto flex max-w-[88rem] flex-col gap-0 px-5 sm:flex-row sm:items-center sm:gap-6 sm:px-8 lg:px-12">
+      <div
+        className="mx-auto flex w-full flex-col gap-0 sm:flex-row sm:items-center sm:gap-6"
+        style={{
+          maxWidth: 'min(96rem, 100%)',
+          paddingInline: 'clamp(1.25rem, 0.5rem + 2.2vw, 4.5rem)',
+        }}
+      >
         <button
           onClick={() => onNavigate('home')}
           className="u-eyebrow hover:text-ink shrink-0 self-start pt-3 pb-1 transition-colors sm:self-auto sm:py-3"
@@ -236,27 +242,35 @@ export function Field({ label, value, tone }: { label: string; value: string; to
 }
 
 /**
- * Standard page frame.
+ * Standard page frame — one width, for every screen.
  *
- * The frame is wide; the MEASURE is not. Reading comfort caps out somewhere around 70
- * characters a line, so a prose page set to the full width of a laptop is genuinely
- * harder to read than a narrow one. The fix is not a narrow page with empty margins,
- * it is a wide page whose prose blocks carry `u-prose` and whose panels sit side by
- * side. Widths are in rem, so they scale with the root type size.
+ * The frame is wide; the MEASURE is not. Reading comfort caps out around 70 characters a
+ * line, so prose blocks carry `u-prose` and cap themselves regardless of how much room the
+ * page has. The frame's job is to give panels somewhere to sit side by side.
  *
- * Both numbers came down, because the frame had outgrown anything put in it. At 110rem and
- * an 18px root the frame was 1980px, while the widest thing most of these pages hold is a
- * 68ch prose column at 780px and at most a two-column grid — so on a wide monitor a
- * paragraph sat 54px from the left edge with 1146px of nothing to its right, which reads as
- * text pinned to one side of the screen rather than as an asymmetric measure. The measure
- * itself is unchanged and still capped by `u-prose`: it is the empty half that went.
+ * There used to be two frames, `wide` and not, and the split did more harm than the sizing
+ * ever did: Discover, the queue and the tracker filled a 88rem frame while Profile, Voice,
+ * Applications and Settings sat in a 64rem one, so moving between them on a large monitor
+ * made the content jump inward by four hundred pixels for no reason the reader could see.
+ * The narrow four were narrow because they were single columns and a single column stranded
+ * in a wide frame reads as text pinned to one edge — but the answer to that is to give those
+ * pages columns, which is what the grids on each of them now do, not to shrink the page
+ * around them.
+ *
+ * Fluid rather than stepped. `min()` against the viewport means the frame tracks the window
+ * continuously instead of snapping at breakpoints, and the padding is a `clamp` for the same
+ * reason: at 1280 it is 40px, at 2560 it is 72px, and every width between gets the
+ * proportional value rather than the nearest of three. Widths are in rem, so they scale with
+ * the root type size.
  */
-export function Page({ children, wide }: { children: ReactNode; wide?: boolean }) {
+export function Page({ children }: { children: ReactNode }) {
   return (
     <div
-      className={`mx-auto px-5 py-10 sm:px-8 sm:py-14 lg:px-12 ${
-        wide ? 'max-w-[88rem]' : 'max-w-[64rem]'
-      }`}
+      className="mx-auto w-full py-10 sm:py-14"
+      style={{
+        maxWidth: 'min(96rem, 100%)',
+        paddingInline: 'clamp(1.25rem, 0.5rem + 2.2vw, 4.5rem)',
+      }}
     >
       {children}
     </div>

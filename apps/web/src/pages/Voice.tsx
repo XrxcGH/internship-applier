@@ -77,82 +77,87 @@ export function Voice() {
 
       {error && <Notice tone="redline">{error}</Notice>}
 
-      <Section n="01" title="Samples" step={3}>
-        {/* The adequacy message already covers the empty case, so the empty state is only
+      {/* The samples and what was measured from them, side by side from lg up: the whole
+          point of the second panel is to be checked against the first, and stacked, the
+          check meant scrolling between them. */}
+      <div className="grid items-start gap-x-12 gap-y-0 lg:grid-cols-2">
+        <Section n="01" title="Samples" step={3}>
+          {/* The adequacy message already covers the empty case, so the empty state is only
             shown when there is nothing else on screen saying the same thing. */}
-        {samples && samples.samples.length > 0 && (
-          <div className="mb-5 flex flex-wrap items-center gap-3">
-            <Badge tone={ADEQUACY_TONE[samples.adequacy.level]}>{samples.adequacy.level}</Badge>
-            <span className="text-dim text-base">{samples.adequacy.message}</span>
-          </div>
-        )}
+          {samples && samples.samples.length > 0 && (
+            <div className="mb-5 flex flex-wrap items-center gap-3">
+              <Badge tone={ADEQUACY_TONE[samples.adequacy.level]}>{samples.adequacy.level}</Badge>
+              <span className="text-dim text-base">{samples.adequacy.message}</span>
+            </div>
+          )}
 
-        {samples?.samples.length === 0 && (
-          // The card's own title, not the adequacy message, which opens with the same four
-          // words — "No samples yet." rendered directly above "No samples yet. Without them…"
-          // is one fact stated twice in a row, and the second copy is the useful one. The
-          // consequence is what the student needs; the count is already visible beside it.
-          <Empty title="Nothing here yet.">{samples.adequacy.message}</Empty>
-        )}
+          {samples?.samples.length === 0 && (
+            // The card's own title, not the adequacy message, which opens with the same four
+            // words — "No samples yet." rendered directly above "No samples yet. Without them…"
+            // is one fact stated twice in a row, and the second copy is the useful one. The
+            // consequence is what the student needs; the count is already visible beside it.
+            <Empty title="Nothing here yet.">{samples.adequacy.message}</Empty>
+          )}
 
-        {samples && samples.samples.length > 0 && (
-          <ul className="space-y-3">
-            {samples.samples.map((s) => (
-              <li key={s.id} className="u-card-flat flex items-start gap-4 px-4 py-3.5">
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1.5 flex items-center gap-2">
-                    <Badge>{s.kind.replace(/_/g, ' ')}</Badge>
-                    <span className="u-data text-faint">{s.wordCount} words</span>
+          {samples && samples.samples.length > 0 && (
+            <ul className="space-y-3">
+              {samples.samples.map((s) => (
+                <li key={s.id} className="u-card-flat flex items-start gap-4 px-4 py-3.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <Badge>{s.kind.replace(/_/g, ' ')}</Badge>
+                      <span className="u-data text-faint">{s.wordCount} words</span>
+                    </div>
+                    <p className="text-dim truncate text-sm">{s.preview}</p>
                   </div>
-                  <p className="text-dim truncate text-sm">{s.preview}</p>
-                </div>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void run(() => deleteSample(s.id))}
-                >
-                  Remove
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void run(() => deleteSample(s.id))}
+                  >
+                    Remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
 
-        {samples && samples.samples.length > 0 && (
-          <p className="text-faint u-prose mt-4 text-sm">
-            Removing a sample deletes the text you pasted and measures your voice again from
-            whatever is left, so nothing below goes on describing writing you have taken away.
-            Remove the last one and the measurement goes with it.
-          </p>
-        )}
-      </Section>
+          {samples && samples.samples.length > 0 && (
+            <p className="text-faint u-prose mt-4 text-sm">
+              Removing a sample deletes the text you pasted and measures your voice again from
+              whatever is left, so nothing below goes on describing writing you have taken away.
+              Remove the last one and the measurement goes with it.
+            </p>
+          )}
+        </Section>
 
-      <Section n="02" title="Add a sample" step={4}>
-        <TextArea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={9}
-          placeholder="Paste something you wrote. The less edited, the better — first drafts carry more of your rhythm than polished ones."
-        />
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button
-            variant="solid"
-            disabled={draft.trim().length < 20 || busy}
-            onClick={() =>
-              void run(async () => {
-                await addSample(draft.trim());
-                setDraft('');
-              })
-            }
-          >
-            Add sample
-          </Button>
-          <span className="u-data text-faint">
-            {words} {words === 1 ? 'word' : 'words'}
-          </span>
-        </div>
-      </Section>
+        <Section n="02" title="Add a sample" step={4}>
+          <TextArea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={9}
+            placeholder="Paste something you wrote. The less edited, the better — first drafts carry more of your rhythm than polished ones."
+          />
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button
+              variant="solid"
+              disabled={draft.trim().length < 20 || busy}
+              onClick={() =>
+                void run(async () => {
+                  await addSample(draft.trim());
+                  setDraft('');
+                })
+              }
+            >
+              Add sample
+            </Button>
+            <span className="u-data text-faint">
+              {words} {words === 1 ? 'word' : 'words'}
+            </span>
+          </div>
+        </Section>
+      </div>
 
       <Section
         n="03"
