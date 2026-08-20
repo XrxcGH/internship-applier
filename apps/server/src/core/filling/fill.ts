@@ -25,7 +25,7 @@ import type { FormField } from '@ia/shared';
 import { logger } from '../../infra/logger';
 import { keyDelay } from './browser';
 import { FILLABLE_CONTROLS, SAFE_OPTION } from './selectors';
-import { parseFrameKey } from './formMap';
+import { stillSameDocument, parseFrameKey } from './formMap';
 import type { FillAction, FillPlan } from './plan';
 
 export interface FieldResult {
@@ -59,10 +59,19 @@ export interface FillResult {
 /**
  * Is the browser still showing the document the form was read from?
  *
- * Origin and path only. A form that appends `?step=2` to its own address, or a fragment, or
- * a tracking parameter, is still the page whose controls were scanned, and stopping a fill
- * over that would be the tool crying wolf. A different path is not: every locator in the
- * plan, and every index locator especially, describes a document that has gone.
+ * Origin and path only, and deliberately so — but this is NOT the real test.
+ *
+ * A URL cannot answer this question. `?step=2` appearing in the address bar is a new document
+ * when the page did `location.href = '?step=2'` and the SAME document when it did
+ * `history.pushState` — which is what an application form built as a single-page app does on
+ * every step. Tightening this to include the query would stop a fill that is going fine,
+ * which is the failure the original rule was written to avoid; leaving it loose lets a real
+ * navigation past. Both directions are wrong because the input is insufficient.
+ *
+ * So the load-bearing check is `documentToken` below, stamped into the document when the form
+ * is scanned and re-read after each field: a real navigation loses it, a pushState keeps it.
+ * This stays as the cheap first filter — a different PATH is a different document under any
+ * reading — and the token settles everything it cannot.
  */
 export function sameDocument(current: string, recorded: string): boolean {
   if (current === recorded) return true;
@@ -591,6 +600,8 @@ export interface ExecuteOptions {
    * document nobody had scanned and the redline pass had never seen.
    */
   documentUrl?: string;
+  /** The mark left at scan time. See `stillSameDocument`. */
+  documentToken?: string;
 }
 
 /**
@@ -605,7 +616,7 @@ export async function executePlan(
   plan: FillPlan,
   opts: ExecuteOptions = {},
 ): Promise<FillResult> {
-  const { onProgress, documentUrl } = opts;
+  const { onProgress, documentUrl, documentToken } = opts;
   const results: FieldResult[] = [];
   let movedTo: string | undefined;
 
@@ -631,12 +642,16 @@ export async function executePlan(
       logger.warn({ label: r.field.label, status: r.status, note: r.note }, 'field not filled');
     }
 
-    if (documentUrl) {
-      const now = page.mainFrame().url();
-      if (!sameDocument(now, documentUrl)) {
-        movedTo = now;
-        logger.warn({ from: documentUrl, to: now }, 'page moved to a different address; stopping');
-      }
+    const now = page.mainFrame().url();
+    if (documentUrl && !sameDocument(now, documentUrl)) {
+      movedTo = now;
+      logger.warn({ from: documentUrl, to: now }, 'page moved to a different address; stopping');
+    } else if (!(await stillSameDocument(page, documentToken))) {
+      // The address can be identical and the document new — a form that posts to itself, a
+      // reload. The URL check above cannot see either, and every locator left in the plan,
+      // index locators above all, describes a DOM that has been rebuilt.
+      movedTo = now;
+      logger.warn({ at: now }, 'the document was replaced without the address changing; stopping');
     }
   }
 

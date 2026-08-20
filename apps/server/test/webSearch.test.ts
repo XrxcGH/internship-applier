@@ -374,3 +374,51 @@ describe('the counts that used to vanish', () => {
     });
   });
 });
+
+/**
+ * Which half of the gap message a failure gets, which is the whole point of the reason.
+ *
+ * The setup half was covered; the other was not — and the other is the one the split exists
+ * for. A 32-turn sweep that exceeded the CLI ceiling threw the same error class as "no CLI
+ * installed", so a signed-in student with a working setup was told to go and set one up.
+ */
+describe('what the gap says when the web was not searched', () => {
+  it('tells a student with no setup to set one up', async () => {
+    h.generateError = new NoModelAccessError('No ANTHROPIC_API_KEY is configured.', 'no_key');
+    const result = await webSearch.fetch({});
+    expect(result.gaps?.join(' ')).toMatch(/no model access/i);
+    expect(result.gaps?.join(' ')).toMatch(/Sign in to the Claude Code CLI/);
+  });
+
+  it('does NOT say that to a student whose working setup timed out', async () => {
+    // The case that shipped wrong. Advice naming a cause that is not the cause, and an action
+    // that changes nothing, on the channel this file keeps for admitting what it did not do.
+    h.generateError = new NoModelAccessError(
+      'The Claude CLI did not finish within 900s and was stopped.',
+      'timed_out',
+    );
+    const result = await webSearch.fetch({});
+    const gap = result.gaps?.join(' ') ?? '';
+    expect(gap).not.toMatch(/Sign in to the Claude Code CLI/);
+    expect(gap).toMatch(/the live web was not searched/);
+    expect(gap).toMatch(/did not finish within 900s/);
+  });
+
+  it('passes the real cause through for every non-setup reason', async () => {
+    for (const reason of ['usage_limit', 'cli_error', 'unreadable', 'timed_out'] as const) {
+      h.generateError = new NoModelAccessError(`distinctive ${reason} text`, reason);
+      const gap = (await webSearch.fetch({})).gaps?.join(' ') ?? '';
+      expect(gap, reason).toContain(`distinctive ${reason} text`);
+      expect(gap, reason).not.toMatch(/ANTHROPIC_API_KEY/);
+    }
+  });
+
+  it('still reports it as a gap, not a note — the web was not searched', async () => {
+    // Whichever half it takes, this is coverage the user asked for and did not get. A quiet
+    // zero would read as "the web had nothing".
+    h.generateError = new NoModelAccessError('anything', 'cli_error');
+    const result = await webSearch.fetch({});
+    expect(result.gaps?.length).toBeGreaterThan(0);
+    expect(result.postings).toHaveLength(0);
+  });
+});

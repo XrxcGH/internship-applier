@@ -477,6 +477,9 @@ async function drive(run: FillRun, input: StartInput): Promise<FillRun> {
       // — a select whose onchange navigates, a form that submits itself — stops the run
       // rather than sending the rest of the plan into a document nobody scanned.
       documentUrl: run.map.url,
+      // The mark left when these controls were numbered. The URL alone cannot tell a real
+      // navigation from a pushState step; this can.
+      documentToken: run.map.documentToken,
       onProgress: (r) => {
         publish({
           type: 'fill.step',

@@ -28,6 +28,7 @@ import {
   chooseOption,
   describeFill,
   executePlan,
+  sameDocument,
   type FillResult,
   type SelectOption,
 } from '../src/core/filling/fill';
@@ -1330,5 +1331,68 @@ describe('what the summary promises after a page moved', () => {
     for (const r of [partial(), partial({ movedTo: 'https://x.example/2' })]) {
       expect(describeFill(r)).toMatch(/1 filled/);
     }
+  });
+});
+
+/**
+ * A document replaced without the address changing.
+ *
+ * `sameDocument` compares the URL, and the URL cannot answer the question: `?step=2` is a new
+ * document after `location.href =` and the SAME one after `history.pushState`, which is what
+ * an application form built as a single-page app does on every step. Tightening the URL rule
+ * would stop fills that are going fine — there is a test above asserting exactly that — and
+ * leaving it loose lets a real navigation past. So the document is stamped when its controls
+ * are numbered, and the stamp is re-read after each field: a navigation loses it, a pushState
+ * keeps it.
+ */
+describe('the document token', () => {
+  it('is written when the form is scanned', async () => {
+    await session.page.goto(`${fixture.url}/simple`);
+    const map = await buildFormMap(session.page);
+    expect(map.documentToken).toMatch(/^ia-/);
+    await expect(
+      session.page.evaluate(
+        () => (window as unknown as Record<string, string | undefined>)['__iaDocumentToken'],
+      ),
+    ).resolves.toBe(map.documentToken);
+  });
+
+  it('survives a pushState, so an SPA step does not stop a fill', async () => {
+    await session.page.goto(`${fixture.url}/simple`);
+    const map = await buildFormMap(session.page);
+    await session.page.evaluate(() => {
+      history.pushState({}, '', '?step=2');
+    });
+    // The address changed and the document did not — every locator in the plan is still valid.
+    await expect(
+      session.page.evaluate(
+        () => (window as unknown as Record<string, string | undefined>)['__iaDocumentToken'],
+      ),
+    ).resolves.toBe(map.documentToken);
+  });
+
+  it('is lost to a reload of the same address, which the URL check cannot see', async () => {
+    await session.page.goto(`${fixture.url}/simple`);
+    const map = await buildFormMap(session.page);
+    await session.page.reload();
+    // Same URL, new document: `sameDocument` says nothing moved and every index locator now
+    // describes a DOM that has been rebuilt.
+    expect(sameDocument(session.page.url(), map.url)).toBe(true);
+    await expect(
+      session.page.evaluate(
+        () => (window as unknown as Record<string, string | undefined>)['__iaDocumentToken'],
+      ),
+    ).resolves.not.toBe(map.documentToken);
+  });
+
+  it('is lost to a real navigation to a different page', async () => {
+    await session.page.goto(`${fixture.url}/simple`);
+    const map = await buildFormMap(session.page);
+    await session.page.goto(`${fixture.url}/login`);
+    await expect(
+      session.page.evaluate(
+        () => (window as unknown as Record<string, string | undefined>)['__iaDocumentToken'],
+      ),
+    ).resolves.not.toBe(map.documentToken);
   });
 });

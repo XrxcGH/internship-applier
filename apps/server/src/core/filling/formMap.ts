@@ -20,6 +20,7 @@
  * label means walking the tree — through open shadow roots — and reading computed style,
  * and shipping the whole document back to Node to do that would be slower and lossier.
  */
+import { randomUUID } from 'node:crypto';
 import type { Frame, Page } from 'playwright';
 import type { FormField } from '@ia/shared';
 import { ulid } from 'ulid';
@@ -487,6 +488,19 @@ export function parseFrameKey(key: string): { index: number; url: string } {
 
 export interface FormMap {
   url: string;
+  /**
+   * A mark left in the document the moment its controls were numbered.
+   *
+   * The URL cannot answer "is this still the same document": `?step=2` in the address bar is
+   * a new document after `location.href =` and the same one after `history.pushState`, which
+   * is what an application form built as a single-page app does on every step. A value on
+   * `window` can answer it — a real navigation throws the window away and takes the mark with
+   * it, a pushState does not — so this is what `executePlan` re-reads after each field.
+   *
+   * Undefined when the stamp could not be written, which a strict CSP can cause. The check
+   * then falls back to the URL comparison alone, which is where it was before.
+   */
+  documentToken?: string;
   fields: FormField[];
   /** Fields that were found but cannot be acted on, kept so the UI can list them. */
   unknown: FormField[];
@@ -614,10 +628,67 @@ export async function buildFormMap(page: Page): Promise<FormMap> {
 
   return {
     url: page.url(),
+    documentToken: await stampDocument(page),
     fields,
     unknown: fields.filter((f) => f.semantic === 'unknown'),
     redlined: fields.filter((f) => f.semantic === 'REDLINE'),
   };
+}
+
+/**
+ * Marks the document, and hands back the mark.
+ *
+ * An ordinary property on `window`, which is exactly what makes it work: every navigation
+ * builds a new window object and the property goes with the old one, while `history.pushState`
+ * keeps both. NOT `window.name` — that survives same-origin navigation BY DESIGN, which is
+ * the whole point of it, so a reload kept the stamp and this check answered "same document"
+ * about a DOM that had just been rebuilt. Caught by the test below, which reloads and asks.
+ *
+ * Any failure — a CSP that refuses evaluation, a frame that has gone — answers undefined, and
+ * the caller treats an absent stamp as "cannot tell" rather than as "it moved": a check that
+ * fires when it is broken is worse than one that admits it does not know.
+ */
+async function stampDocument(page: Page): Promise<string | undefined> {
+  const token = `ia-${randomUUID()}`;
+  try {
+    await page.evaluate((t: string) => {
+      (window as unknown as Record<string, string>)['__iaDocumentToken'] = t;
+    }, token);
+    return token;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether the page is still showing the document whose controls were numbered.
+ *
+ * Reads the stamp `stampDocument` left. A real navigation — `location.href =`, a form posting
+ * to itself, a reload — builds a new window and the property goes with the old one; a
+ * `history.pushState` step in a single-page application keeps both, and so keeps every locator
+ * in the plan valid. The URL can distinguish neither case, which is why this exists.
+ *
+ * Lives here rather than in fill.ts because this is browser-side code, and this is the file
+ * the lint rule against `window` on the server exempts for exactly that reason.
+ *
+ * An absent expected token means the stamp could not be written at all, and an unreadable page
+ * means the question cannot be asked. Both answer true: this exists to catch a document that
+ * went away, and a check that fires when it is merely broken would stop fills going fine.
+ */
+export async function stillSameDocument(
+  page: Page,
+  expected: string | undefined,
+): Promise<boolean> {
+  if (expected === undefined) return true;
+  try {
+    return (
+      (await page.evaluate(
+        () => (window as unknown as Record<string, string | undefined>)['__iaDocumentToken'],
+      )) === expected
+    );
+  } catch {
+    return true;
+  }
 }
 
 /** One line for the run log and the pre-submit summary. */

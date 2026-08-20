@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -144,6 +145,28 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
 
     const { decryptField } = await import('../infra/crypto/fieldCrypto');
     const filePath = decryptField(doc.path, doc.id);
+
+    /**
+     * The stored file, checked before anything reads it.
+     *
+     * `extractResume` stats the decrypted path, so a resume whose file has been moved,
+     * deleted by a cleaner, or lost to a restored backup threw ENOENT — and the catch below
+     * flattened that into a 502 carrying `err.message`, which for ENOENT is the ABSOLUTE PATH
+     * of the file. That is a filesystem layout handed to whatever is reading the response, in
+     * an error the user can do nothing with. 409 rather than 404: the document row exists, it
+     * is the bytes behind it that are gone, and the fix is to upload it again.
+     */
+    if (!existsSync(filePath)) {
+      logger.warn({ documentId: doc.id }, 'stored resume file is missing');
+      return reply.code(409).send({
+        error: {
+          code: 'NOT_FOUND',
+          message:
+            `The stored copy of "${doc.filename}" is no longer on this machine, so it cannot ` +
+            'be read again. Upload the file once more.',
+        },
+      });
+    }
     const text = doc.rawText ? decryptField(doc.rawText, doc.id) : undefined;
 
     try {
@@ -226,8 +249,21 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof NoModelAccessError) {
         return reply.code(503).send({ error: { code: 'NO_MODEL_ACCESS', message: err.message } });
       }
+      /**
+       * A generic failure says so generically, and the detail goes to the log.
+       *
+       * This returned `err.message` verbatim, which for anything thrown by the filesystem is
+       * an absolute path and for anything thrown by a parser is an internal shape. The user
+       * can act on neither, and the response is the wrong place for both — the log above
+       * already has the error in full, with its stack.
+       */
       return reply.code(502).send({
-        error: { code: 'INTERNAL', message: (err as Error).message },
+        error: {
+          code: 'INTERNAL',
+          message:
+            `Reading "${doc.filename}" did not finish. The server log has the details. Try ` +
+            'again, or upload the file in a different format.',
+        },
       });
     }
   });
