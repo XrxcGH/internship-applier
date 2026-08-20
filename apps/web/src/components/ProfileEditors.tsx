@@ -85,14 +85,14 @@ function EntryList<T>({
             : `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`}
         </span>
       </div>
-      {hint && <p className="text-faint u-prose mb-3 text-[0.9375rem] leading-snug">{hint}</p>}
+      {hint && <p className="text-faint u-prose mb-3 text-sm leading-snug">{hint}</p>}
 
       {entries.length > 0 && (
         <ul className="space-y-6">
           {entries.map((entry, index) => (
             <li key={index} className="u-card-flat px-5 py-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <span className="u-data text-faint text-[0.8125rem]">
+                <span className="u-data text-faint text-xs">
                   {singular} {index + 1}
                 </span>
                 <span className="flex shrink-0 items-center gap-1">
@@ -181,10 +181,10 @@ export function ListEditor({
   return (
     <div className="mt-5">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[1rem]">{label}</span>
-        <span className="u-data text-faint text-[0.8125rem]">{items.length}</span>
+        <span className="text-base">{label}</span>
+        <span className="u-data text-faint text-xs">{items.length}</span>
       </div>
-      {hint && <p className="text-faint u-prose mt-1 text-[0.9375rem] leading-snug">{hint}</p>}
+      {hint && <p className="text-faint u-prose mt-1 text-sm leading-snug">{hint}</p>}
 
       {items.length > 0 && (
         <ul className="mt-2 space-y-2">
@@ -501,7 +501,7 @@ export function SkillsEditor({ profile, flagged, edit, editList }: EditorProps) 
           {skills.length === 0 ? 'none found' : `${skills.length}`}
         </span>
       </div>
-      <p className="text-faint u-prose mb-3 text-[0.9375rem] leading-snug">
+      <p className="text-faint u-prose mb-3 text-sm leading-snug">
         These are read when the search plan is built, so a language or a tool missing from here is a
         search that never runs for it.
       </p>
@@ -676,7 +676,7 @@ export function LinksEditor({ profile, flagged, edit }: EditorProps) {
   return (
     <div className="mt-10">
       <h3 className="u-eyebrow mb-3">Links</h3>
-      <p className="text-faint u-prose mb-1 text-[0.9375rem] leading-snug">
+      <p className="text-faint u-prose mb-1 text-sm leading-snug">
         Typed into application forms as they stand. Leaving out https:// is fine — it is added on
         the way to the file.
       </p>
@@ -748,14 +748,14 @@ export function PreferencesEditor({
   return (
     <div className="mt-10">
       <h3 className="u-eyebrow mb-2">What you are looking for</h3>
-      <p className="text-faint u-prose mb-5 text-[0.9375rem]">
+      <p className="text-faint u-prose mb-5 text-sm">
         {chosen.length > 0
           ? 'Searches use exactly what you pick here. Your resume is not consulted for this.'
           : 'Nothing picked, so this is read off your resume. Pick any and that guess is replaced.'}
       </p>
 
       {chosen.length === 0 && inferred && inferred.length > 0 && (
-        <p className="text-dim u-prose mb-4 text-[0.9375rem]">
+        <p className="text-dim u-prose mb-4 text-sm">
           Read off your resume right now: <em>{inferred.join(', ')}</em>. Pick below to override.
         </p>
       )}
@@ -769,7 +769,7 @@ export function PreferencesEditor({
               type="button"
               aria-pressed={on}
               onClick={() => toggle(family)}
-              className={`rounded border px-3 py-1.5 text-[0.9375rem] transition-colors ${
+              className={`rounded border px-3 py-1.5 text-sm transition-colors ${
                 on
                   ? 'border-accent bg-accent/15 text-ink'
                   : 'border-rule text-dim hover:border-rule-strong hover:text-ink'

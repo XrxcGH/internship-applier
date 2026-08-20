@@ -1,3 +1,4 @@
+import { Check, CircleHelp, Minus, X, type LucideIcon } from 'lucide-react';
 import type { RuleResult } from '@ia/shared';
 import type { JobRequirementRow } from '../lib/matches';
 
@@ -9,11 +10,23 @@ import type { JobRequirementRow } from '../lib/matches';
  * it was right. Colour is never the only signal: each state carries a mark and a label.
  */
 
-const MARK: Record<RuleResult['status'], { glyph: string; label: string; color: string }> = {
-  pass: { glyph: '✓', label: 'met', color: 'var(--verified)' },
-  fail: { glyph: '✕', label: 'blocked', color: 'var(--redline)' },
-  unknown: { glyph: '?', label: 'unresolved', color: 'var(--caution)' },
-  not_applicable: { glyph: '–', label: 'not stated', color: 'var(--ink-faint)' },
+/**
+ * A drawn mark per state, not a typed character.
+ *
+ * These were literal glyphs — '✓', '✕', '?', '–' — set in the mono face, so their weight and
+ * size drifted with whatever font actually loaded and the en dash for "not stated" read as a
+ * hyphen at small sizes. A Lucide icon is a stroked SVG that inherits `currentColor` and
+ * scales with the box, so all four now share one optical weight.
+ *
+ * The label beside each is what carries the meaning to a screen reader and to anyone who
+ * cannot separate the hues; the icon and the colour are the fast path for everyone else.
+ * That pairing is what let the palette quieten its signal colours this far.
+ */
+const MARK: Record<RuleResult['status'], { Icon: LucideIcon; label: string; color: string }> = {
+  pass: { Icon: Check, label: 'met', color: 'var(--verified)' },
+  fail: { Icon: X, label: 'blocked', color: 'var(--redline)' },
+  unknown: { Icon: CircleHelp, label: 'unresolved', color: 'var(--caution)' },
+  not_applicable: { Icon: Minus, label: 'not stated', color: 'var(--ink-faint)' },
 };
 
 const RULE_LABEL: Record<string, string> = {
@@ -51,24 +64,24 @@ export function RequirementChecklist({
 
         return (
           <li key={r.rule} className="flex gap-3">
-            <span
+            <mark.Icon
               aria-hidden
-              className="u-data w-4 shrink-0 pt-0.5 text-center"
+              size={16}
+              strokeWidth={2}
+              className="mt-1 shrink-0"
               style={{ color: mark.color }}
-            >
-              {mark.glyph}
-            </span>
+            />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className="text-[1rem]">{RULE_LABEL[r.rule] ?? r.rule}</span>
+                <span className="text-base">{RULE_LABEL[r.rule] ?? r.rule}</span>
                 <span
-                  className="u-data text-[0.75rem] tracking-widest uppercase"
+                  className="u-data text-2xs tracking-widest uppercase"
                   style={{ color: mark.color }}
                 >
                   {mark.label}
                 </span>
               </div>
-              <p className="text-dim mt-0.5 text-[0.9375rem]">{r.because}</p>
+              <p className="text-dim mt-0.5 text-sm">{r.because}</p>
               {quote && (
                 <blockquote className="u-quote mt-2 py-1">
                   {quote.length > 260 ? `${quote.slice(0, 260)}…` : quote}
@@ -109,8 +122,8 @@ export function ScoreBreakdownBars({
         return (
           <li key={k}>
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-[0.9375rem]">{DIMENSION_LABEL[k]}</span>
-              <span className="u-data text-faint text-[0.75rem]">{Math.round(v * 100)}</span>
+              <span className="text-sm">{DIMENSION_LABEL[k]}</span>
+              <span className="u-data text-faint text-2xs">{Math.round(v * 100)}</span>
             </div>
             <div className="bg-rule/50 mt-1 h-px w-full">
               <div
@@ -118,7 +131,7 @@ export function ScoreBreakdownBars({
                 style={{ width: `${v * 100}%`, backgroundColor: 'var(--accent)' }}
               />
             </div>
-            {notes[k] && <p className="text-faint mt-1 text-[0.75rem]">{notes[k]}</p>}
+            {notes[k] && <p className="text-faint mt-1 text-2xs">{notes[k]}</p>}
           </li>
         );
       })}

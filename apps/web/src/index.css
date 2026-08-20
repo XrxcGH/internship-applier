@@ -11,36 +11,46 @@
 @import '@fontsource/ibm-plex-mono/500.css';
 @import 'tailwindcss';
 
-/* ─────────────────────────────────────────────── palette — "drafting table"
+/* ─────────────────────────────────────────────── palette — "warm stone"
 
-   Cool graphite base, one azure accent that reads like a technical pen, and three
-   signal colours that each mean exactly one thing. Green/amber/coral are reserved for
-   verification states and are never used as decoration — if something is green here,
-   it passed a check.
+   ONE family, and everything belongs to it. The previous palette was a cool graphite base
+   with an azure accent and three signal hues borrowed from three different places — green,
+   amber, coral — so five unrelated hues shared a screen and the eye read the interface as a
+   dashboard rather than as a document. This is a single warm-neutral ramp with one deep sage
+   accent, and the three signals are that same sage walked around the wheel at matched chroma:
+   moss, ochre, terracotta. They still mean exactly one thing each and are never decoration —
+   if something is green here, it passed a check — but they now sit together rather than
+   competing.
 
-   Every colour below was measured, not eyeballed. All seven text colours clear WCAG AA
-   (4.5:1) against all three surfaces in both themes; the lowest is 4.75. `--rule` is a
-   deliberate hairline and `--rule-strong` is the structural divider at ~3:1. */
+   Colour is no longer the only carrier of any state. Every signal is paired with a Lucide
+   icon at its call site, so the meaning survives a monochrome screen and a colour-blind
+   reader, which is what let the hues be quietened this far in the first place.
+
+   Every colour below was measured, not eyeballed — scripts/../contrast, recomputed on every
+   change to this block. All eight text colours clear WCAG AA (4.5:1) against all three
+   surfaces in both themes; the lowest is 4.86 (light `--accent-dim`) and 5.21 (dark
+   `--ink-faint`). `--rule` is a deliberate hairline with no contrast target; `--rule-strong`
+   is the structural divider and clears ~3:1 on the surfaces it divides. */
 
 :root,
 :root[data-theme='dark'] {
-  --paper: #0f1418;
-  --paper-raised: #161d23;
-  --paper-sunk: #0a0e11;
-  --ink: #e7ecf1;
-  --ink-dim: #a8b3bf;
-  --ink-faint: #8b97a4;
-  --rule: #2f3a45;
-  --rule-strong: #556575;
-  --accent: #6ba7f5;
-  --accent-dim: #4b80bd;
-  --verified: #5cba8a;
-  --caution: #dda44a;
-  --redline: #ec7d72;
+  --paper: #171613;
+  --paper-raised: #201e1a;
+  --paper-sunk: #100f0d;
+  --ink: #efece5;
+  --ink-dim: #b5afa4;
+  --ink-faint: #978f83;
+  --rule: #343128;
+  --rule-strong: #6e6759;
+  --accent: #a6c3ac;
+  --accent-dim: #7b9883;
+  --verified: #8fc09b;
+  --caution: #d6b06b;
+  --redline: #de9585;
 
-  --glow-alpha: 0.09;
-  --grid-alpha: 0.05;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -12px rgb(0 0 0 / 0.6);
+  --glow-alpha: 0.06;
+  --grid-alpha: 0.04;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.32), 0 10px 30px -14px rgb(0 0 0 / 0.5);
 }
 
 /* The light palette is written out twice on purpose, and the two copies must stay
@@ -58,44 +68,44 @@
    the light palette back on every load with no way to escape it. */
 
 :root[data-theme='light'] {
-  --paper: #eaeef3;
-  --paper-raised: #f6f8fb;
-  --paper-sunk: #dde3ea;
-  --ink: #121820;
-  --ink-dim: #48545f;
-  --ink-faint: #525e6b;
-  --rule: #b7c2cf;
-  --rule-strong: #748498;
-  --accent: #15529e;
-  --accent-dim: #517aad;
-  --verified: #226644;
-  --caution: #8a5610;
-  --redline: #ad3628;
+  --paper: #f4f2ee;
+  --paper-raised: #fbfaf8;
+  --paper-sunk: #e7e3dc;
+  --ink: #1b1917;
+  --ink-dim: #4a453e;
+  --ink-faint: #635d54;
+  --rule: #d8d3ca;
+  --rule-strong: #8c8477;
+  --accent: #3f5a48;
+  --accent-dim: #4c6755;
+  --verified: #37633f;
+  --caution: #7a5a15;
+  --redline: #9a4433;
 
-  --glow-alpha: 0.07;
-  --grid-alpha: 0.05;
-  --shadow: 0 1px 2px rgb(18 24 32 / 0.06), 0 8px 24px -14px rgb(18 24 32 / 0.28);
+  --glow-alpha: 0.05;
+  --grid-alpha: 0.04;
+  --shadow: 0 1px 2px rgb(27 25 23 / 0.05), 0 10px 30px -16px rgb(27 25 23 / 0.22);
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --paper: #eaeef3;
-    --paper-raised: #f6f8fb;
-    --paper-sunk: #dde3ea;
-    --ink: #121820;
-    --ink-dim: #48545f;
-    --ink-faint: #525e6b;
-    --rule: #b7c2cf;
-    --rule-strong: #748498;
-    --accent: #15529e;
-    --accent-dim: #517aad;
-    --verified: #226644;
-    --caution: #8a5610;
-    --redline: #ad3628;
+    --paper: #f4f2ee;
+    --paper-raised: #fbfaf8;
+    --paper-sunk: #e7e3dc;
+    --ink: #1b1917;
+    --ink-dim: #4a453e;
+    --ink-faint: #635d54;
+    --rule: #d8d3ca;
+    --rule-strong: #8c8477;
+    --accent: #3f5a48;
+    --accent-dim: #4c6755;
+    --verified: #37633f;
+    --caution: #7a5a15;
+    --redline: #9a4433;
 
-    --glow-alpha: 0.07;
-    --grid-alpha: 0.05;
-    --shadow: 0 1px 2px rgb(18 24 32 / 0.06), 0 8px 24px -14px rgb(18 24 32 / 0.28);
+    --glow-alpha: 0.05;
+    --grid-alpha: 0.04;
+    --shadow: 0 1px 2px rgb(27 25 23 / 0.05), 0 10px 30px -16px rgb(27 25 23 / 0.22);
   }
 }
 
@@ -125,6 +135,42 @@
   --color-verified: var(--verified);
   --color-caution: var(--caution);
   --color-redline: var(--redline);
+
+  /* ── type scale.
+
+     Twelve distinct sizes were in use across 158 call sites, every one of them written as an
+     arbitrary value — text-[0.9375rem] sixty-four times, text-[0.8125rem] six times, and
+     text-[0.6875rem] once. That is not a scale, it is a pile of exceptions, and it is why
+     two paragraphs doing the same job on different screens did not look alike.
+
+     Seven steps, each with a name. Four sizes were folded into their nearest neighbour
+     (0.6875→0.75, 0.8125→0.875, 1.0625→1.125) because a 1px difference is not a decision
+     anybody made on purpose. Line heights ride with the size: tight on the large steps where
+     the eye tracks shape, open on the small ones where it tracks words. */
+  --text-2xs: 0.75rem;
+  --text-2xs--line-height: 1.5;
+  --text-xs: 0.875rem;
+  --text-xs--line-height: 1.6;
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: 1.65;
+  --text-base: 1rem;
+  --text-base--line-height: 1.7;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.6;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.4;
+  --text-2xl: 1.75rem;
+  --text-2xl--line-height: 1.25;
+
+  /* ── spacing rhythm.
+
+     One 4px grid, named at the four sizes this interface actually uses, so the gap between a
+     label and its field is the same gap everywhere and a section is separated from the next
+     by a decision rather than by whatever was typed. */
+  --space-tight: 0.5rem;
+  --space-snug: 0.875rem;
+  --space-room: 1.5rem;
+  --space-section: 3.5rem;
 
   --font-display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
   --font-body: 'Newsreader Variable', 'Newsreader', Georgia, serif;
@@ -226,6 +272,17 @@ i {
   letter-spacing: -0.02em;
   line-height: 1.05;
   font-weight: 400;
+}
+
+/* The page title, sized by the viewport instead of by one breakpoint step.
+
+   It was text-[3.25rem] below sm and text-[4rem] above, so a 375px phone rendered a 52px
+   headline across a 327px column — three or four words a line, and the running head taking
+   most of the first screen before a word of content. clamp gives it a floor that fits a phone,
+   a ceiling that keeps its presence on a monitor, and a continuous middle instead of a jump. */
+.u-display-title {
+  font-size: clamp(2.25rem, 1.35rem + 3.8vw, 4rem);
+  line-height: 1.03;
 }
 
 .u-eyebrow {

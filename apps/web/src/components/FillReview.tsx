@@ -1,3 +1,4 @@
+import { ExternalLink } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import {
   continueFill,
@@ -272,7 +273,7 @@ export function FillReview({
       {run?.pageUrl && !samePage(run.pageUrl, applyUrl) && (
         <div className="u-tint-caution rounded px-5 py-4">
           <p className="u-eyebrow mb-1.5">Read from a different address</p>
-          <p className="text-dim text-[0.9375rem] leading-snug">
+          <p className="text-dim text-sm leading-snug">
             The browser ended up somewhere other than the link saved with this application.
             Everything below is about the page it read:
           </p>
@@ -304,7 +305,7 @@ export function FillReview({
       {checked && !run && submitted === null && skippedFields.length > 0 && (
         <div className="u-card px-5 py-5">
           <p className="u-eyebrow mb-2">Left for you by the last fill</p>
-          <p className="text-dim u-prose mb-3 text-[0.9375rem]">
+          <p className="text-dim u-prose mb-3 text-sm">
             The last run did not complete these. Unless you have since typed them into the form
             yourself, they still need you.
           </p>
@@ -312,10 +313,8 @@ export function FillReview({
             {skippedFields.map((f, i) => (
               <li key={i} className="flex flex-wrap items-start gap-4 py-2.5">
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[1rem] leading-snug">{f.label}</span>
-                  <span className="text-dim mt-1 block text-[0.9375rem] leading-snug">
-                    {skipReason(f)}
-                  </span>
+                  <span className="block text-base leading-snug">{f.label}</span>
+                  <span className="text-dim mt-1 block text-sm leading-snug">{skipReason(f)}</span>
                 </span>
                 <Badge tone={f.reason === 'redline' ? 'redline' : 'caution'}>
                   {f.reason === 'redline' ? 'never auto-filled' : 'left for you'}
@@ -358,7 +357,8 @@ export function FillReview({
               rel="noreferrer noopener"
               className="u-data border-rule text-dim hover:text-ink hover:border-rule-strong hover:bg-ink/[0.04] inline-flex items-center rounded border px-4 py-2 tracking-wide uppercase transition-colors"
             >
-              Open posting myself ↗
+              Open posting myself
+              <ExternalLink aria-hidden size={14} />
             </a>
           </div>
         </div>
@@ -482,11 +482,9 @@ export function FillReview({
               {ordered(run.fields ?? []).map((f, i) => (
                 <li key={i} className="flex flex-wrap items-start gap-4 px-5 py-3.5">
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[1rem] leading-snug">{f.label}</span>
+                    <span className="block text-base leading-snug">{f.label}</span>
                     {f.note && (
-                      <span className="text-dim mt-1 block text-[0.9375rem] leading-snug">
-                        {f.note}
-                      </span>
+                      <span className="text-dim mt-1 block text-sm leading-snug">{f.note}</span>
                     )}
                     {f.status === 'ok' && f.readBack && (
                       <span className="u-data text-faint mt-1 block truncate">{f.readBack}</span>
@@ -560,7 +558,8 @@ export function FillReview({
               rel="noreferrer noopener"
               className="u-data border-rule text-dim hover:text-ink hover:border-rule-strong hover:bg-ink/[0.04] inline-flex items-center rounded border px-4 py-2 tracking-wide uppercase transition-colors"
             >
-              Open posting myself ↗
+              Open posting myself
+              <ExternalLink aria-hidden size={14} />
             </a>
           </div>
         </>

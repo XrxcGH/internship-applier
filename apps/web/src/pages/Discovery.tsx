@@ -1,3 +1,4 @@
+import { ArrowRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   accessBadge,
@@ -304,11 +305,11 @@ export function Discovery({
             {stats === null && !error && <p className="text-dim a-pulse">Counting…</p>}
             {stats && (
               <>
-                <p className="u-data text-[1.25rem]">
+                <p className="u-data text-xl">
                   {stats.total} {stats.total === 1 ? 'posting' : 'postings'} · {stats.open} still
                   open
                 </p>
-                <p className="text-faint u-prose mt-3 text-[0.9375rem]">
+                <p className="text-faint u-prose mt-3 text-sm">
                   A posting is stored the moment it is found and scored only when you ask. The queue
                   shows whatever has been scored.
                 </p>
@@ -327,7 +328,8 @@ export function Discovery({
                       disabled={busy !== null}
                       onClick={onOpenQueue}
                     >
-                      Open the queue (G2) →
+                      Open the queue (G2)
+                      <ArrowRight aria-hidden size={15} />
                     </Button>
                   </div>
                 )}
@@ -343,21 +345,19 @@ export function Discovery({
                 {sources.map((s) => (
                   <li key={s.name} className="py-2.5">
                     <div className="flex items-center justify-between gap-4">
-                      <span className="text-[1rem]">{sourceLabel(s.name)}</span>
+                      <span className="text-base">{sourceLabel(s.name)}</span>
                       <Badge tone={s.configured ? 'verified' : 'caution'}>{accessBadge(s)}</Badge>
                     </div>
                     {/* A standing limitation, said where the source is listed rather than
                         only after a run has failed to reveal it. */}
                     {unavailableReason(s.name) && (
-                      <p className="text-faint u-prose mt-1 text-[0.875rem]">
-                        {unavailableReason(s.name)}
-                      </p>
+                      <p className="text-faint u-prose mt-1 text-xs">{unavailableReason(s.name)}</p>
                     )}
                   </li>
                 ))}
               </ul>
             )}
-            <p className="text-faint u-prose mt-4 text-[0.9375rem]">
+            <p className="text-faint u-prose mt-4 text-sm">
               The two keyed sources read <span className="u-data">ADZUNA_APP_ID</span> /{' '}
               <span className="u-data">ADZUNA_APP_KEY</span> and{' '}
               <span className="u-data">USAJOBS_API_KEY</span> /{' '}
@@ -409,11 +409,11 @@ export function Discovery({
                       key={`${targetKey(t)}|${t.reason}`}
                       className="border-rule text-dim rounded-full border px-3.5 py-1.5"
                     >
-                      <span className="u-data text-[0.75rem] tracking-wide uppercase">
+                      <span className="u-data text-2xs tracking-wide uppercase">
                         {sourceLabel(t.source)}
                       </span>{' '}
-                      <span className="text-[0.9375rem]">{t.board}</span>{' '}
-                      <span className="text-faint text-[0.8125rem]">— {t.reason}</span>
+                      <span className="text-sm">{t.board}</span>{' '}
+                      <span className="text-faint text-xs">— {t.reason}</span>
                     </li>
                   ))}
                 </ul>
@@ -461,12 +461,12 @@ export function Discovery({
           >
             Find their boards
           </Button>
-          <span className="text-faint u-data text-[0.75rem]">
+          <span className="text-faint u-data text-2xs">
             {pinned.length} {pinned.length === 1 ? 'name' : 'names'}
           </span>
         </div>
 
-        <p className="text-faint u-prose mt-4 text-[0.9375rem]">
+        <p className="text-faint u-prose mt-4 text-sm">
           Rebuilding the plan guesses each name as a slug on Greenhouse, Lever, Ashby,
           SmartRecruiters and Workable, and says in a note that it guessed. Finding the boards asks
           those five, and Workday as well, which one the company really uses and how many jobs it
@@ -482,15 +482,15 @@ export function Discovery({
             {resolutions.map(({ name, matches, notes }) => (
               <li key={name} className="u-card-flat px-5 py-4">
                 <div className="flex flex-wrap items-baseline justify-between gap-3">
-                  <span className="text-[1.0625rem]">{name}</span>
+                  <span className="text-lg">{name}</span>
                   {matches.length === 0 && (
-                    <span className="u-data text-caution text-[0.75rem] tracking-widest uppercase">
+                    <span className="u-data text-caution text-2xs tracking-widest uppercase">
                       no board answered
                     </span>
                   )}
                 </div>
                 {matches.length === 0 ? (
-                  <p className="text-faint u-prose mt-2 text-[0.9375rem]">
+                  <p className="text-faint u-prose mt-2 text-sm">
                     No board answered under that name. The company may use a vendor this tool does
                     not read, iCIMS and Taleo among them, in which case paste the posting URL in
                     section 05.
@@ -502,11 +502,11 @@ export function Discovery({
                         key={`${m.source}:${m.board}`}
                         className="flex flex-wrap items-center gap-3"
                       >
-                        <span className="u-data text-[0.75rem] tracking-wide uppercase">
+                        <span className="u-data text-2xs tracking-wide uppercase">
                           {sourceLabel(m.source)}
                         </span>
-                        <span className="text-dim text-[0.9375rem]">{m.board}</span>
-                        <span className="text-faint u-data text-[0.75rem]">
+                        <span className="text-dim text-sm">{m.board}</span>
+                        <span className="text-faint u-data text-2xs">
                           {m.jobCount} open {m.jobCount === 1 ? 'job' : 'jobs'}
                         </span>
                         <Button
@@ -536,7 +536,7 @@ export function Discovery({
                   probes can make.
                 */}
                 {notes.map((note) => (
-                  <p key={note} className="text-faint u-prose mt-2 text-[0.875rem]">
+                  <p key={note} className="text-faint u-prose mt-2 text-xs">
                     {note}
                   </p>
                 ))}
@@ -609,14 +609,14 @@ export function Discovery({
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-baseline gap-2.5">
-                    <span className="u-data text-accent text-[0.75rem] tracking-wide uppercase">
+                    <span className="u-data text-accent text-2xs tracking-wide uppercase">
                       {sourceLabel(t.source)}
                     </span>
-                    <span className="text-[1rem]">
+                    <span className="text-base">
                       {t.board || <span className="text-faint">{boardMeaning(t.source)}</span>}
                     </span>
                   </div>
-                  <div className="text-faint mt-0.5 text-[0.875rem]">
+                  <div className="text-faint mt-0.5 text-xs">
                     {t.reason}
                     {t.keywords && t.keywords.length > 0 && ` · ${t.keywords.join(', ')}`}
                     {t.location && ` · ${t.location}`}
@@ -653,12 +653,10 @@ export function Discovery({
               this hides the sentence, not the rule — and the two blockers the card cannot
               express, a missing board name and the 200-target ceiling, still print verbatim
               exactly when they apply. */}
-          {blocked && targets.length > 0 && (
-            <span className="text-faint text-[0.9375rem]">{blocked}</span>
-          )}
+          {blocked && targets.length > 0 && <span className="text-faint text-sm">{blocked}</span>}
         </div>
 
-        <p className="text-faint u-prose mt-4 text-[0.9375rem]">
+        <p className="text-faint u-prose mt-4 text-sm">
           A run fetches four boards at a time and answers when the last one is done, which is
           anything from a few seconds to a couple of minutes. There is no progress on the way: the
           server publishes it and no screen in this app listens yet, so this page waits rather than
@@ -668,8 +666,8 @@ export function Discovery({
         {summary && (
           <div className="mt-6">
             <div className="u-tint-verified rounded px-5 py-4">
-              <p className="u-data text-[1.0625rem]">{runHeadline(summary)}</p>
-              <p className="text-faint mt-1 text-[0.875rem]">
+              <p className="u-data text-lg">{runHeadline(summary)}</p>
+              <p className="text-faint mt-1 text-xs">
                 {summary.targets} {summary.targets === 1 ? 'target' : 'targets'} in{' '}
                 {durationLabel(summary.startedAt, summary.finishedAt)}
               </p>
@@ -680,7 +678,7 @@ export function Discovery({
                 <strong>This search was not complete.</strong>
                 <ul className="mt-2 space-y-1.5">
                   {summary.skipped.map((s, i) => (
-                    <li key={i} className="u-prose text-[0.9375rem]">
+                    <li key={i} className="u-prose text-sm">
                       {s}
                     </li>
                   ))}
@@ -692,19 +690,19 @@ export function Discovery({
               {summary.bySource.map((r, i) => (
                 <li key={`${r.source}:${r.board}:${i}`} className="px-4 py-3">
                   <div className="flex flex-wrap items-baseline justify-between gap-3">
-                    <span className="text-[1rem]">
-                      <span className="u-data text-[0.75rem] tracking-wide uppercase">
+                    <span className="text-base">
+                      <span className="u-data text-2xs tracking-wide uppercase">
                         {sourceLabel(r.source)}
                       </span>{' '}
                       {r.board}
                     </span>
-                    <span className="u-data text-faint text-[0.8125rem]">
+                    <span className="u-data text-faint text-xs">
                       {r.found} found · {r.new} new
                       {r.degraded && <span className="text-caution"> · came back short</span>}
                     </span>
                   </div>
                   {[...r.errors, ...r.notes].map((line, j) => (
-                    <p key={j} className="text-faint u-prose mt-1.5 text-[0.875rem]">
+                    <p key={j} className="text-faint u-prose mt-1.5 text-xs">
                       {line}
                     </p>
                   ))}
@@ -718,12 +716,13 @@ export function Discovery({
               </Button>
               {onOpenQueue && (
                 <Button disabled={busy !== null} onClick={onOpenQueue}>
-                  Open the queue (G2) →
+                  Open the queue (G2)
+                  <ArrowRight aria-hidden size={15} />
                 </Button>
               )}
             </div>
             {scored && <Notice tone="verified">{scored}</Notice>}
-            <p className="text-faint u-prose mt-3 text-[0.9375rem]">
+            <p className="text-faint u-prose mt-3 text-sm">
               Finding a posting does not score it. Scoring reads each new posting for its
               requirements, which is the one step on this page that can spend money on a model call,
               and it is also what the queue&apos;s own Recompute button does.
@@ -810,19 +809,19 @@ export function Discovery({
 
         {manual && (
           <div className="u-card-flat mt-5 px-5 py-4">
-            <p className="text-[1.0625rem]">{manual.posting.title}</p>
+            <p className="text-lg">{manual.posting.title}</p>
             <p className="text-dim">{manual.posting.company}</p>
-            <p className="text-faint u-data mt-3 text-[0.8125rem]">
+            <p className="text-faint u-data mt-3 text-xs">
               {manual.usedJsonLd
                 ? 'Read from the structured job data the page publishes.'
                 : 'The page published no structured job data, so this was read from its text.'}
             </p>
             {manual.notes.map((n, i) => (
-              <p key={i} className="text-faint u-prose mt-1.5 text-[0.875rem]">
+              <p key={i} className="text-faint u-prose mt-1.5 text-xs">
                 {n}
               </p>
             ))}
-            <p className="text-faint u-prose mt-3 text-[0.9375rem]">
+            <p className="text-faint u-prose mt-3 text-sm">
               Stored, and not yet scored. Press <em>Score what is stored</em> above to put it in
               front of you at G2.
             </p>
@@ -839,8 +838,8 @@ export function Discovery({
               <li key={r.runId} className="u-card-flat px-5 py-4">
                 <details>
                   <summary className="hover:text-ink cursor-pointer transition-colors">
-                    <span className="u-data text-[0.9375rem]">{runHeadline(r)}</span>
-                    <span className="text-faint u-data ml-3 text-[0.75rem]">
+                    <span className="u-data text-sm">{runHeadline(r)}</span>
+                    <span className="text-faint u-data ml-3 text-2xs">
                       {whenLabel(r.startedAt)} · {durationLabel(r.startedAt, r.finishedAt)} ·{' '}
                       {r.targets} {r.targets === 1 ? 'target' : 'targets'}
                       {r.skipped.length > 0 && (
@@ -857,17 +856,17 @@ export function Discovery({
                         key={`${s.source}:${s.board}:${i}`}
                         className="flex flex-wrap items-baseline justify-between gap-3 py-2"
                       >
-                        <span className="text-dim text-[0.9375rem]">
+                        <span className="text-dim text-sm">
                           {sourceLabel(s.source)} {s.board}
                         </span>
-                        <span className="u-data text-faint text-[0.8125rem]">
+                        <span className="u-data text-faint text-xs">
                           {s.found} found · {s.new} new
                         </span>
                       </li>
                     ))}
                   </ul>
                   {r.skipped.map((s, i) => (
-                    <p key={i} className="text-caution u-prose mt-2 text-[0.875rem]">
+                    <p key={i} className="text-caution u-prose mt-2 text-xs">
                       {s}
                     </p>
                   ))}
@@ -893,7 +892,7 @@ export function Discovery({
 function PlanRow({ label, values }: { label: string; values: string[] }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-2.5">
-      <span className="text-dim text-[1rem]">{label}</span>
+      <span className="text-dim text-base">{label}</span>
       <span className="u-data text-right">
         {values.length > 0 ? values.join(' · ') : <span className="text-faint">none inferred</span>}
       </span>

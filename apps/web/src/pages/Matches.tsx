@@ -1,3 +1,4 @@
+import { ArrowRight, ExternalLink } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   daysUntil,
@@ -265,7 +266,7 @@ export function Matches({
             key={value}
             onClick={() => setBand(value)}
             aria-pressed={band === value}
-            className={`u-data rounded-full border px-3.5 py-1.5 text-[0.75rem] tracking-wide uppercase transition-colors ${
+            className={`u-data rounded-full border px-3.5 py-1.5 text-2xs tracking-wide uppercase transition-colors ${
               band === value
                 ? 'border-accent text-accent bg-accent/10'
                 : 'border-rule text-faint hover:text-dim hover:border-rule-strong'
@@ -274,7 +275,7 @@ export function Matches({
             {label}
           </button>
         ))}
-        <span className="u-data text-faint ml-auto text-[0.75rem]">
+        <span className="u-data text-faint ml-auto text-2xs">
           {counts['eligible'] ?? 0} eligible · {counts['unknown'] ?? 0} to check ·{' '}
           {counts['ineligible'] ?? 0} filtered
         </span>
@@ -316,13 +317,14 @@ export function Matches({
       {/* Approvals accumulate without interrupting triage — the link is there when wanted. */}
       {approved > 0 && (
         <div className="u-tint-verified mb-6 flex flex-wrap items-center justify-between gap-3 rounded px-4 py-3">
-          <span className="text-dim text-[1rem]">
+          <span className="text-dim text-base">
             {approved === 1 ? '1 application created' : `${approved} applications created`}. Answers
             are waiting for your review.
           </span>
           {onOpenApplications && (
             <Button size="sm" variant="primary" onClick={onOpenApplications}>
-              Review answers (G3) →
+              Review answers (G3)
+              <ArrowRight aria-hidden size={15} />
             </Button>
           )}
         </div>
@@ -346,7 +348,8 @@ export function Matches({
           {onOpenDiscovery && (
             <div className="mt-4 flex justify-center">
               <Button variant="primary" onClick={onOpenDiscovery}>
-                Go to Discover →
+                Go to Discover
+                <ArrowRight aria-hidden size={15} />
               </Button>
             </div>
           )}
@@ -385,21 +388,21 @@ export function Matches({
                       />
                     )}
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-[1rem]">{m.title}</span>
-                      <span className="u-data text-faint shrink-0 text-[0.75rem]">{m.score}</span>
+                      <span className="truncate text-base">{m.title}</span>
+                      <span className="u-data text-faint shrink-0 text-2xs">{m.score}</span>
                     </div>
-                    <div className="text-dim mt-0.5 truncate text-[0.9375rem]">{m.company}</div>
+                    <div className="text-dim mt-0.5 truncate text-sm">{m.company}</div>
                     <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1">
                       <span
-                        className="u-data text-[0.6875rem] tracking-widest uppercase"
+                        className="u-data text-2xs tracking-widest uppercase"
                         style={{ color: badge.color }}
                       >
                         {badge.label}
                       </span>
-                      <span className="u-data text-faint text-[0.75rem]">{locationLabel(m)}</span>
+                      <span className="u-data text-faint text-2xs">{locationLabel(m)}</span>
                       {days !== null && (
                         <span
-                          className="u-data text-[0.75rem]"
+                          className="u-data text-2xs"
                           style={{ color: days < 7 ? 'var(--redline)' : 'var(--ink-faint)' }}
                         >
                           {days < 0 ? 'closed' : `${days}d left`}
@@ -420,14 +423,14 @@ export function Matches({
                   <div className="u-card px-5 py-5">
                     <h3 className="u-display mb-1 text-3xl">{detail.posting.title}</h3>
                     <p className="text-dim">{detail.posting.company}</p>
-                    <dl className="u-data text-faint border-rule mt-4 flex flex-wrap gap-x-5 gap-y-1.5 border-t pt-3 text-[0.75rem]">
+                    <dl className="u-data text-faint border-rule mt-4 flex flex-wrap gap-x-5 gap-y-1.5 border-t pt-3 text-2xs">
                       <span>{locationLabel(current)}</span>
                       <span>{termLabel(detail.posting.term)}</span>
                       <span>{payLabel(detail.posting.compensation)}</span>
                       <span>{detail.posting.positionType ?? 'type not stated'}</span>
                       <span>{detail.posting.atsVendor}</span>
                     </dl>
-                    <p className="mt-5 u-prose text-[1rem] leading-relaxed">
+                    <p className="mt-5 u-prose text-base leading-relaxed">
                       {detail.match.rationale}
                     </p>
                   </div>
@@ -442,7 +445,7 @@ export function Matches({
 
                 <Section n="03" title={`Fit — ${detail.match.score}/100`} step={5}>
                   <ScoreBreakdownBars breakdown={detail.match.breakdown} />
-                  <p className="text-faint mt-4 u-prose text-[0.9375rem] italic">
+                  <p className="text-faint mt-4 u-prose text-sm italic">
                     This score only orders the queue. It <strong>never</strong> filters anything
                     out.
                   </p>
@@ -451,7 +454,7 @@ export function Matches({
                 <Section n="04" title="Your call" step={6}>
                   {rejecting ? (
                     <div>
-                      <p className="text-dim mb-3 text-[1rem]">Why not this one?</p>
+                      <p className="text-dim mb-3 text-base">Why not this one?</p>
                       <div className="flex flex-wrap gap-2">
                         {REJECT_REASONS.map((r) => (
                           <Button key={r.tag} onClick={() => void reject(r.tag, r.label)}>
@@ -478,7 +481,8 @@ export function Matches({
                           rel="noreferrer noopener"
                           className="u-data border-rule text-dim hover:text-ink hover:border-rule-strong hover:bg-ink/[0.04] inline-flex items-center rounded border px-4 py-2 tracking-wide uppercase transition-colors"
                         >
-                          Open posting ↗
+                          Open posting
+                          <ExternalLink aria-hidden size={14} />
                         </a>
                       </div>
                       {/* The second sentence is here because Save, Skip and Reject look like
@@ -488,7 +492,7 @@ export function Matches({
                         someone who pressed Save meaning "come back to this" watched the
                         posting leave the queue for good and went looking for a screen that
                         does not exist. Say so until one does. */}
-                      <p className="text-faint mt-4 u-prose text-[0.9375rem]">
+                      <p className="text-faint mt-4 u-prose text-sm">
                         Approving creates an application you review at gate G3. It does not submit
                         anything — you do that <em>yourself</em>, on the real page. Save and Skip
                         both take the posting out of the queue, as does Reject. Each is recorded as
@@ -503,7 +507,7 @@ export function Matches({
                   <summary className="u-eyebrow hover:text-ink cursor-pointer transition-colors">
                     Full job description
                   </summary>
-                  <div className="text-dim mt-4 u-prose text-[0.9375rem] leading-relaxed whitespace-pre-wrap">
+                  <div className="text-dim mt-4 u-prose text-sm leading-relaxed whitespace-pre-wrap">
                     {detail.posting.descriptionText.slice(0, 8000)}
                   </div>
                 </details>

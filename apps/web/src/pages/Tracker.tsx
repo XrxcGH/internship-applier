@@ -1,3 +1,4 @@
+import { ExternalLink } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import {
   downloadFile,
@@ -45,15 +46,15 @@ function RateFigure({ label, rate }: { label: string; rate: Rate }) {
       <p className="u-eyebrow mb-1.5">{label}</p>
       {rate.value === null ? (
         <>
-          <p className="u-data text-faint text-[1.25rem]">
+          <p className="u-data text-faint text-xl">
             {rate.numerator} of {rate.denominator}
           </p>
-          <p className="text-faint mt-1.5 text-[0.9375rem] leading-snug">{rate.why}</p>
+          <p className="text-faint mt-1.5 text-sm leading-snug">{rate.why}</p>
         </>
       ) : (
         <>
-          <p className="u-data text-ink text-[1.75rem]">{Math.round(rate.value * 100)}%</p>
-          <p className="text-faint mt-1 text-[0.9375rem]">
+          <p className="u-data text-ink text-2xl">{Math.round(rate.value * 100)}%</p>
+          <p className="text-faint mt-1 text-sm">
             {rate.numerator} of {rate.denominator}
           </p>
         </>
@@ -78,11 +79,11 @@ function Card({
   return (
     <li className="u-card px-4 py-4">
       <p className="u-eyebrow truncate">{app.company}</p>
-      <p className="mt-1.5 text-[1rem] leading-snug">{app.title}</p>
+      <p className="mt-1.5 text-base leading-snug">{app.title}</p>
 
       {app.derived.nudge && (
         <p
-          className="mt-2.5 text-[0.9375rem] leading-snug"
+          className="mt-2.5 text-sm leading-snug"
           style={{ color: tone === 'neutral' ? 'var(--ink-dim)' : `var(--${tone})` }}
         >
           {app.derived.nudge}
@@ -121,9 +122,9 @@ function Card({
           target="_blank"
           rel="noreferrer noopener"
           aria-label={`Open the posting for ${app.title} at ${app.company}`}
-          className="u-data text-faint hover:text-ink px-1 py-1 transition-colors"
+          className="text-faint hover:text-ink px-1 py-1 transition-colors"
         >
-          ↗
+          <ExternalLink aria-hidden size={15} />
         </a>
       </div>
     </li>
@@ -205,8 +206,8 @@ export function Tracker() {
               Close
             </Button>
           </div>
-          <pre className="u-quote text-[0.9375rem] whitespace-pre-wrap">{draft.text}</pre>
-          <p className="text-faint mt-3 text-[0.9375rem]">{draft.note}</p>
+          <pre className="u-quote text-sm whitespace-pre-wrap">{draft.text}</pre>
+          <p className="text-faint mt-3 text-sm">{draft.note}</p>
           <div className="mt-3">
             <Button
               size="sm"
@@ -233,8 +234,8 @@ export function Tracker() {
                     key={i}
                     className={`rounded px-4 py-3 ${r.urgency <= 1 ? 'u-tint-caution' : 'u-card-flat'}`}
                   >
-                    <p className="text-[1rem] leading-snug">{r.headline}</p>
-                    <p className="text-dim mt-1 text-[0.9375rem] leading-snug">{r.detail}</p>
+                    <p className="text-base leading-snug">{r.headline}</p>
+                    <p className="text-dim mt-1 text-sm leading-snug">{r.detail}</p>
                   </li>
                 ))}
               </ul>
@@ -269,7 +270,7 @@ export function Tracker() {
                       {col.label} · {inCol.length}
                     </p>
                     {inCol.length === 0 ? (
-                      <p className="text-faint text-[0.9375rem]">Empty.</p>
+                      <p className="text-faint text-sm">Empty.</p>
                     ) : (
                       <ul className="space-y-3">
                         {inCol.map((a) => (
@@ -293,7 +294,7 @@ export function Tracker() {
             {stats.notes.length > 0 && (
               <ul className="mb-5 space-y-1.5">
                 {stats.notes.map((n, i) => (
-                  <li key={i} className="text-dim u-prose text-[1rem]">
+                  <li key={i} className="text-dim u-prose text-base">
                     {n}
                   </li>
                 ))}
@@ -303,26 +304,22 @@ export function Tracker() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="u-card-flat px-5 py-4">
                 <p className="u-eyebrow mb-1.5">Submitted</p>
-                <p className="u-data text-ink text-[1.75rem]">{stats.funnel.submitted}</p>
-                <p className="text-faint mt-1 text-[0.9375rem]">of {stats.funnel.total} tracked</p>
+                <p className="u-data text-ink text-2xl">{stats.funnel.submitted}</p>
+                <p className="text-faint mt-1 text-sm">of {stats.funnel.total} tracked</p>
               </div>
               <RateFigure label="Heard back" rate={stats.responseRate} />
               <RateFigure label="Reached interview" rate={stats.interviewRate} />
               <div className="u-card-flat px-5 py-4">
                 <p className="u-eyebrow mb-1.5">Typical reply time</p>
                 {stats.medianDaysToResponse === null ? (
-                  <p className="text-faint text-[0.9375rem] leading-snug">
-                    Not enough replies yet to say.
-                  </p>
+                  <p className="text-faint text-sm leading-snug">Not enough replies yet to say.</p>
                 ) : (
-                  <p className="u-data text-ink text-[1.75rem]">
-                    {stats.medianDaysToResponse} days
-                  </p>
+                  <p className="u-data text-ink text-2xl">{stats.medianDaysToResponse} days</p>
                 )}
               </div>
             </div>
 
-            <p className="text-faint u-prose mt-5 text-[0.9375rem] italic">
+            <p className="text-faint u-prose mt-5 text-sm italic">
               Percentages only appear once there are enough applications for one to mean something.
               Below that you get the counts, which are the honest version.
             </p>

@@ -83,7 +83,7 @@ export function Voice() {
         {samples && samples.samples.length > 0 && (
           <div className="mb-5 flex flex-wrap items-center gap-3">
             <Badge tone={ADEQUACY_TONE[samples.adequacy.level]}>{samples.adequacy.level}</Badge>
-            <span className="text-dim text-[1rem]">{samples.adequacy.message}</span>
+            <span className="text-dim text-base">{samples.adequacy.message}</span>
           </div>
         )}
 
@@ -104,7 +104,7 @@ export function Voice() {
                     <Badge>{s.kind.replace(/_/g, ' ')}</Badge>
                     <span className="u-data text-faint">{s.wordCount} words</span>
                   </div>
-                  <p className="text-dim truncate text-[0.9375rem]">{s.preview}</p>
+                  <p className="text-dim truncate text-sm">{s.preview}</p>
                 </div>
                 <Button
                   variant="danger"
@@ -120,7 +120,7 @@ export function Voice() {
         )}
 
         {samples && samples.samples.length > 0 && (
-          <p className="text-faint u-prose mt-4 text-[0.9375rem]">
+          <p className="text-faint u-prose mt-4 text-sm">
             Removing a sample deletes the text you pasted and measures your voice again from
             whatever is left, so nothing below goes on describing writing you have taken away.
             Remove the last one and the measurement goes with it.
@@ -177,21 +177,21 @@ export function Voice() {
           <div className="u-card-flat px-5 py-5">
             <ul className="space-y-3">
               {style.description.map((line, i) => (
-                <li key={i} className="flex gap-3 text-[1rem]">
+                <li key={i} className="flex gap-3 text-base">
                   <span className="text-accent-dim shrink-0">—</span>
                   <span className="text-dim">{line}</span>
                 </li>
               ))}
             </ul>
             {style.computedAt && (
-              <p className="u-data text-faint border-rule mt-4 border-t pt-3 text-[0.75rem]">
+              <p className="u-data text-faint border-rule mt-4 border-t pt-3 text-2xs">
                 measured {style.computedAt.slice(0, 16).replace('T', ' ')}
               </p>
             )}
           </div>
         )}
 
-        <p className="text-faint u-prose mt-5 text-[1rem]">
+        <p className="text-faint u-prose mt-5 text-base">
           Measuring keeps these numbers as a record of their own, stored separately from the samples
           they were taken from. Adding a sample does not change it on its own; measuring again does,
           and so does removing a sample. No passage of your writing is copied into it — it holds
@@ -199,7 +199,7 @@ export function Voice() {
           which of a fixed list of joining words you reach for.
         </p>
 
-        <p className="text-faint mt-5 u-prose text-[1rem] italic">
+        <p className="text-faint mt-5 u-prose text-base italic">
           These numbers are <strong>not scored against an AI detector</strong>, and are not trying
           to beat one. They answer a narrower question: does the draft read like the person signing
           it?

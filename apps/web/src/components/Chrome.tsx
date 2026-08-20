@@ -89,15 +89,24 @@ export function Nav({
 
   return (
     <nav className="u-nav sticky top-0 z-30">
-      <div className="mx-auto flex max-w-[88rem] items-center gap-6 px-5 sm:px-8 lg:px-12">
+      {/* Two rows on a phone, one from sm up.
+
+          In a single row the wordmark and the status pill take their width first and the nav
+          track gets what is left — which at 375px was 101 pixels onto 790 of content, so the
+          eight destinations were technically reachable and practically not: one visible at a
+          time, through a window narrower than a single label. Giving the track its own line
+          below the wordmark hands it the full width instead. */}
+      <div className="mx-auto flex max-w-[88rem] flex-col gap-0 px-5 sm:flex-row sm:items-center sm:gap-6 sm:px-8 lg:px-12">
         <button
           onClick={() => onNavigate('home')}
-          className="u-eyebrow hover:text-ink shrink-0 py-3 transition-colors"
+          className="u-eyebrow hover:text-ink shrink-0 self-start pt-3 pb-1 transition-colors sm:self-auto sm:py-3"
         >
           internship&nbsp;·&nbsp;applier
         </button>
 
-        <div className="scrollbar-none flex flex-1 items-center gap-5 overflow-x-auto sm:gap-7">
+        {/* Bleeds to the screen edges on mobile so a half-scrolled label is visibly cut off
+            rather than sitting flush against the padding and looking like the end of the list. */}
+        <div className="scrollbar-none -mx-5 flex flex-1 items-center gap-5 overflow-x-auto px-5 pb-1 sm:mx-0 sm:gap-7 sm:px-0 sm:pb-0">
           {items.map((item) => (
             /* aria-disabled rather than disabled, so the reason stays reachable.
                A locked destination is supposed to say what to do next, and that text
@@ -129,7 +138,7 @@ export function Nav({
         {/* Says which of the four states it is in, rather than reading "setup" at a
             returning user whose profile is confirmed and whose server is simply down. */}
         <span
-          className="u-data hidden shrink-0 items-center gap-2 py-3 text-[0.75rem] tracking-widest uppercase sm:flex"
+          className="u-data hidden shrink-0 items-center gap-2 py-3 text-2xs tracking-widest uppercase sm:flex"
           style={{
             color:
               profile === 'confirmed'
@@ -179,13 +188,9 @@ export function RunningHead({
           <span className="u-eyebrow">{`gate ${gate}`}</span>
         </div>
       )}
-      <h1
-        className={`u-display text-[3.25rem] leading-[1.02] sm:text-[4rem] ${gate ? 'mt-3' : ''}`}
-      >
-        {section}
-      </h1>
+      <h1 className={`u-display u-display-title ${gate ? 'mt-3' : ''}`}>{section}</h1>
       <hr className="u-rule a-draw a-step-2 mt-6" />
-      {lede && <p className="text-dim u-prose a-rise a-step-3 mt-6 text-[1.125rem]">{lede}</p>}
+      {lede && <p className="text-dim u-prose a-rise a-step-3 mt-6 text-lg">{lede}</p>}
     </header>
   );
 }
@@ -222,7 +227,7 @@ export function Section({
 export function Field({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-6 py-2.5">
-      <span className="text-dim text-[1rem]">{label}</span>
+      <span className="text-dim text-base">{label}</span>
       <span className="u-data text-right" style={tone ? { color: tone } : undefined}>
         {value}
       </span>

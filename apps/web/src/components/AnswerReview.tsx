@@ -94,7 +94,7 @@ function EditMeter({ answer }: { answer: Answer }) {
           style={{ width: `${String(Math.max(pct, 2))}%`, background: 'var(--accent)' }}
         />
       </div>
-      <span className="text-faint text-[0.9375rem]">{summary}</span>
+      <span className="text-faint text-sm">{summary}</span>
     </div>
   );
 }
@@ -181,7 +181,7 @@ export function AnswerReview({
       {/* ── question */}
       <header className="border-rule flex flex-wrap items-start justify-between gap-4 border-b px-6 py-5">
         <div className="min-w-0 flex-1">
-          <p className="text-[1.125rem] leading-snug">{answer.questionText}</p>
+          <p className="text-lg leading-snug">{answer.questionText}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge>{answer.archetype.replace(/_/g, ' ')}</Badge>
             {words > 0 && (
@@ -195,11 +195,11 @@ export function AnswerReview({
           </div>
         </div>
         {answer.approvedAt ? (
-          <span className="a-stamp u-data text-verified shrink-0 text-[0.75rem] tracking-widest uppercase">
+          <span className="a-stamp u-data text-verified shrink-0 text-2xs tracking-widest uppercase">
             approved
           </span>
         ) : (
-          <span className="u-data text-faint shrink-0 text-[0.75rem] tracking-widest uppercase">
+          <span className="u-data text-faint shrink-0 text-2xs tracking-widest uppercase">
             not approved
           </span>
         )}
@@ -250,7 +250,7 @@ export function AnswerReview({
                 className="border-rule focus:border-accent u-prose w-full resize-y rounded border bg-transparent p-4 outline-none transition-colors"
               />
             ) : (
-              <p className="u-prose text-[1.125rem] whitespace-pre-wrap">
+              <p className="u-prose text-lg whitespace-pre-wrap">
                 {segments.map((s, i) =>
                   s.index === null ? (
                     <span key={i}>{s.text}</span>
@@ -331,14 +331,14 @@ export function AnswerReview({
             {/* ── flags */}
             {blocking.length > 0 && (
               <div className="u-tint-redline mt-5 rounded px-4 py-3">
-                <p className="u-data text-redline mb-2 text-[0.75rem] tracking-widest uppercase">
+                <p className="u-data text-redline mb-2 text-2xs tracking-widest uppercase">
                   {blocking.length === 1
                     ? '1 claim blocks approval'
                     : `${blocking.length} claims block approval`}
                 </p>
                 <ul className="space-y-2">
                   {blocking.map((b, i) => (
-                    <li key={i} className="text-dim text-[1rem]">
+                    <li key={i} className="text-dim text-base">
                       <span className="text-ink">“{b.claim}”</span>
                       <br />
                       {blockingNotes[i]?.note ?? VERDICT_LABEL[b.verdict]}
@@ -350,10 +350,10 @@ export function AnswerReview({
 
             {tells.length > 0 && (
               <div className="u-tint-caution mt-4 rounded px-4 py-3">
-                <p className="u-data text-caution mb-2 text-[0.75rem] tracking-widest uppercase">
+                <p className="u-data text-caution mb-2 text-2xs tracking-widest uppercase">
                   reads as machine-written
                 </p>
-                <ul className="text-dim space-y-1 text-[1rem]">
+                <ul className="text-dim space-y-1 text-base">
                   {tells.slice(0, 6).map((t, i) => (
                     <li key={i}>{t.note}</li>
                   ))}
@@ -362,7 +362,7 @@ export function AnswerReview({
             )}
 
             {drift.length > 0 && (
-              <div className="text-faint mt-4 text-[1rem]">
+              <div className="text-faint mt-4 text-base">
                 {drift.map((d, i) => (
                   <p key={i}>{d.note}</p>
                 ))}
@@ -370,14 +370,14 @@ export function AnswerReview({
             )}
 
             {answer.styleNote && (
-              <p className="text-faint mt-4 text-[0.9375rem] italic">{answer.styleNote}</p>
+              <p className="text-faint mt-4 text-sm italic">{answer.styleNote}</p>
             )}
 
             {/* ── the gate */}
             <div className="border-rule mt-6 border-t pt-5">
               {answer.approvedAt ? (
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-dim text-[1rem]">
+                  <span className="text-dim text-base">
                     You approved this. It will be filled in for you; you still submit it{' '}
                     <em>yourself</em>.
                   </span>
@@ -387,7 +387,7 @@ export function AnswerReview({
                 </div>
               ) : blocking.length > 0 ? (
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-dim text-[1rem]">
+                  <span className="text-dim text-base">
                     Fix the flagged {blocking.length === 1 ? 'claim' : 'claims'} above, or add the
                     missing facts to your profile.
                   </span>
@@ -397,7 +397,7 @@ export function AnswerReview({
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-dim text-[1rem]">
+                  <span className="text-dim text-base">
                     Read it once more. Approving means you stand behind <em>every sentence</em>.
                   </span>
                   <Button
@@ -416,7 +416,7 @@ export function AnswerReview({
           <aside className="bg-sunk/40 px-5 py-5">
             <p className="u-eyebrow mb-3">Evidence</p>
             {answer.evidence.length === 0 ? (
-              <p className="text-faint text-[0.9375rem]">
+              <p className="text-faint text-sm">
                 Nothing to check yet. Claims appear here as soon as there is text.
               </p>
             ) : (
@@ -442,16 +442,16 @@ export function AnswerReview({
                       <span className="mb-1.5 block">
                         <Badge tone={VERDICT_TONE[e.verdict]}>{VERDICT_LABEL[e.verdict]}</Badge>
                       </span>
-                      <span className="text-dim block text-[0.9375rem] leading-snug">
+                      <span className="text-dim block text-sm leading-snug">
                         {e.claim.length > 90 ? `${e.claim.slice(0, 90)}…` : e.claim}
                       </span>
                       {e.quote && (
-                        <span className="u-quote mt-2 block text-[0.75rem]">
+                        <span className="u-quote mt-2 block text-2xs">
                           {e.quote.length > 140 ? `${e.quote.slice(0, 140)}…` : e.quote}
                         </span>
                       )}
                       {e.profileRef && (
-                        <span className="u-data text-faint mt-1.5 block text-[0.75rem]">
+                        <span className="u-data text-faint mt-1.5 block text-2xs">
                           {e.profileRef}
                         </span>
                       )}

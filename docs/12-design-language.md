@@ -12,11 +12,11 @@ So: editorial type, rules and marginalia, stamps for state changes, and a surfac
 as a working surface rather than a canvas. Dark is the primary theme and light is a real
 alternative, not an inversion.
 
-> The palette below is the **drafting table** — cool graphite with one azure accent. It
-> replaced an earlier warm scheme ("archival ink on warm paper", a brass accent), and this
-> document described that older one long after it was gone: every hex value and every
-> contrast ratio in it was stale. The values here were re-measured against
-> `apps/web/src/index.css` as it ships.
+> The palette below is **warm stone** — a single warm-neutral ramp with one deep sage accent.
+> It replaced "drafting table" (cool graphite, azure accent), which had itself replaced a
+> warm scheme before that; this document described each older one long after it was gone, so
+> every hex value and contrast ratio here is re-measured against `apps/web/src/index.css` as
+> it ships rather than carried over.
 
 What this deliberately isn't: a purple gradient on white, a grid of rounded cards with
 drop shadows, Inter at three weights, an emoji in every heading.
@@ -41,30 +41,64 @@ Scale is a modular 1.2 ratio off a 16px base, with display sizes set tighter
 
 ## Color
 
-A cool graphite base, one azure accent that reads like a technical pen, and three signal
-colours that each mean exactly one thing. Defined as CSS custom properties in
-`apps/web/src/index.css`; both themes ship.
+ONE family, and everything belongs to it. A warm-neutral ramp, one deep sage accent, and
+three signal colours that are that same sage walked around the wheel at matched chroma —
+moss, ochre, terracotta. Defined as CSS custom properties in `apps/web/src/index.css`; both
+themes ship.
 
 ```
                      dark (default)      light
---paper              #0f1418             #eaeef3      the page
---paper-raised       #161d23             #f6f8fb      cards, panels
---paper-sunk         #0a0e11             #dde3ea      wells, tracks
---ink                #e7ecf1             #121820      body
---ink-dim            #a8b3bf             #48545f      secondary
---ink-faint          #8b97a4             #525e6b      eyebrows, small print
---rule               #2f3a45             #b7c2cf      hairlines
---rule-strong        #556575             #748498      structural dividers
---accent             #6ba7f5             #15529e      THE accent. Used sparingly.
---verified           #5cba8a             #226644      claim supported, rule passed
---caution            #dda44a             #8a5610      unknown / needs your input
---redline            #ec7d72             #ad3628      redlined field, unsupported claim
+--paper              #171613             #f4f2ee      the page
+--paper-raised       #201e1a             #fbfaf8      cards, panels
+--paper-sunk         #100f0d             #e7e3dc      wells, tracks
+--ink                #efece5             #1b1917      body
+--ink-dim            #b5afa4             #4a453e      secondary
+--ink-faint          #978f83             #635d54      eyebrows, small print
+--rule               #343128             #d8d3ca      hairlines
+--rule-strong        #6e6759             #8c8477      structural dividers
+--accent             #a6c3ac             #3f5a48      THE accent. Used sparingly.
+--verified           #8fc09b             #37633f      claim supported, rule passed
+--caution            #d6b06b             #7a5a15      unknown / needs your input
+--redline            #de9585             #9a4433      redlined field, unsupported claim
 ```
 
-Discipline: **azure is the only decorative colour.** Green, amber and coral are reserved for
-the verification states in docs/05 and docs/06 — if something is green it means a claim was
-verified, not that it is a nice button. A UI where colour is load-bearing cannot also use
-colour for flair.
+The previous palette drew its accent and its three signals from four unrelated places — azure,
+green, amber, coral — so five hues shared a screen and the interface read as a dashboard
+rather than as a document. These sit in one family, which is what lets them be quiet.
+
+Discipline: **the accent is the only decorative colour.** Moss, ochre and terracotta are
+reserved for the verification states in docs/05 and docs/06 — if something is green it means
+a claim was verified, not that it is a nice button. A UI where colour is load-bearing cannot
+also use colour for flair.
+
+And colour is never the only carrier. Every signal is paired with a Lucide icon at its call
+site — a drawn mark, not a typed glyph — so the state survives a monochrome screen and a
+colour-blind reader. That pairing is what allowed the hues to be quietened this far.
+`lucide-react` is the only icon dependency; there are no emoji anywhere in the interface.
+
+## Type scale
+
+Seven steps, each named, declared as theme tokens in `index.css`. Twelve distinct sizes were
+in use across 158 call sites before this, every one an arbitrary value — `text-[0.9375rem]`
+sixty-four times, `text-[0.6875rem]` once. That is not a scale but a pile of exceptions, and
+it is why two paragraphs doing the same job on different screens did not look alike. Four
+sizes were folded into their nearest neighbour, since a 1px difference is not a decision
+anybody made deliberately.
+
+```
+--text-2xs    0.75rem     mono eyebrows, badges, field keys
+--text-xs     0.875rem    fine print, hints
+--text-sm     0.9375rem   secondary prose
+--text-base   1rem        body
+--text-lg     1.125rem    lead paragraphs, the G3 answer
+--text-xl     1.25rem     section subheads
+--text-2xl    1.75rem     page subheads
+```
+
+The page title is fluid rather than stepped: `clamp(2.25rem, 1.35rem + 3.8vw, 4rem)`. It was
+52px below `sm` and 64px above, so a 375px phone rendered a 52px headline across a 327px
+column — three words to a line, with the running head taking most of the first screen before
+a word of content.
 
 ## Background and depth
 

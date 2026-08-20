@@ -170,7 +170,7 @@ export function Settings() {
             {access.limitations.length > 0 && (
               <ul className="mt-3 space-y-1.5">
                 {access.limitations.map((l, i) => (
-                  <li key={i} className="text-dim u-prose text-[1rem]">
+                  <li key={i} className="text-dim u-prose text-base">
                     {l}
                   </li>
                 ))}
@@ -189,7 +189,7 @@ export function Settings() {
               </Notice>
             )}
 
-            <p className="text-faint u-prose mt-4 text-[0.9375rem]">
+            <p className="text-faint u-prose mt-4 text-sm">
               Drafting can run through the Claude Code CLI, against a subscription you already pay
               for, or through an Anthropic API key. Everything else here works without either.
             </p>
@@ -212,7 +212,7 @@ export function Settings() {
               <div className="u-card-flat divide-rule/60 divide-y px-5 py-1">
                 {costs.byPurpose.map((p) => (
                   <div key={p.purpose} className="flex items-baseline justify-between gap-6 py-2.5">
-                    <span className="text-[1rem]">{p.purpose.replace(/_/g, ' ')}</span>
+                    <span className="text-base">{p.purpose.replace(/_/g, ' ')}</span>
                     <span className="u-data text-dim">
                       {p.calls} {p.calls === 1 ? 'call' : 'calls'} · {money(p.usd)}
                     </span>
@@ -246,14 +246,14 @@ export function Settings() {
               {storedSources.map((src) => (
                 <li key={src.id} className="flex flex-wrap items-center justify-between gap-4 py-3">
                   <div className="min-w-0">
-                    <span className="u-data text-[0.9375rem]">{src.label}</span>
+                    <span className="u-data text-sm">{src.label}</span>
                     {/* `last_run_at` is written by the runner now, for every target it actually
                         searches — not per stored posting, so a board searched honestly that had
                         nothing open still gets a date. It briefly was written by nothing at all,
                         and this line read "never run" beside boards searched an hour earlier, so
                         the absent case says plainly that nothing has searched it rather than
                         implying a date it does not have. */}
-                    <span className="text-faint ml-3 text-[0.875rem]">
+                    <span className="text-faint ml-3 text-xs">
                       {src.postings} {src.postings === 1 ? 'posting' : 'postings'} stored
                       {src.lastRunAt
                         ? ` · searched ${whenLabel(src.lastRunAt)}`
@@ -310,7 +310,7 @@ export function Settings() {
               Export everything
             </Button>
           </div>
-          <p className="text-faint mt-3 text-[0.9375rem]">
+          <p className="text-faint mt-3 text-sm">
             One JSON file, decrypted, including your resume, contact details, and every answer you
             wrote. Keep it somewhere safe.
           </p>
@@ -327,7 +327,7 @@ export function Settings() {
             {deleted.failed.length > 0 && (
               <ul className="mt-3 space-y-1.5">
                 {deleted.failed.map((f) => (
-                  <li key={f.path} className="u-prose text-[0.9375rem]">
+                  <li key={f.path} className="u-prose text-sm">
                     <span className="u-data">{f.path}</span> — {f.reason}
                   </li>
                 ))}

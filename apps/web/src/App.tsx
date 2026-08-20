@@ -289,8 +289,8 @@ function Home({
                   >
                     <span className="u-data text-accent w-7 shrink-0 pt-1">{g.id}</span>
                     <span>
-                      <span className="block text-[1.125rem] leading-snug">{g.label}</span>
-                      <span className="text-dim mt-1 block text-[1rem] leading-snug">{g.note}</span>
+                      <span className="block text-lg leading-snug">{g.label}</span>
+                      <span className="text-dim mt-1 block text-base leading-snug">{g.note}</span>
                     </span>
                   </button>
                 </li>

@@ -1,3 +1,4 @@
+import { ArrowLeft } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import {
   addQuestion,
@@ -98,7 +99,7 @@ export function Applications({ onBack }: { onBack: () => void }) {
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <p className="u-eyebrow truncate">{a.company}</p>
-                      <p className="mt-1.5 text-[1.125rem] leading-snug">{a.title}</p>
+                      <p className="mt-1.5 text-lg leading-snug">{a.title}</p>
                     </div>
                     {/* A brand-new application has nothing to review, and saying "in
                         review" directly above "no questions yet" reads as a bug. The
@@ -216,7 +217,10 @@ function Detail({
   if (!app) {
     return (
       <Page>
-        <Button onClick={onBack}>← Applications</Button>
+        <Button onClick={onBack}>
+          <ArrowLeft aria-hidden size={15} />
+          Applications
+        </Button>
         {error ? (
           <Notice tone="redline">{error}</Notice>
         ) : (
@@ -232,7 +236,10 @@ function Detail({
   return (
     <Page>
       <div className="mb-8">
-        <Button onClick={onBack}>← Applications</Button>
+        <Button onClick={onBack}>
+          <ArrowLeft aria-hidden size={15} />
+          Applications
+        </Button>
       </div>
 
       <RunningHead section={app.title} gate="G3" />
@@ -327,7 +334,7 @@ function Detail({
           >
             Add question
           </Button>
-          <span className="text-faint text-[0.9375rem]">
+          <span className="text-faint text-sm">
             If you have answered it before, the previous answer is pulled in automatically.
           </span>
         </div>
@@ -339,7 +346,7 @@ function Detail({
               <button
                 key={q}
                 onClick={() => setNewQuestion(q)}
-                className="u-card-flat hover:border-rule-strong text-dim hover:text-ink rounded-full px-3 py-1.5 text-[0.9375rem] transition-colors"
+                className="u-card-flat hover:border-rule-strong text-dim hover:text-ink rounded-full px-3 py-1.5 text-sm transition-colors"
               >
                 {q}
               </button>
@@ -349,7 +356,7 @@ function Detail({
       </Section>
 
       <Section n="03" title="Fill the form" step={5}>
-        <p className="text-faint u-prose mb-5 text-[1rem]">
+        <p className="text-faint u-prose mb-5 text-base">
           Sensitive fields are <em>never</em> auto-filled: government IDs, bank details, passwords,
           demographic questions, and anything you have to attest to. Each one gets listed for you
           with the reason.

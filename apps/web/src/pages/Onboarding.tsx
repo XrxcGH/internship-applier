@@ -790,7 +790,7 @@ export function Onboarding({
               </Notice>
             )}
 
-            <p className="text-faint mt-4 text-[0.9375rem] italic">
+            <p className="text-faint mt-4 text-sm italic">
               Everything the reader took off your resume is below, and all of it can be corrected,
               reordered, added to and thrown out. What is stored here is the whole of what the rest
               of this app knows about you.
@@ -874,7 +874,7 @@ export function Onboarding({
                 the immigration-status select, which is the one control a person is most
                 likely to hesitate over — and it was the promise persuading them to
                 answer. If the encrypted set ever widens, this sentence widens with it. */}
-            <p className="text-dim mb-6 u-prose text-[1rem]">
+            <p className="text-dim mb-6 u-prose text-base">
               Eligibility turns on these six facts, and none of them appear on a resume. All six are
               stored in the database file on this machine. Your date of birth is encrypted there,
               the way your contact details are. The other five sit in that file as plain text.
@@ -1036,13 +1036,13 @@ export function Onboarding({
                           I have checked this
                         </Button>
                       ) : (
-                        <span className="text-faint text-[0.9375rem]">{ANSWERED_IN_WIZARD[f]}</span>
+                        <span className="text-faint text-sm">{ANSWERED_IN_WIZARD[f]}</span>
                       )}
                     </li>
                   ))}
                 </ul>
                 {profile.needsReview.length > 12 && (
-                  <p className="text-faint mt-2 text-[0.9375rem]">
+                  <p className="text-faint mt-2 text-sm">
                     and {profile.needsReview.length - 12} more
                   </p>
                 )}
@@ -1157,7 +1157,7 @@ function UploadStep({
         <span className="u-data text-dim block">
           {filename ?? 'drop a file, or click to choose'}
         </span>
-        <span className="text-faint mt-2 block text-[0.9375rem]">PDF, DOCX, TXT, or Markdown</span>
+        <span className="text-faint mt-2 block text-sm">PDF, DOCX, TXT, or Markdown</span>
       </button>
       <input
         ref={inputRef}
@@ -1175,7 +1175,7 @@ function UploadStep({
           strongest privacy promise on the screen, so it says what really happens instead.
           The other formats are named too: they send their extracted text, which is the
           same promise being broken more quietly. */}
-      <p className="text-faint mt-5 u-prose text-[0.9375rem]">
+      <p className="text-faint mt-5 u-prose text-sm">
         PDFs are sent to the model and read there rather than through a text-extraction library,
         because that copes with scans and multi-column layouts far better. A DOCX or a text file has
         its extracted text sent instead. <em>The copy that is kept lives on this machine.</em>
@@ -1225,7 +1225,7 @@ export function EducationEditor({
       </div>
 
       {entries.length === 0 ? (
-        <p className="text-faint u-prose text-[0.9375rem]">
+        <p className="text-faint u-prose text-sm">
           No school was read off your resume. Upload a different file if that is wrong.
         </p>
       ) : (
@@ -1385,7 +1385,7 @@ function EducationRow({
           />
         ))}
       </div>
-      {note && <p className="text-faint u-prose mt-2 text-[0.9375rem]">{note}</p>}
+      {note && <p className="text-faint u-prose mt-2 text-sm">{note}</p>}
 
       <ListEditor
         label="Coursework"
@@ -1434,7 +1434,7 @@ export function WithdrawnNotice({ items }: { items: api.WithdrawnApproval[] }) {
           <li key={w.answerId}>
             <span className="u-data">{w.question}</span>
             {w.claims.map((c, i) => (
-              <p key={i} className="text-faint mt-1 text-[0.9375rem]">
+              <p key={i} className="text-faint mt-1 text-sm">
                 "{c.claim}" — {c.reason}
               </p>
             ))}
@@ -1448,7 +1448,7 @@ export function WithdrawnNotice({ items }: { items: api.WithdrawnApproval[] }) {
 function Summary({ label, n, extra }: { label: string; n: number; extra?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-6">
-      <dt className="text-dim text-[1rem]">{label}</dt>
+      <dt className="text-dim text-base">{label}</dt>
       <dd className="u-data" style={{ color: n > 0 ? 'var(--ink)' : 'var(--ink-faint)' }}>
         {n === 0 ? 'none found' : `${n} entr${n === 1 ? 'y' : 'ies'}`}
         {/* Only alongside entries. "none found · no lines under them" says one thing twice. */}
@@ -1498,7 +1498,7 @@ export function WorkLocationsEditor({
           {locations.length === 0 ? 'none' : `${locations.length} added`}
         </span>
       </div>
-      <p className="text-faint u-prose mb-4 text-[0.9375rem]">
+      <p className="text-faint u-prose mb-4 text-sm">
         School, a second home, anywhere you could take a job in person. Each one is searched and
         matched exactly like your home city — give each a city, since a state on its own is not
         enough to match a posting against. Remote and hybrid postings are accepted for you
