@@ -135,8 +135,8 @@ describe('isAggregatorUrl', () => {
 
 describe('siftCandidates', () => {
   it('drops aggregators, junk and repeats, and counts each by reason', () => {
-    // Each count becomes its own sentence in the run report. Lumped together, the one that
-    // matters — the policy refusals — would be invisible.
+    // Each reason is reported differently — a policy refusal gets its own sentence, noise
+    // rides in the headline — and lumping them together would hide the one that matters.
     const sift = siftCandidates(
       [
         { url: 'https://boards.greenhouse.io/acme/jobs/1' },
@@ -344,5 +344,33 @@ describe('the naming heuristics', () => {
     expect(isHostFragment('Verne Robotics', 'https://jobs.ashbyhq.com/Verne%20Robotics/1')).toBe(
       false,
     );
+  });
+});
+
+describe('the counts that used to vanish', () => {
+  it('accounts for repeats and unreadable URLs in the headline', async () => {
+    // The sift counted four reasons and the docstring promised a sentence for each; only two
+    // ever appeared, so a run of mostly junk showed an unexplained gap between "named N" and
+    // "M read cleanly" with nothing explaining where the rest went.
+    h.answer = {
+      results: [
+        { url: 'https://boards.greenhouse.io/acme/jobs/1', title: 'A', company: 'A' },
+        { url: 'https://boards.greenhouse.io/acme/jobs/1?utm_source=x', title: 'A', company: 'A' },
+        { url: 'not a url', title: 'B', company: 'B' },
+      ],
+    };
+    const result = await webSearch.fetch({});
+    const headline = result.notes[0] ?? '';
+    expect(headline).toMatch(/named 3 pages/);
+    expect(headline).toMatch(/1 was a repeat/);
+    expect(headline).toMatch(/1 had a URL that could not be read/);
+    expect(headline).toMatch(/1 read cleanly/);
+  });
+
+  it('says nothing about noise when there was none', () => {
+    // A parenthetical on every ordinary run is the warning fatigue the rest of this avoided.
+    return webSearch.fetch({}).then((result) => {
+      expect(result.notes[0]).not.toMatch(/repeat|could not be read/);
+    });
   });
 });

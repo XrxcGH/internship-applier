@@ -128,10 +128,12 @@ export interface CandidateSift {
 /**
  * The model's answer reduced to the URLs this process is willing to fetch.
  *
- * Everything dropped is counted by reason, because each count becomes a sentence in the run
- * report: an aggregator link is a policy refusal, a malformed string is a model slip, and a
- * duplicate is ordinary search-result noise. Lumping them together as "some were skipped"
- * would make the one count that matters — the policy refusals — invisible.
+ * Everything dropped is counted by reason, because each reason is reported differently: an
+ * aggregator link is a policy refusal and gets a sentence of its own, the cap is a sampling
+ * bound and gets another, and a repeat or an unreadable URL is ordinary search-result noise
+ * that rides along in the headline. Lumping them together as "some were skipped" would make
+ * the one count that matters — the policy refusals — invisible; giving noise its own line on
+ * every ordinary run is the other way to make a report stop being read.
  */
 export function siftCandidates(
   results: Array<{ url?: unknown; title?: unknown; company?: unknown }>,
@@ -379,9 +381,31 @@ export const webSearch: JobSource = {
       }
     }
 
+    /**
+     * Repeats and unusable links, folded into the headline rather than given lines of their
+     * own.
+     *
+     * `siftCandidates` counts four reasons and its docstring promised each one "becomes a
+     * sentence in the run report"; only aggregators and the cap ever did, so a run where the
+     * model returned mostly junk showed an unexplained gap between "named N" and "M read
+     * cleanly" with nothing accounting for it. They go in the headline because the prompt
+     * asks the model to sweep several angles and this file's own docstring calls a duplicate
+     * "ordinary search-result noise" — a line of its own on every ordinary run is exactly the
+     * warning fatigue the rest of this change was about.
+     */
+    const aside = [
+      sift.duplicates > 0
+        ? `${sift.duplicates} ${sift.duplicates === 1 ? 'was a repeat' : 'were repeats'}`
+        : null,
+      sift.malformed > 0
+        ? `${sift.malformed} had ${sift.malformed === 1 ? 'a URL' : 'URLs'} that could not be read`
+        : null,
+    ].filter((x): x is string => x !== null);
+
     const notes: string[] = [
       `web_search: the model searched the live web and named ${parsed.data.results.length} ` +
-        `pages; ${postings.length} read cleanly. This tier samples what a search surfaces — ` +
+        `pages${aside.length > 0 ? ` (${aside.join(', ')})` : ''}; ` +
+        `${postings.length} read cleanly. This tier samples what a search surfaces — ` +
         'it is not a complete sweep of any board.',
     ];
     if (sift.aggregators > 0) {

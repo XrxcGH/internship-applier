@@ -608,6 +608,53 @@ describe('workday fetch', () => {
    * broke the walk, then failed `total > rows.length` so no gap was pushed: 960 unread
    * matches reported as a complete search, which is the exact silence `gaps` exists for.
    */
+  /**
+   * A page that fails partway must not cost the run the pages that succeeded.
+   *
+   * The fetch inside the walk was uncontained, so an HTTP error on a later page escaped the
+   * whole adapter and every row already read was discarded. That became far worse once the
+   * runner learned to treat a 404/410/422 as "this board address is gone" and switch the
+   * source row off: the user was told the address no longer answers, and the board was
+   * dropped from every future plan, about an address that had just answered twenty rows in
+   * the same call.
+   */
+  it('keeps the rows it read when a later page fails, and says where it stopped', async () => {
+    const stub = stubFetch((_url, body) => {
+      const { offset } = body as { offset: number };
+      if (offset >= 20) return new Response('gone', { status: 404 });
+      return {
+        total: 1000,
+        jobPostings: Array.from({ length: 20 }, (_, i) => ({
+          title: `Analyst ${offset + i}`,
+          externalPath: `/job/x/B${offset + i}`,
+        })),
+      };
+    });
+    try {
+      const result = await workday.fetch({ board: 'half@wd1/Ext', keywords: ['analyst'] });
+      expect(result.postings).toHaveLength(20);
+      expect(result.gaps?.join(' ')).toMatch(/offset 20 could not be read/);
+      expect(result.gaps?.join(' ')).toMatch(/Results before it are included/);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  /**
+   * ...but a first page that fails is the address itself being unreadable, and the error has
+   * to reach the runner so its judgement — and its disable — still stand.
+   */
+  it('rethrows when the FIRST page fails, so a dead address is still reported as dead', async () => {
+    const stub = stubFetch(() => new Response('gone', { status: 404 }));
+    try {
+      await expect(workday.fetch({ board: 'dead@wd1/Ext', keywords: ['analyst'] })).rejects.toThrow(
+        /404/,
+      );
+    } finally {
+      stub.restore();
+    }
+  });
+
   it('keeps the total the first page stated when a later page omits it', async () => {
     const stub = stubFetch((_url, body) => {
       const { offset } = body as { offset: number };

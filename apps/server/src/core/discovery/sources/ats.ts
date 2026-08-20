@@ -813,11 +813,39 @@ export const workday: JobSource = {
     // company's own careers page, and it answers only to POST — the jsonBody option
     // exists for exactly this shape (fetcher.ts).
     for (let offset = 0; ; offset += WORKDAY_PAGE) {
-      const data = await fetchJson<{ total?: unknown; jobPostings?: unknown }>(`${cxs}/jobs`, {
-        rps: 2,
-        timeoutMs: 15_000,
-        jsonBody: { appliedFacets: {}, limit: WORKDAY_PAGE, offset, searchText },
-      });
+      /**
+       * A page that fails partway keeps the rows already read, exactly as drift does below.
+       *
+       * The fetch used to sit uncontained, so an HTTP error on page three escaped the whole
+       * adapter: every row already fetched was discarded, and the runner — which now reads a
+       * 404/410/422 as "this board address is gone" and switches the source row off — told
+       * the user the address no longer answers about an address that had just answered
+       * twenty rows in the same call. The drift branch ten lines down already states the
+       * rule this was breaking: rows already fetched are real, and throwing them away
+       * reports less than we know.
+       *
+       * At offset 0 the address really is unreadable, so the error is rethrown and the
+       * runner's judgement stands.
+       */
+      let data: { total?: unknown; jobPostings?: unknown };
+      try {
+        data = await fetchJson<{ total?: unknown; jobPostings?: unknown }>(`${cxs}/jobs`, {
+          rps: 2,
+          timeoutMs: 15_000,
+          jsonBody: { appliedFacets: {}, limit: WORKDAY_PAGE, offset, searchText },
+        });
+      } catch (err) {
+        if (rows.length === 0) throw err;
+        // Stated out loud rather than left to `coverageGap`, which answers null when the
+        // board never declared a total — a board that died on page two would otherwise be
+        // reported as a complete read.
+        gaps.push(
+          `workday: the page at offset ${offset} could not be read ` +
+            `(${err instanceof Error ? err.message : String(err)}), so the walk stopped there. ` +
+            'Results before it are included.',
+        );
+        break;
+      }
       const drift = wrongShape('workday', data.jobPostings);
       if (drift) {
         // Drift on the first page means the endpoint could not be read at all. Drift on a
