@@ -3,6 +3,7 @@
  * Claude as bytes — see docs/02 § Notable stack decisions.
  */
 import { readFile } from 'node:fs/promises';
+import { readZipBounds } from './zipBounds';
 
 /**
  * What can actually be read.
@@ -77,21 +78,79 @@ export function extensionForMime(mime: string): string {
   }
 }
 
+/**
+ * What a .docx is allowed to weigh once unpacked.
+ *
+ * The 12 MB upload cap bounds the file, not the document: a zip can hold far more than it
+ * takes up. Measured on this app, a 944 KB .docx inflated to 394 MB, and reading it cost
+ * 15.7 seconds and 2.3 GB of RSS on a server that does one thing at a time.
+ *
+ * 64 MB is far above any real resume. The text of one runs to a few thousand characters, and
+ * embedded photographs are already-compressed JPEG or PNG, so they do not inflate on the way
+ * out. Anything reaching this number is not a document somebody wrote.
+ */
+const MAX_DOCX_UNPACKED_BYTES = 64 * 1024 * 1024;
+
+/**
+ * What any document is allowed to yield in text.
+ *
+ * The zip's declared sizes are what it SAYS, and a hostile archive can understate them, so
+ * this is the limit that does not depend on being told the truth. It also covers the formats
+ * that are not zips: a 12 MB .txt is bounded by the upload cap and by nothing else.
+ *
+ * 4 million characters is roughly a thousand pages. A fifty-page academic CV — the longest
+ * thing anyone legitimately uploads here — is around 150,000.
+ */
+const MAX_TEXT_CHARS = 4_000_000;
+
 /** Returns null for PDFs — they are passed to the model as bytes, not text. */
 export async function extractText(path: string, mime: string): Promise<string | null> {
   if (mime === 'application/pdf') return null;
 
   if (mime.includes('wordprocessingml')) {
+    const bytes = await readFile(path);
+    const bounds = readZipBounds(bytes);
+
+    // An unreadable directory is refused rather than passed along. The only caller hands this
+    // a file it has already accepted as a .docx, so "this is not a zip" means the type check
+    // upstream was fooled, and mammoth should not be the thing that finds that out.
+    if (!bounds) {
+      throw new Error('This .docx could not be read — its archive directory is missing.');
+    }
+    if (bounds.declaredBytes > MAX_DOCX_UNPACKED_BYTES) {
+      throw new Error(
+        `This .docx unpacks to ${Math.round(bounds.declaredBytes / 1024 / 1024)}MB, ` +
+          `over the ${MAX_DOCX_UNPACKED_BYTES / 1024 / 1024}MB limit. ` +
+          'Export it again from your word processor, or save it as a PDF.',
+      );
+    }
+
     const mammoth = await import('mammoth');
-    const { value } = await mammoth.extractRawText({ path });
-    return normalize(value);
+    // Handed the bytes already in memory rather than the path, so the file is read once.
+    const { value } = await mammoth.extractRawText({ buffer: bytes });
+    return normalize(bounded(value));
   }
 
   if (mime.startsWith('text/')) {
-    return normalize(await readFile(path, 'utf8'));
+    return normalize(bounded(await readFile(path, 'utf8')));
   }
 
   throw new Error(`Unsupported document type: ${mime}`);
+}
+
+/**
+ * The extracted text, or a refusal — never a silent truncation.
+ *
+ * Cutting it short and carrying on would send half a document to the model and produce a
+ * profile built from it, with nothing anywhere saying a word was missing. That is the one
+ * outcome this repo does not accept: a partial read reported as a complete one.
+ */
+function bounded(text: string): string {
+  if (text.length <= MAX_TEXT_CHARS) return text;
+  throw new Error(
+    `This document holds ${text.length.toLocaleString('en-US')} characters, far more than a ` +
+      'resume. Upload the resume itself rather than an archive or an export of one.',
+  );
 }
 
 /** U+00A0 non-breaking space — pervasive in Word exports, and it defeats naive \s matching. */
