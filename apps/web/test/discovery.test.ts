@@ -13,6 +13,7 @@ import {
   needsBoard,
   runHeadline,
   sourceLabel,
+  unavailableReason,
   splitCompanies,
   targetKey,
   whenLabel,
@@ -331,8 +332,14 @@ describe('keylessTargets', () => {
 
   it('offers every source that needs neither a key nor a board', () => {
     // The hard-coded version of this row offered the community list alone and went on
-    // doing so after Arbeitnow and Remotive shipped, so a run built by hand searched two
-    // keyless feeds fewer than the tool had and said nothing about it.
+    // doing so after Arbeitnow shipped, so a run built by hand searched a keyless feed
+    // fewer than the tool had and said nothing about it.
+    //
+    // Remotive is keyless and board-free and is deliberately NOT offered: its robots.txt
+    // refuses the path its adapter reads, so a one-press button for it answers every press
+    // with a refusal. It is excluded by having no `addReason`, which is what the filter now
+    // tests — it used to test mere presence in the facts table, so removing the reason left
+    // the button rendering under a fabricated caption.
     const list = keylessTargets([
       source('greenhouse'),
       source('workday'),
@@ -342,7 +349,7 @@ describe('keylessTargets', () => {
       source('remotive'),
       source('github_list'),
     ]);
-    expect(list.map((t) => t.source)).toEqual(['github_list', 'arbeitnow', 'remotive']);
+    expect(list.map((t) => t.source)).toEqual(['github_list', 'arbeitnow']);
     expect(list.every((t) => t.board === '')).toBe(true);
     expect(list.every((t) => t.reason !== '')).toBe(true);
   });
@@ -407,5 +414,36 @@ describe('accessBadge', () => {
 
   it('says no key needed for the keyless ones', () => {
     expect(accessBadge(src({ name: 'github_list', requiresKey: false }))).toBe('no key needed');
+  });
+});
+
+describe('a source that cannot contribute at all', () => {
+  const source = (name: string, requiresKey = false): AvailableSource => ({
+    name,
+    requiresKey,
+    configured: !requiresKey,
+  });
+
+  it('is not offered as a one-press button, however keyless it is', () => {
+    // Remotive passes every other test keylessTargets applies — no key, no board, known to
+    // the facts table — and its adapter still refuses before it sends a request. The gate is
+    // `addReason`: a source nobody has written a reason to offer has no one-press offer.
+    const list = keylessTargets([source('remotive'), source('github_list')]);
+    expect(list.map((t) => t.source)).not.toContain('remotive');
+  });
+
+  it('says why, where the source is listed', () => {
+    // The limitation is not deleted along with the button. A run failing is not the only
+    // place a coverage gap may be admitted, and it is the worst one.
+    expect(unavailableReason('remotive')).toMatch(/declines automated reads/i);
+    expect(unavailableReason('github_list')).toBeNull();
+  });
+
+  it('never captions an offer with a search that will not happen', () => {
+    // The fallback reason read "…, searched without a company", which was a claim, and false
+    // for the one source that ever reached it.
+    for (const t of keylessTargets([source('github_list'), source('arbeitnow')])) {
+      expect(t.reason, t.source).not.toMatch(/searched without a company/);
+    }
   });
 });

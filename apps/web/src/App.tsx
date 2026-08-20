@@ -98,6 +98,12 @@ export function App() {
             refresh();
             setView('queue');
           }}
+          // `refresh()` on this path too, and it is not optional: `confirmed` is derived from
+          // the health fetch, and the whole nav is locked on it until that answer arrives.
+          onFindPostings={() => {
+            refresh();
+            setView('discovery');
+          }}
         />
       );
     }
@@ -281,8 +287,14 @@ function Home({
 
       <footer className="a-rise a-step-8 mt-16">
         <hr className="u-rule a-draw a-step-8 mb-4" />
+        {/* Not "local only". Settings names six things that do leave this machine — the
+            job-source lookups, the resume when the model reads it, the search brief, a
+            posting's text, whatever is sent while drafting, and the application sites —
+            and the upload step says outright that a PDF is sent to the model. This was the
+            last line a new user reads on the landing screen, and it contradicted all of it. */}
         <p className="u-eyebrow">
-          local&nbsp;only&nbsp;· no&nbsp;telemetry&nbsp;· your&nbsp;machine
+          no&nbsp;telemetry&nbsp;· stored&nbsp;on&nbsp;your&nbsp;machine&nbsp;·
+          what&nbsp;leaves&nbsp;is&nbsp;listed&nbsp;in&nbsp;Settings
         </p>
       </footer>
     </Page>

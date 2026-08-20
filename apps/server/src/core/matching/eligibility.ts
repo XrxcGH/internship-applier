@@ -11,6 +11,7 @@
  * No model decides any of this. The LLM's only job upstream was to extract requirements
  * and quote them; the judgement is plain TypeScript over structured fields.
  */
+import { workLocations } from '@ia/shared';
 import type { ConfirmedProfile, JobRequirement, RuleResult } from '@ia/shared';
 import {
   ageFrom,
@@ -840,23 +841,31 @@ export function location({ profile, posting }: RuleInput): RuleResult {
     return unknown('location', 'The posting does not say where the role is based.');
   }
 
-  // Empty strings are the enemy of `includes`. The home city starts as '' and the wizard
-  // lets a user fill in the state alone, which made label.includes('') true and passed
-  // EVERY posting on earth with "within your commute area" — a confident sentence about a
-  // comparison that never happened. Same hole in an empty relocation target.
-  const city = prefs.base.city.trim().toLowerCase();
-  const base = `${prefs.base.city} ${prefs.base.region}`.toLowerCase().trim();
+  // Empty strings are the enemy of `includes`. A base city starts as '' and the wizard lets a
+  // user fill in the state alone, which made label.includes('') true and passed EVERY posting
+  // on earth with "within your commute area" — a confident sentence about a comparison that
+  // never happened. `workLocations` drops the empty ones; the same hole in an empty relocation
+  // target is guarded by the filter below.
+  //
+  // Every place the user can work from is checked, not only the home address: a student based
+  // at home AND at school should see a posting in either city as a match, not have the campus
+  // one come back "not your home city" for want of a place to compare it against.
+  const bases = workLocations(prefs).map((b) => ({
+    city: b.city.toLowerCase(),
+    label: `${b.city} ${b.region}`.toLowerCase().trim(),
+  }));
   const targets = prefs.relocateTo.map((t) => t.trim().toLowerCase()).filter(Boolean);
 
   const matches = posting.locations.some((l) => {
     const label = [l.city, l.region].filter(Boolean).join(' ').toLowerCase();
     if (!label) return false;
-    if (city && (label.includes(city) || base.includes(label))) return true;
+    if (bases.some((b) => b.city && (label.includes(b.city) || b.label.includes(label))))
+      return true;
     return targets.some((t) => label.includes(t) || t.includes(label));
   });
 
   if (matches) {
-    return pass('location', 'Within your commute area or a relocation target.', {
+    return pass('location', 'In one of your locations, or a relocation target.', {
       profileRef: 'locationPrefs',
     });
   }
@@ -870,7 +879,7 @@ export function location({ profile, posting }: RuleInput): RuleResult {
   // Guessing here would hide postings in a neighbouring town.
   return unknown(
     'location',
-    `Based in ${where}, which is not your home city or a stated relocation target. ` +
+    `Based in ${where}, which is not one of your locations or a stated relocation target. ` +
       'Distance cannot be measured without coordinates — check whether it works for you.',
     { evidence: where, profileRef: 'locationPrefs.base' },
   );

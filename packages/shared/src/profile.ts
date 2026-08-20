@@ -139,13 +139,89 @@ export const Availability = z.object({
   flexible: z.boolean().default(true),
 });
 
+/** One place the user can work in person, whether it is home, school, or somewhere temporary. */
+export const WorkLocation = z.object({
+  city: z.string(),
+  region: z.string(),
+  country: z.string().default('US'),
+  /** What the person calls it — "home", "school" — for their own reference. Never required. */
+  label: z.string().optional(),
+});
+
 export const LocationPrefs = z.object({
-  base: z.object({ city: z.string(), region: z.string(), country: z.string().default('US') }),
+  /**
+   * The primary place, and the one that is special: it is the home ADDRESS a resume prints
+   * and a form is filled from, so it stays a single required place rather than becoming one
+   * of a list. The others below are additional places the user can work from — a student who
+   * splits the year between home and campus, or takes a summer sublet — and they count for
+   * search and for the location match exactly as the base does, but they are not what goes on
+   * an application. `workLocations()` is the one reader that treats all of them as equals.
+   */
+  base: WorkLocation,
+  /** Additional in-person locations, equals to `base` for matching but not for form-filling. */
+  additionalBases: z.array(WorkLocation).default([]),
   maxCommuteKm: z.number().nonnegative().default(50),
   remoteOk: z.boolean().default(true),
   hybridOk: z.boolean().default(true),
+  /** Places the user would MOVE to for a role, as opposed to places they already work from. */
   relocateTo: z.array(z.string()).default([]),
 });
+
+/**
+ * Every in-person place the user can work from, base and additional bases alike, as
+ * "City Region" strings with the blanks trimmed out.
+ *
+ * The one place the "one home, many bases" distinction is collapsed: the location rule, the
+ * score and the query planner all ask the same question — "can they be here?" — and the
+ * answer is yes for any of these, so none of them should have to know which one is the
+ * address. A base with no city and no region contributes nothing rather than an empty string,
+ * because an empty string makes `includes('')` true for every posting on earth, and a row
+ * with a state but no city goes with it — see the filter.
+ */
+export function workLocations(prefs: LocationPrefs): Array<{ city: string; region: string }> {
+  // A CITY, not merely something typed. Every reader of this list compares on the city and
+  // discards a row without one — eligibility short-circuits on it, the score and the query
+  // planner both filter it out — so returning a region-only row promised the caller a place
+  // that nothing then searched or matched. Region alone cannot be compared safely anyway:
+  // matched as a substring, 'sunnyvale ca'.includes('ny') is true.
+  return [prefs.base, ...prefs.additionalBases]
+    .map((b) => ({ city: b.city.trim(), region: b.region.trim() }))
+    .filter((b) => b.city !== '');
+}
+
+/**
+ * Every role family the planner can search for, and the list the profile editor offers.
+ *
+ * Here rather than in the server's queryPlanner because both ends need it and a second copy
+ * would drift: the editor would offer a family the planner does not know, which stores a
+ * preference that silently searches for nothing. ROLE_TAXONOMY is typed against this, so a
+ * family added to one side fails the build on the other rather than going quiet.
+ */
+export const ROLE_FAMILIES = [
+  'software engineering',
+  'data science',
+  'machine learning',
+  'product management',
+  'design',
+  'hardware engineering',
+  'robotics',
+  'mechanical engineering',
+  'electrical engineering',
+  'civil engineering',
+  'biology',
+  'chemistry',
+  'finance',
+  'consulting',
+  'healthcare',
+  'education',
+  'journalism',
+  'public policy',
+  'marketing',
+  'operations',
+  'research',
+] as const;
+
+export type RoleFamily = (typeof ROLE_FAMILIES)[number];
 
 export const SeniorityBand = z.enum([
   'pre_college',
@@ -241,8 +317,23 @@ export const CandidateProfile = z.object({
       industries: z.array(z.string()).default([]),
       minStipend: z.number().optional(),
       excludeCompanies: z.array(z.string()).default([]),
+      /**
+       * The kinds of role to search for, when the user has said.
+       *
+       * Empty means "work it out from my resume", which is what every plan did unconditionally
+       * before this existed: `inferRoleFamilies` read the resume, the planner ADDED any filter
+       * the caller passed to that inference rather than letting it replace one, and so an
+       * inferred family could not be removed by any means the interface offered. A student
+       * whose resume mentions a coding class got software-engineering queries for as long as
+       * they owned the profile, whatever they were actually looking for.
+       *
+       * Non-empty REPLACES the inference outright. An explicit answer to "what are you looking
+       * for" is better evidence than anything read off a resume, and a preference the tool
+       * argues with is not a preference.
+       */
+      roleFamilies: z.array(z.string()).default([]),
     })
-    .default({ companySizes: [], industries: [], excludeCompanies: [] }),
+    .default({ companySizes: [], industries: [], excludeCompanies: [], roleFamilies: [] }),
   derived: DerivedProfile,
   /** Null until gate G1 passes. Nothing downstream may read an unconfirmed profile. */
   confirmedAt: z.string().datetime().nullable().default(null),
@@ -319,3 +410,5 @@ export type ConfirmedProfile = z.infer<typeof ConfirmedProfile>;
 export type StyleProfile = z.infer<typeof StyleProfile>;
 export type SeniorityBand = z.infer<typeof SeniorityBand>;
 export type AcademicLevel = z.infer<typeof AcademicLevel>;
+export type WorkLocation = z.infer<typeof WorkLocation>;
+export type LocationPrefs = z.infer<typeof LocationPrefs>;

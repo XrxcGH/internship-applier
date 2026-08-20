@@ -58,7 +58,7 @@ export function Applications({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <Page wide>
+    <Page>
       <RunningHead
         section="Applications"
         gate="G3"
@@ -215,7 +215,7 @@ function Detail({
 
   if (!app) {
     return (
-      <Page wide>
+      <Page>
         <Button onClick={onBack}>← Applications</Button>
         {error ? (
           <Notice tone="redline">{error}</Notice>
@@ -230,7 +230,7 @@ function Detail({
   const ready = app.answers.length > 0 && approved === app.answers.length;
 
   return (
-    <Page wide>
+    <Page>
       <div className="mb-8">
         <Button onClick={onBack}>← Applications</Button>
       </div>

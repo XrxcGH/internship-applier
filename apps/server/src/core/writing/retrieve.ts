@@ -158,14 +158,48 @@ export interface RetrieveOptions {
  */
 function identityEvidence(profile: ConfirmedProfile): Evidence | null {
   const name = profile.fullName?.trim() ?? '';
-  const base = profile.locationPrefs?.base;
+  const prefs = profile.locationPrefs;
+  const base = prefs?.base;
   const place = [base?.city, base?.region]
     .map((s) => s?.trim())
     .filter(Boolean)
     .join(', ');
-  if (!name && !place) return null;
 
-  const text = name && place ? `${name}, based in ${place}` : name || `Based in ${place}`;
+  /**
+   * Every place the user works from, because this line is the ONLY producer of the user's own
+   * location in the evidence corpus — no education or experience entry carries one.
+   *
+   * A student who added their school city at G1 wrote a true sentence about it and FactGuard
+   * returned a blocking `unsupported` — "Los Angeles does not appear anywhere on your
+   * profile" — at the one gate with no override, about a fact the profile now holds, offering
+   * a remedy the student had already carried out. That is the exact failure this function's
+   * own header records having fixed once for the home city; adding more places to the profile
+   * reopened it for all of them.
+   *
+   * The base is read separately and named as the address rather than taken as the first of
+   * the list. A profile with a blank base and one added city would otherwise print "based in
+   * ⟨that city⟩" — asserting an address the profile does not hold, in the one evidence item
+   * whose whole job is to be true.
+   */
+  const others = (prefs?.additionalBases ?? [])
+    .map((b) =>
+      [b.city, b.region]
+        .map((x) => x?.trim())
+        .filter(Boolean)
+        .join(', '),
+    )
+    .filter((label) => label !== '' && label !== place);
+
+  if (!name && !place && others.length === 0) return null;
+
+  const where = place
+    ? `based in ${place}` +
+      (others.length ? `, and also works in person from ${others.join('; ')}` : '')
+    : `works in person from ${others.join('; ')}`;
+  const hasWhere = place !== '' || others.length > 0;
+
+  const text =
+    name && hasWhere ? `${name}, ${where}` : name || where.replace(/^w/, (c) => c.toUpperCase());
   return { ref: 'identity', kind: 'identity', text, facts: {}, score: 1 };
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { bulletlessExperience, EducationLevel, isEmailShaped, lostTheEvidence } from '@ia/shared';
-import type { CandidateProfile, EducationEntry } from '@ia/shared';
+import type { CandidateProfile, EducationEntry, WorkLocation } from '@ia/shared';
 import * as api from '../lib/api';
 import {
   ANSWERED_IN_WIZARD,
@@ -17,6 +17,7 @@ import {
   LanguagesEditor,
   LinksEditor,
   ListEditor,
+  PreferencesEditor,
   ProjectsEditor,
   SkillsEditor,
 } from '../components/ProfileEditors';
@@ -430,9 +431,12 @@ export function mergeWithdrawn(
 export function Onboarding({
   onDone,
   onBusy,
+  onFindPostings,
 }: {
   onDone: () => void;
   onBusy?: (what: string | null) => void;
+  /** Absent in tests and in any host with no Discover screen; the button hides itself. */
+  onFindPostings?: () => void;
 }) {
   const [step, setStep] = useState<Step>('upload');
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
@@ -569,16 +573,26 @@ export function Onboarding({
     [patch],
   );
 
-  async function persist() {
-    if (!profile) return;
+  /**
+   * Saves, and says whether it worked.
+   *
+   * The boolean is what lets Continue save on the way past. It catches its own error and
+   * resolves either way — a caller chaining `.then(() => setStep('facts'))` would advance
+   * straight past a server rejection, which is the opposite of the guarantee the button now
+   * makes — so the outcome has to come back as a value rather than as a rejection.
+   */
+  async function persist(): Promise<boolean> {
+    if (!profile) return false;
     setBusy('Saving…');
     setError(null);
     try {
       const saved = await api.saveProfile(tidyProfileLists(profile));
       setProfile(saved.profile);
       setWithdrawn(saved.withdrawnApprovals);
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(null);
     }
@@ -810,6 +824,13 @@ export function Onboarding({
             />
             <LanguagesEditor profile={profile} flagged={flagged} edit={patch} editList={editList} />
             <LinksEditor profile={profile} flagged={flagged} edit={patch} editList={editList} />
+
+            <PreferencesEditor
+              preferences={profile.preferences}
+              onChange={(next) =>
+                patch((p) => ({ ...p, preferences: { ...p.preferences, ...next } }))
+              }
+            />
           </Section>
 
           {namelessNotice}
@@ -818,12 +839,21 @@ export function Onboarding({
             <Button disabled={busy !== null || nameless.length > 0} onClick={() => void persist()}>
               Save
             </Button>
+            {/* Saves on the way past, and only advances if the save took.
+                Continue used to move the step and nothing else, so an edit made here and
+                followed by Continue lived in React state alone: the nav bar blocks only on
+                `busy`, and leaving through it unmounts this component, so a corrected school
+                name or a chosen role family was gone with nothing on screen having said so. */}
             <Button
               variant="primary"
               disabled={busy !== null || nameless.length > 0}
-              onClick={() => setStep('facts')}
+              onClick={() => {
+                void persist().then((ok) => {
+                  if (ok) setStep('facts');
+                });
+              }}
             >
-              Continue
+              Save and continue
             </Button>
             {/* The way back to the dropzone. This screen is where anyone who already has a
                 profile now lands, so without it a new resume could never be uploaded a
@@ -928,7 +958,7 @@ export function Onboarding({
               />
               <TextField
                 label="Home city"
-                hint="Commute radius is measured from here. Remote postings ignore it."
+                hint="Your address, and the first place searched. Add others below."
                 value={profile.locationPrefs.base.city}
                 flagged={flagged('locationPrefs.base.city')}
                 onChange={(e) =>
@@ -962,6 +992,16 @@ export function Onboarding({
                 }
               />
             </div>
+
+            <WorkLocationsEditor
+              locations={profile.locationPrefs.additionalBases}
+              onChange={(next) =>
+                patch((p) => ({
+                  ...p,
+                  locationPrefs: { ...p.locationPrefs, additionalBases: next },
+                }))
+              }
+            />
           </Section>
 
           <Section n="04" title="Sign off" step={4}>
@@ -1037,16 +1077,27 @@ export function Onboarding({
             <p className="a-stamp u-data text-verified mb-3 text-lg tracking-widest uppercase">
               profile established
             </p>
-            {/* Not "discovery is unlocked". Confirming does unlock the queue, and there is
-              no discovery screen for it to unlock, so someone who took that sentence at
-              its word went looking for one. */}
-            <p className="text-dim">Matching and the queue are now unlocked.</p>
+            {/* This once read "matching and the queue", deliberately, because there was no
+              discovery screen to unlock and someone who read otherwise went looking for
+              one. There is now, and confirming is what lifts the 409 the discovery routes
+              answer an unconfirmed profile with, so the qualifier had become the wrong
+              half of the sentence. */}
+            <p className="text-dim">Searching is unlocked, and so is everything after it.</p>
           </div>
           {/* This screen leaves, rather than being left. Confirming used to navigate for
               the user, which meant the stamp above was rendered and unmounted in the same
-              breath and nobody ever saw it. */}
-          <div className="mt-5">
-            <Button variant="primary" onClick={onDone}>
+              breath and nobody ever saw it.
+
+              Discover leads, because the queue of a brand-new user is empty by construction:
+              nothing has been searched yet. Sending them to G2 first showed them an empty
+              state as the reward for finishing G1. */}
+          <div className="mt-5 flex flex-wrap gap-3">
+            {onFindPostings && (
+              <Button variant="primary" onClick={onFindPostings}>
+                Find postings
+              </Button>
+            )}
+            <Button variant={onFindPostings ? undefined : 'primary'} onClick={onDone}>
               Open the queue (G2)
             </Button>
           </div>
@@ -1411,4 +1462,85 @@ function Summary({ label, n, extra }: { label: string; n: number; extra?: string
 function lineLabel(lines: number): string {
   if (lines === 0) return 'no lines under them';
   return `${lines} ${lines === 1 ? 'line' : 'lines'} of detail`;
+}
+
+/**
+ * The places the user can work from besides their home address.
+ *
+ * A student is routinely reachable from more than one city — home over the summer, campus
+ * during term, a sublet for an internship they already took — and the profile held exactly
+ * one. Everything downstream then read that single city as the whole answer: the location
+ * rule told them a posting in their own college town was "not your home city", the score
+ * gave it 0.4 as though they had never heard of the place, and the query planner never
+ * searched it at all. So a posting they could have walked to ranked below a remote one.
+ *
+ * `base` stays separate above rather than becoming row zero here, because it is the ADDRESS
+ * a form is filled from — one field, always answered. These are for matching and searching,
+ * where every place counts the same; `workLocations()` in the shared package is the reader
+ * that puts them back on equal footing.
+ */
+export function WorkLocationsEditor({
+  locations,
+  onChange,
+}: {
+  locations: WorkLocation[];
+  onChange: (next: WorkLocation[]) => void;
+}) {
+  const edit = (index: number, field: keyof WorkLocation, value: string): void => {
+    onChange(locations.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
+  };
+
+  return (
+    <div className="mt-8">
+      <div className="mb-2 flex items-baseline justify-between gap-4">
+        <h3 className="u-eyebrow">Other places you can work</h3>
+        <span className="u-data text-faint">
+          {locations.length === 0 ? 'none' : `${locations.length} added`}
+        </span>
+      </div>
+      <p className="text-faint u-prose mb-4 text-[0.9375rem]">
+        School, a second home, anywhere you could take a job in person. Each one is searched and
+        matched exactly like your home city — give each a city, since a state on its own is not
+        enough to match a posting against. Remote and hybrid postings are accepted for you
+        everywhere, and this wizard has no control to turn either one off.
+      </p>
+
+      {locations.length > 0 && (
+        <ul className="mb-4 space-y-3">
+          {locations.map((loc, index) => (
+            <li key={index} className="u-card-flat px-5 py-4">
+              <div className="grid gap-4 sm:grid-cols-[1fr_8rem_10rem_auto] sm:items-end">
+                <TextField
+                  label="City"
+                  value={loc.city}
+                  onChange={(e) => edit(index, 'city', e.target.value)}
+                />
+                <TextField
+                  label="State"
+                  value={loc.region}
+                  onChange={(e) => edit(index, 'region', e.target.value)}
+                />
+                <TextField
+                  label="What it is"
+                  hint="Optional — for you"
+                  value={loc.label ?? ''}
+                  onChange={(e) => edit(index, 'label', e.target.value)}
+                />
+                <Button size="sm" onClick={() => onChange(locations.filter((_, i) => i !== index))}>
+                  Remove
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Button
+        size="sm"
+        onClick={() => onChange([...locations, { city: '', region: '', country: 'US' }])}
+      >
+        + Add a location
+      </Button>
+    </div>
+  );
 }

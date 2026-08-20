@@ -11,6 +11,7 @@ import { ulid } from 'ulid';
 import { db, schema } from '../../infra/db/client';
 import { logger } from '../../infra/logger';
 import { publish } from '../../infra/events';
+import { HttpError } from '../../infra/http/fetcher';
 import { ATS_SOURCES } from './sources/ats';
 import { AGGREGATOR_SOURCES } from './sources/aggregators';
 import { webSearch } from './sources/webSearch';
@@ -155,11 +156,57 @@ export async function runDiscovery(
           new: null,
         });
       } catch (err) {
+        /**
+         * A board address that answers "gone" heals the plan instead of haunting it.
+         *
+         * Every resolved board lives on as a `source` row, and rows are what future plans
+         * are built from — so a Workday board whose tenant or site name stopped answering
+         * re-entered every plan forever, failed every run, and each report carried a raw
+         * "422 Unprocessable Entity" the user could do nothing about except read it again
+         * next time. 404, 410 and 422 are the address itself being wrong, not the site
+         * having a bad day (a 5xx or a timeout changes nothing here), and only a target
+         * WITH a board is touched: a keyword source's row names no address to be wrong
+         * about, and disabling one on a stray 4xx would switch a whole source off.
+         */
         const message = err instanceof Error ? err.message : String(err);
-        report.errors.push(message);
+        const gone =
+          err instanceof HttpError && [404, 410, 422].includes(err.status) && target.board !== '';
+
+        /**
+         * Whether THIS run actually switched a row off, rather than whether it tried.
+         *
+         * The first version of this said "dropped from future plans" on the strength of the
+         * status code alone, and most of these targets have no row to drop: the planner
+         * builds five GUESSED vendor boards per pinned company, four of which 404 because the
+         * company was never on them. One pinned name therefore produced four paragraphs each
+         * asserting that an address had stopped answering and been removed, when neither had
+         * happened — a confident sentence about a thing the run did not do, which is the one
+         * kind of report this file exists to avoid. Scoping the update to rows still enabled
+         * makes `changes` mean exactly "this run switched it off".
+         */
+        let disabled = 0;
+        if (gone) {
+          const label = `${target.source}:${target.board}`;
+          disabled = db
+            .update(schema.source)
+            .set({ enabled: false })
+            .where(and(eq(schema.source.label, label), eq(schema.source.enabled, true)))
+            .run().changes;
+        }
+
+        const said =
+          disabled > 0
+            ? `${target.source}/${target.board}: this board address no longer answers ` +
+              `(HTTP ${(err as HttpError).status}), so it was dropped from future plans. If the ` +
+              'company moved its board, resolve it again in Discover.'
+            : gone
+              ? `${target.source}/${target.board}: no board of that name there ` +
+                `(HTTP ${(err as HttpError).status}), so nothing was searched on it.`
+              : `${target.source}/${target.board}: ${message}`;
+        report.errors.push(said);
         report.degraded = true;
-        skipped.push(`${target.source}/${target.board}: ${message}`);
-        logger.warn({ err, target }, 'discovery source failed');
+        skipped.push(said);
+        logger.warn({ err, target, disabled }, 'discovery source failed');
         publish({
           type: 'discovery.source_failed',
           runId,

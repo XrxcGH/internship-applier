@@ -9,6 +9,8 @@
  * curated taxonomy, so a bad inference can't send forty queries for a role the user has
  * no evidence for.
  */
+import { workLocations } from '@ia/shared';
+import type { RoleFamily } from '@ia/shared';
 import type { ConfirmedProfile, SearchFilters, SourceKind } from '@ia/shared';
 import { AGGREGATOR_SOURCES } from './sources/aggregators';
 import { slugCandidates } from './resolveCompany';
@@ -42,7 +44,7 @@ export interface QueryPlan {
  * Curated taxonomy. A role family only enters the plan if the profile actually evidences
  * it — this is the guard against a plan full of roles the user never did.
  */
-export const ROLE_TAXONOMY: Record<string, string[]> = {
+export const ROLE_TAXONOMY: Record<RoleFamily, string[]> = {
   // "engineer" is gone from this list: as a prefix stem it matched the word "Engineering"
   // inside science-FAIR names ("Sample Regional Science and Engineering Fair"), so a
   // debate-and-theatre student with a Behavioral Sciences award got software queries. The
@@ -386,27 +388,51 @@ export function planQueries(
   opts: { maxTargets?: number } = {},
 ): QueryPlan {
   const notes: string[] = [];
-  const roleFamilies = inferRoleFamilies(profile);
-  if (roleFamilies.length === 0) {
+
+  /**
+   * What the user SAID, or failing that what the resume suggests. Said wins outright.
+   *
+   * The inference used to be unconditional and the filter was merely added to it, so a family
+   * read off a resume could not be removed by any means the interface offered — a student
+   * whose resume mentions one coding class got software-engineering queries forever, and the
+   * only note on the subject told them to "set role families in the filters", which is the
+   * thing that did not work. An explicit answer to "what are you looking for" is better
+   * evidence than anything read off a resume.
+   *
+   * A per-request filter still wins over the stored preference, because it is the more recent
+   * and more specific statement of the same intent.
+   */
+  const chosen = filters.role.roleFamilies.length
+    ? filters.role.roleFamilies
+    : profile.preferences.roleFamilies;
+  const inferred = chosen.length > 0 ? [] : inferRoleFamilies(profile);
+  const roleFamilies = chosen.length > 0 ? chosen : inferred;
+
+  if (chosen.length > 0) {
+    notes.push(
+      `Searching for the ${chosen.length === 1 ? 'role family you chose' : `${chosen.length} role families you chose`}: ` +
+        `${chosen.join(', ')}. Your resume was not consulted for this — change it on your profile.`,
+    );
+  } else if (roleFamilies.length === 0) {
     notes.push(
       'No role family could be inferred from your profile, so keyword search will be broad. ' +
-        'Add skills or projects, or set role families in the filters.',
+        'Add skills or projects, or choose what you are looking for on your profile.',
     );
   }
 
   const locations = [
     ...(filters.location.cities.length
       ? filters.location.cities
-      : [profile.locationPrefs.base.city].filter(Boolean)),
+      : // Every place the user can work from seeds the keyword search, not only the home
+        // address — a student based at home and at school wants both cities searched.
+        workLocations(profile.locationPrefs).map((b) => b.city)),
     ...profile.locationPrefs.relocateTo,
     ...(profile.locationPrefs.remoteOk ? ['remote'] : []),
   ].filter(Boolean);
 
-  const keywords = [
-    ...roleFamilies,
-    ...filters.role.roleFamilies,
-    ...filters.role.titleIncludes,
-  ].filter(Boolean);
+  // `filters.role.roleFamilies` is not listed again: it is already `roleFamilies` above when
+  // it was set, and adding it a second time put every chosen family into the keyword list twice.
+  const keywords = [...roleFamilies, ...filters.role.titleIncludes].filter(Boolean);
 
   /**
    * Company targets the user pinned.
@@ -510,10 +536,15 @@ export function planQueries(
       source: 'arbeitnow',
       reason: 'the Arbeitnow public job feed, keyless and searched without a company',
     },
-    {
-      source: 'remotive',
-      reason: 'the Remotive remote-jobs feed, keyless and searched by keyword',
-    },
+    /**
+     * Remotive is deliberately NOT here, and the reason is its own robots.txt: the host asks
+     * automated clients to stay off the API path, the adapter honours that and reports the
+     * refusal — so planning it by default put a permanent "this search was not complete"
+     * warning on every run the user took the plan for, about a source that can never
+     * contribute until the site changes its mind. A standing refusal is not a coverage gap
+     * the user can act on; it is noise that teaches them to stop reading the warnings that
+     * matter. The adapter stays, honest as ever, for anyone who adds the source by hand.
+     */
   ];
   const keylessSources = new Set<PlannedTarget['source']>(KEYLESS_DEFAULTS.map((d) => d.source));
   const community: PlannedTarget[] = KEYLESS_DEFAULTS.filter(

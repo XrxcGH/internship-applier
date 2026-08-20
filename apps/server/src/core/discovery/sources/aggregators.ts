@@ -619,12 +619,16 @@ export const arbeitnow: JobSource = {
       }
     }
 
-    if (url !== null) {
-      gaps.push(
-        `arbeitnow: read the newest ${ARBEITNOW_MAX_PAGES} pages of the feed ` +
-          `(${rows.length} jobs) and stopped; older pages exist beyond that and were not read.`,
-      );
-    }
+    /**
+     * Remembered rather than reported here, because `notes` is declared further down. And a
+     * note — not a gap — deliberately: the feed is every job on the board newest first, and
+     * the page bound is this adapter's DESIGN. Reading deeper pages means reading staler
+     * postings, which for a jobs feed is coverage of the past. Reported as a gap it put
+     * "This search was not complete" on every ordinary run, and a warning that fires every
+     * time teaches the user to stop reading warnings. Gaps here are reserved for reads that
+     * FAILED — a page that would not parse, pagination that broke — as the pushes above are.
+     */
+    const moreBeyondTheBound = url !== null;
 
     // The internship filter runs over readable rows only. Running it over the raw array put
     // a `null` entry into arbeitnowIsInternship, which read `.job_types` off it and threw
@@ -654,6 +658,9 @@ export const arbeitnow: JobSource = {
       `arbeitnow: read ${usable.length} jobs, kept ${kept.length} internship-shaped, ` +
         `dropped ${usable.length - kept.length} that are not internships.`,
     ];
+    if (moreBeyondTheBound) {
+      notes.push(`arbeitnow: only the newest ${rows.length} jobs were read; older ones age out.`);
+    }
 
     const postings: NormalizedPosting[] = [];
     let unreadable = 0;

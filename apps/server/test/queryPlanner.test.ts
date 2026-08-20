@@ -13,7 +13,10 @@ import { AGGREGATOR_SOURCES } from '../src/core/discovery/sources/aggregators';
  * only enters a plan when the runner actually has its adapter, so the expectation here
  * has to move with the registry the same way the plan does.
  */
-const DEFAULT_KEYLESS = (['github_list', 'arbeitnow', 'remotive'] as const).filter(
+// Remotive is deliberately NOT a default: its robots.txt refuses the feed, so planning it
+// put a standing "not complete" warning on every run for a source that can never contribute.
+// See queryPlanner's KEYLESS_DEFAULTS comment.
+const DEFAULT_KEYLESS = (['github_list', 'arbeitnow'] as const).filter(
   (k) => k in AGGREGATOR_SOURCES,
 );
 
@@ -28,11 +31,15 @@ function profile(over: Record<string, unknown> = {}): ConfirmedProfile {
     education: [],
     locationPrefs: {
       base: { city: 'Boston', region: 'MA', country: 'US' },
+      additionalBases: [],
       maxCommuteKm: 50,
       remoteOk: true,
       hybridOk: true,
       relocateTo: [],
     },
+    // Not optional on ConfirmedProfile, and the planner now reads it on every call. The
+    // fixture casts through `unknown`, so omitting it typechecked and threw at runtime.
+    preferences: { companySizes: [], industries: [], excludeCompanies: [], roleFamilies: [] },
     ...over,
   } as unknown as ConfirmedProfile;
 }
@@ -708,5 +715,68 @@ describe('two spellings of one company', () => {
     const keys = plan.targets.map((t) => `${t.source}:${t.board}`);
     expect(new Set(keys).size).toBe(keys.length);
     expect(plan.targets.filter((t) => t.source === 'greenhouse')).toHaveLength(1);
+  });
+});
+
+/**
+ * The families the user CHOSE, which for the life of the project could not be un-chosen.
+ *
+ * `inferRoleFamilies` ran unconditionally and the planner ADDED any filter the caller passed
+ * to that inference rather than letting it replace one. So a resume that mentions a single
+ * coding class minted a software-engineering family, every plan searched for it, and no
+ * control anywhere could remove it — while the plan's own note advised "set role families in
+ * the filters", which is precisely the thing that did not work.
+ */
+describe('choosing what you are looking for', () => {
+  const coder = () =>
+    profile({
+      skills: [{ name: 'Python' }],
+      experience: [{ title: 'Intern', bullets: ['Wrote software in Python'] }],
+    });
+
+  it('infers from the resume when the user has chosen nothing', () => {
+    expect(planQueries(coder(), filters()).roleFamilies).toContain('software engineering');
+  });
+
+  it('REPLACES the inference rather than adding to it', () => {
+    const p = coder();
+    p.preferences = { ...p.preferences, roleFamilies: ['journalism'] };
+    const plan = planQueries(p, filters());
+    expect(plan.roleFamilies).toEqual(['journalism']);
+    // The point of the whole change: the inferred family is gone, not merely outvoted.
+    expect(plan.roleFamilies).not.toContain('software engineering');
+    expect(plan.keywords).not.toContain('software engineering');
+  });
+
+  it('says out loud that the resume was not consulted', () => {
+    const p = coder();
+    p.preferences = { ...p.preferences, roleFamilies: ['journalism'] };
+    expect(planQueries(p, filters()).notes.join(' ')).toMatch(/resume was not consulted/i);
+  });
+
+  it('lets a per-request filter win over the stored preference', () => {
+    // The more recent and more specific statement of the same intent.
+    const p = coder();
+    p.preferences = { ...p.preferences, roleFamilies: ['journalism'] };
+    const plan = planQueries(
+      p,
+      filters({ role: { roleFamilies: ['finance'], titleIncludes: [], titleExcludes: [] } }),
+    );
+    expect(plan.roleFamilies).toEqual(['finance']);
+  });
+
+  it('does not put a chosen family into the keyword list twice', () => {
+    // `filters.role.roleFamilies` used to be concatenated onto roleFamilies a second time.
+    const plan = planQueries(
+      coder(),
+      filters({ role: { roleFamilies: ['finance'], titleIncludes: [], titleExcludes: [] } }),
+    );
+    expect(plan.keywords.filter((k) => k === 'finance')).toHaveLength(1);
+  });
+
+  it('goes back to reading the resume when the choice is cleared', () => {
+    const p = coder();
+    p.preferences = { ...p.preferences, roleFamilies: [] };
+    expect(planQueries(p, filters()).roleFamilies).toContain('software engineering');
   });
 });

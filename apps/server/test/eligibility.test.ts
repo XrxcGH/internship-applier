@@ -39,12 +39,13 @@ function profile(over: Partial<ConfirmedProfile> = {}): ConfirmedProfile {
     availability: { start: '2027-06-01', end: '2027-08-20', flexible: true },
     locationPrefs: {
       base: { city: 'Boston', region: 'MA', country: 'US' },
+      additionalBases: [],
       maxCommuteKm: 50,
       remoteOk: true,
       hybridOk: true,
       relocateTo: [],
     },
-    preferences: { companySizes: [], industries: [], excludeCompanies: [] },
+    preferences: { companySizes: [], roleFamilies: [], industries: [], excludeCompanies: [] },
     derived: {
       age: 20,
       isMinor: false,
@@ -688,6 +689,48 @@ describe('citizenship', () => {
 });
 
 describe('location', () => {
+  /**
+   * More than one place to work from, which is the ordinary student shape: home over the
+   * summer, campus during term. The profile held exactly one city, so a posting in their own
+   * college town came back "not your home city" — an `unknown` the user had to triage by
+   * hand, on a role they could have walked to.
+   */
+  it('matches a posting in any place the user works from, not only the address', () => {
+    const p = profile({
+      locationPrefs: {
+        ...profile().locationPrefs,
+        base: { city: 'Half Moon Bay', region: 'CA', country: 'US' },
+        additionalBases: [{ city: 'Los Angeles', region: 'CA', country: 'US', label: 'school' }],
+      },
+    });
+    const o = evaluateEligibility(
+      input({
+        profile: p,
+        posting: posting({ locations: [{ city: 'Los Angeles', region: 'CA', remote: false }] }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('pass');
+  });
+
+  it('still asks about a city that is none of them', () => {
+    // Without coordinates a distance cannot be measured, so a place nobody named stays a
+    // question for the user rather than becoming a guess that hides a neighbouring town.
+    const p = profile({
+      locationPrefs: {
+        ...profile().locationPrefs,
+        base: { city: 'Half Moon Bay', region: 'CA', country: 'US' },
+        additionalBases: [{ city: 'Los Angeles', region: 'CA', country: 'US' }],
+      },
+    });
+    const o = evaluateEligibility(
+      input({
+        profile: p,
+        posting: posting({ locations: [{ city: 'Tallahassee', region: 'FL', remote: false }] }),
+      }),
+    );
+    expect(statusOf(o, 'location')).toBe('unknown');
+  });
+
   it('passes a remote posting when remote is acceptable', () => {
     const o = evaluateEligibility(
       input({ posting: posting({ workArrangement: 'remote', locations: [{ remote: true }] }) }),
@@ -831,6 +874,7 @@ describe('location', () => {
           locationPrefs: {
             ...profile().locationPrefs,
             base: { city: '', region: 'MA', country: 'US' },
+            additionalBases: [],
           },
         }),
         posting: posting({
@@ -848,6 +892,7 @@ describe('location', () => {
           locationPrefs: {
             ...profile().locationPrefs,
             base: { city: '', region: '', country: 'US' },
+            additionalBases: [],
             relocateTo: [''],
           },
         }),
@@ -1212,7 +1257,12 @@ describe('excluded_company', () => {
     const o = evaluateEligibility(
       input({
         profile: profile({
-          preferences: { companySizes: [], industries: [], excludeCompanies: ['acme'] },
+          preferences: {
+            companySizes: [],
+            roleFamilies: [],
+            industries: [],
+            excludeCompanies: ['acme'],
+          },
         }),
       }),
     );
@@ -1234,7 +1284,12 @@ describe('excluded_company', () => {
       const o = evaluateEligibility(
         input({
           profile: profile({
-            preferences: { companySizes: [], industries: [], excludeCompanies: [entry!] },
+            preferences: {
+              companySizes: [],
+              roleFamilies: [],
+              industries: [],
+              excludeCompanies: [entry!],
+            },
           }),
           posting: posting({ company: company! }),
         }),
@@ -1253,7 +1308,12 @@ describe('excluded_company', () => {
       const o = evaluateEligibility(
         input({
           profile: profile({
-            preferences: { companySizes: [], industries: [], excludeCompanies: [entry!] },
+            preferences: {
+              companySizes: [],
+              roleFamilies: [],
+              industries: [],
+              excludeCompanies: [entry!],
+            },
           }),
           posting: posting({ company: company! }),
         }),
@@ -1748,7 +1808,12 @@ describe('properties that must always hold', () => {
     input({ requirements: [req('education_level', { levels: ['doctorate'] })] }),
     input({
       profile: profile({
-        preferences: { companySizes: [], industries: [], excludeCompanies: ['acme'] },
+        preferences: {
+          companySizes: [],
+          roleFamilies: [],
+          industries: [],
+          excludeCompanies: ['acme'],
+        },
       }),
     }),
   ];

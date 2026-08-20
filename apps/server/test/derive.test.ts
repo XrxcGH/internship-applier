@@ -33,12 +33,13 @@ function profile(over: Partial<CandidateProfile> = {}): CandidateProfile {
     availability: { flexible: true },
     locationPrefs: {
       base: { city: 'X', region: 'Y', country: 'US' },
+      additionalBases: [],
       maxCommuteKm: 50,
       remoteOk: true,
       hybridOk: true,
       relocateTo: [],
     },
-    preferences: { companySizes: [], industries: [], excludeCompanies: [] },
+    preferences: { companySizes: [], roleFamilies: [], industries: [], excludeCompanies: [] },
     derived: {
       age: null,
       isMinor: false,
