@@ -260,7 +260,10 @@ function Detail({
         {app.canDraft ? (
           <Badge tone="verified">{app.modelAccess.description}</Badge>
         ) : (
-          <Badge tone="caution">no model — write answers yourself</Badge>
+          /* A state, not an explanation. The notice immediately below is the only place the
+             workaround needs describing, and this said the same thing in the same words —
+             the reader met one reassurance twice before reaching a control. */
+          <Badge tone="caution">no model</Badge>
         )}
       </div>
 
@@ -318,7 +321,11 @@ function Detail({
       </Section>
 
       <Section n="02" title="Add a question" step={4}>
+        {/* A real label, not a placeholder standing in for one. A placeholder is the
+            accessible name only until the box has text in it, at which point the control
+            goes nameless — and it disappears visually the moment anyone starts typing. */}
         <TextArea
+          label="The question, as the form asks it"
           value={newQuestion}
           onChange={(e) => setNewQuestion(e.target.value)}
           rows={3}
@@ -374,7 +381,11 @@ function Detail({
           blockedReason={
             app.answers.length === 0
               ? 'Add the form’s questions above and approve an answer for each one first.'
-              : `${app.answers.length - approved} of ${app.answers.length} answers still need your approval (gate G3).`
+              : // Not a second count. The header badge already says how many are approved,
+                // counting UP; this counted DOWN over the same two numbers, so a reader had
+                // to subtract to satisfy themselves the two sentences were one fact.
+                'Every answer needs your approval at gate G3 before the form can be filled — ' +
+                'the count is at the top of this page.'
           }
           submittedAt={submittedAt}
           // Read back from the application rather than from the fill run, which is why it

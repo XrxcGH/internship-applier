@@ -31,6 +31,33 @@ import { Badge, Button, Empty, Notice, TextField } from '../components/Controls'
  * irreversible action easy to trigger is not good design.
  */
 
+/**
+ * What a model call was for, in the student's words.
+ *
+ * The ledger printed the internal purpose enum with its underscores swapped for spaces —
+ * `resume_extraction` became "resume extraction", which reads almost like English and is
+ * probably why it survived, but `fact_guard`, `style_critic` and `web_discovery` do not. This
+ * is the screen that answers "what has this cost me", and the rows naming the charges were
+ * module names.
+ *
+ * An unknown purpose falls back to the old de-underscoring rather than to nothing: a purpose
+ * added later should read awkwardly here, not disappear from a bill.
+ */
+const PURPOSE_LABELS: Record<string, string> = {
+  resume_extraction: 'Reading your resume',
+  requirement_extraction: 'Reading what a posting requires',
+  field_classification: 'Reading a form',
+  answer_draft: 'Drafting an answer',
+  web_discovery: 'Searching the web for postings',
+  fact_guard: 'Checking a draft against your profile',
+  style_critic: 'Checking a draft against your writing',
+  rationale: 'Explaining a match',
+};
+
+function purposeLabel(purpose: string): string {
+  return PURPOSE_LABELS[purpose] ?? purpose.replace(/_/g, ' ');
+}
+
 function money(usd: number): string {
   if (usd === 0) return '$0';
   if (usd < 0.01) return `$${usd.toFixed(4)}`;
@@ -212,7 +239,7 @@ export function Settings() {
               <div className="u-card-flat divide-rule/60 divide-y px-5 py-1">
                 {costs.byPurpose.map((p) => (
                   <div key={p.purpose} className="flex items-baseline justify-between gap-6 py-2.5">
-                    <span className="text-base">{p.purpose.replace(/_/g, ' ')}</span>
+                    <span className="text-base">{purposeLabel(p.purpose)}</span>
                     <span className="u-data text-dim">
                       {p.calls} {p.calls === 1 ? 'call' : 'calls'} · {money(p.usd)}
                     </span>

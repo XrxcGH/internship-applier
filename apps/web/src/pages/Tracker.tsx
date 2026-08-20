@@ -65,11 +65,22 @@ function RateFigure({ label, rate }: { label: string; rate: Rate }) {
 
 function Card({
   app,
+  column,
   onStatus,
   onDraft,
   busy,
 }: {
   app: TrackedApp;
+  /**
+   * The column this card is sitting in, so it can decline to repeat it.
+   *
+   * The board partitions by `derived.effectiveStatus` and every card then badged that same
+   * field — so under "Ready for you" every card read "awaiting submit", and under "Talking"
+   * every card read "interview". One fact, stated twice, on every card in two of the five
+   * columns. Where a column holds several statuses the badge does distinguish something, and
+   * there it stays.
+   */
+  column: { label: string; statuses: string[] };
   onStatus: (status: string) => void;
   onDraft: () => void;
   busy: boolean;
@@ -91,9 +102,11 @@ function Card({
       )}
 
       <div className="border-rule mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
-        <Badge tone={tone === 'neutral' ? undefined : tone}>
-          {app.derived.effectiveStatus.replace(/_/g, ' ')}
-        </Badge>
+        {column.statuses.length > 1 && (
+          <Badge tone={tone === 'neutral' ? undefined : tone}>
+            {app.derived.effectiveStatus.replace(/_/g, ' ')}
+          </Badge>
+        )}
         {app.source && <Badge>{app.source}</Badge>}
       </div>
 
@@ -277,6 +290,7 @@ export function Tracker() {
                           <Card
                             key={a.id}
                             app={a}
+                            column={col}
                             busy={busy === a.id}
                             onStatus={(s) => void report(a.id, s)}
                             onDraft={() => void showDraft(a.id)}

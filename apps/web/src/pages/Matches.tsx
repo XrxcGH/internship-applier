@@ -423,13 +423,16 @@ export function Matches({
                   <div className="u-card px-5 py-5">
                     <h3 className="u-display mb-1 text-3xl">{detail.posting.title}</h3>
                     <p className="text-dim">{detail.posting.company}</p>
-                    <dl className="u-data text-faint border-rule mt-4 flex flex-wrap gap-x-5 gap-y-1.5 border-t pt-3 text-2xs">
-                      <span>{locationLabel(current)}</span>
-                      <span>{termLabel(detail.posting.term)}</span>
-                      <span>{payLabel(detail.posting.compensation)}</span>
-                      <span>{detail.posting.positionType ?? 'type not stated'}</span>
-                      <span>{detail.posting.atsVendor}</span>
-                    </dl>
+                    {/* A <ul>, not a <dl>. These are five facts about one posting, not five
+                        term/definition pairs, and a description list whose children are bare
+                        spans announces itself as a definition list containing nothing. */}
+                    <ul className="u-data text-faint border-rule mt-4 flex flex-wrap gap-x-5 gap-y-1.5 border-t pt-3 text-2xs">
+                      <li>{locationLabel(current)}</li>
+                      <li>{termLabel(detail.posting.term)}</li>
+                      <li>{payLabel(detail.posting.compensation)}</li>
+                      <li>{detail.posting.positionType ?? 'type not stated'}</li>
+                      <li>{detail.posting.atsVendor}</li>
+                    </ul>
                     <p className="mt-5 u-prose text-base leading-relaxed">
                       {detail.match.rationale}
                     </p>
