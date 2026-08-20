@@ -149,9 +149,17 @@ The worst case for one resolve is eleven requests per slug candidate — five GE
 Workday POSTs — and `slugCandidates` yields at most three candidates, so a resolve tops
 out at 33 probes.
 
-A board that answered is written down. `resolveCompany` itself still writes nothing — it
-probes and returns — but `POST /api/companies/resolve` records each match as a `source` row,
-and that row is the only way a resolved board reaches the query planner. It used to be
+A board that answered under the company's FULL NAME is written down. `resolveCompany` itself
+still writes nothing — it probes and returns — but `POST /api/companies/resolve` records each
+such match as a `source` row,
+and that row is the only way a resolved board reaches the query planner.
+
+A match found only under the company's first word is shown to the user and deliberately NOT
+written down (`if (!m.fromFullName) continue`). "Vector Health" reduces to the slug "vector",
+and `ashby:vector` is a real board with real openings belonging to somebody else — persisted,
+it would become an enabled source row the student cannot tell from a real resolution, and the
+plan chip would then state it as fact. One press of "Find their boards" resolves up to eight
+names at once. It used to be
 written by the discovery run instead, once per persisted posting, so a board only became a
 plan target if the user re-typed it into the run list, ran it, and that run came back with
 at least one posting. A Workday board resolved outside internship season returns nothing and

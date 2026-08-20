@@ -275,7 +275,11 @@ interface's em-dash rate from 1.13 to 0.32 per 100 words.
 - Em-dash density above the user's measured rate.
 - Uniform sentence length (stdev below the user's measured floor).
 
-Each flag is a UI suggestion with a one-click "rewrite this span" action.
+Each flag is shown with its note and the span it refers to, quoted. **Not built:** the
+one-click "rewrite this span" action this line used to promise. `AnswerReview.tsx` is the only
+place flags are rendered and all three families — blocking claims, AI tells, style drift — are
+static lists; the editing affordances on that card are a whole-answer Edit and a Redraft.
+Fixing one flag means editing the answer.
 
 ## G3 — The review gate
 

@@ -476,10 +476,11 @@ export function Discovery({
           />
         </div>
 
+        {/* One button, not two. This row also held "Rebuild the plan with these", which
+            called `refresh(pinned)` — the identical call section 02's "Rebuild" makes, with
+            the identical argument. Two names for one action, described in the prose below as
+            though they did different things. */}
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <Button disabled={busy !== null || pinned.length === 0} onClick={() => refresh(pinned)}>
-            Rebuild the plan with these
-          </Button>
           <Button
             variant="primary"
             disabled={busy !== null || pinned.length === 0}
@@ -493,12 +494,12 @@ export function Discovery({
         </div>
 
         <p className="text-faint u-prose mt-4 text-sm">
-          Rebuilding the plan guesses each name as a slug on Greenhouse, Lever, Ashby,
+          Rebuilding the plan above guesses each name as a slug on Greenhouse, Lever, Ashby,
           SmartRecruiters and Workable, and says in a note that it guessed. Finding the boards asks
           those five, and Workday as well, which one the company really uses and how many jobs it
-          has open today. Workday is never guessed, because its address is a tenant and a site name
-          the company chose rather than anything you can build from a company name. The second
-          button is slower and it is the one that gives you a target worth running.
+          has open today — slower, and the one that gives you a target worth running. Workday is
+          never guessed either way, because its address is a tenant and a site name the company
+          chose rather than anything you can build from a company name.
         </p>
 
         {resolveNote && <Notice tone="caution">{resolveNote}</Notice>}

@@ -249,8 +249,11 @@ posting on every render would be a different answer from the one the user was sh
 
 `application_event`: `id`, `application_id`, `type`, `payload` json, `at`.
 
-The types the code actually writes are `created`, `answer_approved`, `filled`,
-`marked_submitted` and `status_changed`. This list previously named `answers_drafted`,
+The types the code actually writes are `created`, `answer_approved`, `approval_withdrawn`,
+`filled`, `marked_submitted` and `status_changed`. `approval_withdrawn` records that an
+answer's `approved_at` was cleared because it stopped passing FactGuard against the profile as
+it now stands — written by the fill-run precheck and by the profile-write sweep, so a student
+who edits their profile after approving an answer can find out why the approval went. This list previously named `answers_drafted`,
 `submitted`, `email_received` and `note` — none of which anything emits — and spelled
 `answer_approved` as a plural, so a reader grepping for the documented name found nothing.
 Email ingestion is not built; see docs/11.
