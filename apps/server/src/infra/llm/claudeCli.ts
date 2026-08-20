@@ -556,11 +556,15 @@ export const claudeCliBackend: Backend = {
           'could not parse Claude CLI output',
         );
         throw new NoModelAccessError(
+          // Reason 'unreadable': the CLI is installed, signed in and answering — it is the SHAPE
+          // of the answer that changed. Telling this user to set up model access would send
+          // them to fix the one thing that is demonstrably working.
           'The Claude CLI ran but returned something this app could not read. It may have been ' +
             'updated to a different output format.\n\n' +
             `Exit code: ${String(r.code)}\n` +
             `Output began: ${r.stdout.slice(0, 200) || '(empty)'}\n` +
             `Errors: ${r.stderr.slice(0, 200) || '(none)'}`,
+          'unreadable',
         );
       }
 

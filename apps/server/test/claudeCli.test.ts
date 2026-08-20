@@ -377,3 +377,116 @@ describe('the message matchers on their own', () => {
     expect(usageLimitMessage('I have no limits on my availability')).toBeNull();
   });
 });
+
+/**
+ * WHY a call could not be made, which for most of this session was a question the caller
+ * could not ask.
+ *
+ * One error class carried seven situations and every caller could do was re-render its
+ * message or fall back to advice about signing in. The web-search source did the latter, so a
+ * run that TIMED OUT told a signed-in student to sign in — a wrong diagnosis with a confident
+ * remedy, on the channel the repo keeps for admitting what it did not do. These pin the
+ * discriminator each failure carries, because the advice downstream is chosen from it.
+ */
+describe('why a model call failed', () => {
+  it('separates a setup problem from a working setup that broke', async () => {
+    // `isSetupProblem` is the whole point: it decides between "go and configure something"
+    // and "something went wrong", and only the first three reasons mean the former.
+    writeFakeCli('not_logged_in');
+    await expect(
+      claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' }),
+    ).rejects.toMatchObject({ reason: 'not_signed_in', isSetupProblem: true });
+  });
+
+  it('calls a usage limit what it is, and does not call it missing access', async () => {
+    // A cap comes back on its own; telling someone to sign in again fixes nothing and
+    // suggests their credentials are the problem when they are not.
+    writeFakeCli('usage_limit');
+    await expect(
+      claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' }),
+    ).rejects.toMatchObject({ reason: 'usage_limit', isSetupProblem: false });
+  });
+
+  it('marks a non-zero exit as the CLI erroring, not as absent access', async () => {
+    writeFakeCli('crash');
+    await expect(
+      claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' }),
+    ).rejects.toMatchObject({ reason: 'cli_error', isSetupProblem: false });
+  });
+
+  it('marks unreadable output as unreadable', async () => {
+    writeFakeCli('garbage');
+    await expect(
+      claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' }),
+    ).rejects.toMatchObject({ reason: 'unreadable', isSetupProblem: false });
+  });
+
+  it('names the timeout branch as timed_out rather than as missing access', () => {
+    // Asserted against the source, not by waiting one out. `config` is parsed once at import,
+    // so CLAUDE_CLI_TIMEOUT_MS cannot be lowered from inside a test — the hanging binary would
+    // have to be waited out for the full configured ceiling, which is minutes. The branch is
+    // three lines long and the discriminator on it is the whole point: this is the case that
+    // shipped wrong, where a killed 32-turn sweep told a signed-in student to sign in.
+    const src = readFileSync(new URL('../src/infra/llm/claudeCli.ts', import.meta.url), 'utf8');
+    // A slice, not a regex: a lazy match for the closing brace stops at the one inside the
+    // template literal on the line above it.
+    const at = src.indexOf('if (r.timedOut) {');
+    const branch = at < 0 ? '' : src.slice(at, at + 400);
+    expect(branch).toMatch(/NoModelAccessError/);
+    expect(branch).toMatch(/'timed_out'/);
+  });
+
+  it('every reason a NoModelAccessError can carry is one of the seven declared', async () => {
+    // The type is a union and TypeScript checks the throw sites, but the two consumers pick
+    // their wording off `isSetupProblem` — so a reason added later without a decision about
+    // which side of that line it falls on would silently inherit "something went wrong".
+    for (const behaviour of ['not_logged_in', 'usage_limit', 'crash', 'garbage'] as const) {
+      writeFakeCli(behaviour);
+      const err = await claudeCliBackend
+        .generate({ purpose: 'answer_draft', system: 's', user: 'u' })
+        .then(() => null)
+        .catch((e: unknown) => e as NoModelAccessError);
+      expect(err, behaviour).toBeInstanceOf(NoModelAccessError);
+      expect(
+        [
+          'unavailable',
+          'not_signed_in',
+          'no_key',
+          'usage_limit',
+          'timed_out',
+          'cli_error',
+          'unreadable',
+        ],
+        behaviour,
+      ).toContain(err!.reason);
+      expect(typeof err!.isSetupProblem, behaviour).toBe('boolean');
+    }
+  });
+});
+
+/**
+ * A sweep is not the same shape of call as a draft, and one ceiling could not fit both.
+ *
+ * Asserted against the source, because the ceiling is applied inside a private helper and
+ * proving it at runtime would mean actually waiting out a multi-minute timeout. What matters
+ * is that the multiplier exists and is keyed on `webSearch` — the property that was missing
+ * when the turn budget was raised to 32 and the ceiling was left at a one-shot 180s.
+ */
+describe('how long a call is given', () => {
+  it('gives a web-search call more room than a single-turn one', () => {
+    const src = readFileSync(new URL('../src/infra/llm/claudeCli.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/function ceilingFor\(/);
+    expect(src).toMatch(/req\.webSearch === true \? 5 : 1/);
+    // Scaled from the configured value rather than replacing it, so raising
+    // CLAUDE_CLI_TIMEOUT_MS still raises both.
+    expect(src).toMatch(/config\.llm\.cliTimeoutMs \* \(req\.webSearch/);
+  });
+
+  it('passes that ceiling to the process rather than reading the config again', () => {
+    // The timer used to read `config.llm.cliTimeoutMs` directly, which is why a per-call
+    // ceiling could not exist at all.
+    const src = readFileSync(new URL('../src/infra/llm/claudeCli.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/}, timeoutMs\);/);
+    expect(src).toMatch(/await run\(c, args, stdin, timeoutMs\)/);
+  });
+});
