@@ -523,7 +523,17 @@ export const claudeCliBackend: Backend = {
        * "unauthorized" was thrown away and reported to the user as an exhausted
        * subscription. An answer about a rate-limiting project is not a rate-limit error.
        */
-      if (env?.is_error !== false) {
+      /**
+       * The same definition of failure the throw seventeen lines below uses.
+       *
+       * `is_error !== false` is true whenever the field is ABSENT, and `CliEnvelope` declares
+       * every field optional on purpose — "this contract belongs to a separately released
+       * program" — so absence is a shape this file explicitly plans for. An exit-0 run whose
+       * envelope simply omitted the flag therefore had the model's own answer scanned for
+       * sign-in and usage-limit phrases, which is the exact mistake the comment above records
+       * having already fixed once: an answer ABOUT a rate limit is not a rate-limit error.
+       */
+      if (env?.is_error === true || r.code !== 0) {
         const combined = `${env ? extractText(env) : r.stdout}\n${r.stderr}`;
         const notSignedIn = notLoggedInMessage(combined);
         if (notSignedIn) {
@@ -582,7 +592,11 @@ export const claudeCliBackend: Backend = {
       recordCall({
         purpose: req.purpose,
         model: CLI_MODEL,
+        // The CLI reports no token counts, and CLI_MODEL is deliberately absent from PRICING,
+        // so there is nothing here to price from — which is why the cost has to come from the
+        // envelope. Without it every CLI call was written down as costing exactly zero.
         usage: { input_tokens: 0, output_tokens: 0 },
+        reportedUsd: typeof env.total_cost_usd === 'number' ? env.total_cost_usd : undefined,
         latencyMs,
         stopReason: env.subtype ?? null,
       });

@@ -167,16 +167,18 @@ describe('what the adapter actually runs', () => {
    * reports "No model calls yet." however much work it has done. That was the state for
    * the CLI path, which is the one most users are on.
    */
-  it('records the call in the ledger, at no cost', async () => {
+  it('records the call in the ledger, at the cost the CLI reported', async () => {
     writeFakeCli('ok');
     await claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' });
 
     const rows = db.select().from(schema.llmCall).all();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.purpose).toBe('answer_draft');
-    // A subscription is not billed per token, and the CLI does not say which model
-    // answered, so the row is a count and a latency rather than a price.
-    expect(rows[0]?.costUsd).toBe(0);
+    // This asserted 0, on the reasoning that a subscription is not billed per token. True,
+    // and beside the point: the CLI puts `total_cost_usd` on every envelope, and writing the
+    // row as costing exactly nothing made Settings show real work under "$0" — which is not
+    // the same claim as "your subscription covers this". Stored as micro-dollars.
+    expect(rows[0]?.costUsd).toBe(10_000);
   }, 60_000);
 
   it('passes a JSON schema through when one is asked for', async () => {
@@ -488,5 +490,89 @@ describe('how long a call is given', () => {
     const src = readFileSync(new URL('../src/infra/llm/claudeCli.ts', import.meta.url), 'utf8');
     expect(src).toMatch(/}, timeoutMs\);/);
     expect(src).toMatch(/await run\(c, args, stdin, timeoutMs\)/);
+  });
+});
+
+/**
+ * The web-search invocation, whose properties carry the tier's whole safety argument.
+ *
+ * The argv was pinned for the no-tool path and the document path and never once for this one,
+ * though it is the branch that grants a tool at all. `webSearch.ts` tells the reader "this
+ * machine fetches nothing here" and "the tool that could read repository files stays
+ * ungranted" — both are claims about these two arguments.
+ */
+describe('what the adapter runs for a web search', () => {
+  it('grants WebSearch and nothing else', async () => {
+    writeFakeCli('ok');
+    await claudeCliBackend.generate({
+      purpose: 'web_discovery',
+      system: 's',
+      user: 'u',
+      webSearch: true,
+    });
+    const { argv } = invocation();
+    const at = argv.indexOf('--allowedTools');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(argv[at + 1]).toBe('WebSearch');
+    // Read is what would let the model open files on this machine. It is granted on the
+    // resume path and must not be granted here.
+    expect(argv).not.toContain('Read');
+    expect(argv).not.toContain('--add-dir');
+  });
+
+  it('gives it the turns a sweep needs, not a single-shot budget', async () => {
+    // The prompt asks for several searches across different angles; one turn cannot do it.
+    writeFakeCli('ok');
+    await claudeCliBackend.generate({
+      purpose: 'web_discovery',
+      system: 's',
+      user: 'u',
+      webSearch: true,
+    });
+    const { argv } = invocation();
+    const turns = Number(argv[argv.indexOf('--max-turns') + 1]);
+    expect(turns).toBeGreaterThan(1);
+  });
+
+  it('still grants nothing at all on an ordinary draft', () => {
+    // The other direction, which is the property the default protects.
+    writeFakeCli('ok');
+    return claudeCliBackend
+      .generate({ purpose: 'answer_draft', system: 's', user: 'u' })
+      .then(() => {
+        const { argv } = invocation();
+        expect(argv[argv.indexOf('--allowedTools') + 1]).not.toBe('WebSearch');
+        expect(Number(argv[argv.indexOf('--max-turns') + 1])).toBe(1);
+      });
+  });
+});
+
+/**
+ * What the ledger is told a call cost.
+ *
+ * The CLI reports `total_cost_usd` on every envelope. This backend read it, logged it, and
+ * returned it on a field nothing consumes — while writing the ledger a hardcoded zero token
+ * count against a model name deliberately absent from PRICING, so every CLI call was recorded
+ * as costing exactly nothing. Settings then showed real work under "$0", which is not the same
+ * claim as "your subscription covers this" and reads as a tool that has lost count.
+ */
+describe('what a CLI call is recorded as costing', () => {
+  it('writes down what the CLI itself reported', async () => {
+    writeFakeCli('ok');
+    await claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' });
+    const rows = db.select().from(schema.llmCall).all();
+    expect(rows).toHaveLength(1);
+    // The fake reports 0.01, which the ledger stores as micro-dollars.
+    expect(rows[0]?.costUsd).toBe(10_000);
+  });
+
+  it('does not silently price a CLI call from token counts it never reports', async () => {
+    // CLI_MODEL is absent from PRICING on purpose. Falling back to that lookup is what
+    // produced the zero.
+    writeFakeCli('ok');
+    await claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' });
+    const row = db.select().from(schema.llmCall).all()[0];
+    expect(row?.inputTokens).toBe(0);
+    expect(row?.costUsd).toBeGreaterThan(0);
   });
 });

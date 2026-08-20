@@ -11,6 +11,7 @@
  */
 import { desc } from 'drizzle-orm';
 import { db, schema } from '../../infra/db/client';
+import { CLI_MODEL } from '../../infra/llm/client';
 
 const MICRO = 1_000_000;
 
@@ -72,16 +73,42 @@ export function computeCosts(): CostSummary {
     }))
     .sort((a, b) => b.usd - a.usd);
 
+  /**
+   * What the total actually means, which depends on which backend spent it.
+   *
+   * This had two branches: a non-zero total was reported as money, and a zero total was
+   * explained as "none of them billed per token — they ran through the Claude Code CLI". That
+   * second branch was reached because every CLI call was written to the ledger as costing
+   * exactly nothing, which was a bug rather than a fact. The CLI reports `total_cost_usd` on
+   * every envelope and those figures are recorded now, so a CLI-only user has a non-zero total
+   * that is NOT a bill — it is what the work would have cost, drawn against a subscription
+   * they have already paid for.
+   *
+   * Saying "$4.10 in total" to that user would be false in the direction that matters. Saying
+   * "$0" was false in the other. So the two are separated and each is named for what it is.
+   */
+  const cliUsd = round(
+    rows.filter((r) => r.model === CLI_MODEL).reduce((a, r) => a + r.costUsd, 0) / MICRO,
+  );
+  const billedUsd = round(totalUsd - cliUsd);
+
   let note: string;
   if (rows.length === 0) {
     note = 'No model calls yet.';
-  } else if (totalUsd === 0) {
-    // The CLI path reports its own cost as zero because a subscription already paid it.
+  } else if (billedUsd === 0 && cliUsd === 0) {
+    note = `${String(rows.length)} model calls, none of which reported a cost.`;
+  } else if (billedUsd === 0) {
     note =
-      `${String(rows.length)} model calls, none of them billed per token. ` +
-      'They ran through the Claude Code CLI, against a subscription you already pay for.';
+      `${String(rows.length)} model calls. None of it is billed to you: it ran through the ` +
+      `Claude Code CLI against a subscription you already pay for, and ${formatUsd(cliUsd)} ` +
+      'is what the same work would have cost through the API.';
+  } else if (cliUsd === 0) {
+    note = `${String(rows.length)} model calls, ${formatUsd(billedUsd)} billed to your API key.`;
   } else {
-    note = `${String(rows.length)} model calls, ${formatUsd(totalUsd)} in total.`;
+    note =
+      `${String(rows.length)} model calls. ${formatUsd(billedUsd)} billed to your API key, ` +
+      `plus ${formatUsd(cliUsd)} of subscription usage through the Claude Code CLI, which is ` +
+      'not billed to you.';
   }
 
   return {

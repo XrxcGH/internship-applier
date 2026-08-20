@@ -423,7 +423,61 @@ describe('costs', () => {
 
     const c = computeCosts();
     expect(c.totalUsd).toBe(0);
+    // A CLI call that genuinely reported nothing. This used to be every CLI call, because the
+    // ledger was written a hardcoded zero — so the note explained the zero by naming the
+    // subscription, on rows that had no figure to explain.
+    expect(c.note).toMatch(/none of which reported a cost/i);
+  });
+
+  it('names the subscription when the CLI reported what the work was worth', () => {
+    // The CLI puts `total_cost_usd` on every envelope and those figures are recorded now, so a
+    // CLI-only user has a NON-ZERO total that is not a bill. Reporting it as "$0.04 in total"
+    // would be false in the direction that matters.
+    db.insert(schema.llmCall)
+      .values({
+        id: ulid(),
+        purpose: 'answer_draft',
+        model: 'claude-code-cli',
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 40_000,
+        latencyMs: 100,
+        stopReason: null,
+      })
+      .run();
+
+    const c = computeCosts();
+    expect(c.note).toMatch(/None of it is billed to you/i);
     expect(c.note).toMatch(/subscription you already pay for/i);
+    expect(c.note).toMatch(/would have cost/i);
+  });
+
+  it('tells API spend apart from subscription usage when both are present', () => {
+    for (const [model, costUsd] of [
+      ['claude-code-cli', 40_000],
+      ['claude-opus-5', 25_000],
+    ] as const) {
+      db.insert(schema.llmCall)
+        .values({
+          id: ulid(),
+          purpose: 'answer_draft',
+          model,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          costUsd,
+          latencyMs: 100,
+          stopReason: null,
+        })
+        .run();
+    }
+
+    const c = computeCosts();
+    expect(c.note).toMatch(/billed to your API key/i);
+    expect(c.note).toMatch(/not billed to you/i);
   });
 
   it('says so when nothing has run', () => {

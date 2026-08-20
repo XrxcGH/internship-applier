@@ -84,20 +84,46 @@ interface RecordArgs {
   usage: { input_tokens: number; output_tokens: number } & Record<string, unknown>;
   latencyMs: number;
   stopReason: string | null;
+  /**
+   * What the backend itself said the call cost, in dollars, when it knows.
+   *
+   * The CLI does — it puts `total_cost_usd` on every envelope — and pricing it from token
+   * counts is not possible there anyway, since the CLI reports no token usage and its model
+   * name is deliberately absent from PRICING. Absent for the API backend, which reports
+   * tokens and is priced from them.
+   */
+  reportedUsd?: number;
 }
 
-export function recordCall({ purpose, model, usage, latencyMs, stopReason }: RecordArgs): void {
+export function recordCall({
+  purpose,
+  model,
+  usage,
+  latencyMs,
+  stopReason,
+  reportedUsd,
+}: RecordArgs): void {
   const price = PRICING[model] ?? { input: 0, output: 0 };
   const cacheRead = Number(usage['cache_read_input_tokens'] ?? 0);
   const cacheWrite = Number(usage['cache_creation_input_tokens'] ?? 0);
 
   // Cache reads bill at ~0.1x, writes at ~1.25x. Stored as micro-dollars (integer).
-  const usd =
+  /**
+   * What the backend said it cost, when it says — otherwise what the token counts price out at.
+   *
+   * The CLI reports `total_cost_usd` on every envelope, and this used to be handed a hardcoded
+   * `{ input_tokens: 0, output_tokens: 0 }` against a model name absent from PRICING, so every
+   * CLI call was written to the ledger as costing exactly nothing. Settings then showed a run
+   * of real work under "$0", which is not the same claim as "your subscription covers this"
+   * and reads as a tool that has lost count.
+   */
+  const priced =
     (usage.input_tokens * price.input +
       usage.output_tokens * price.output +
       cacheRead * price.input * 0.1 +
       cacheWrite * price.input * 1.25) /
     1_000_000;
+  const usd = reportedUsd ?? priced;
 
   try {
     db.insert(schema.llmCall)
