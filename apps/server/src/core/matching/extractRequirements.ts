@@ -79,6 +79,35 @@ const MONTHS: Record<string, number> = {
 };
 
 /**
+ * How far either side of a match these windows may reach.
+ *
+ * They had no bound at all in the direction that mattered, and it was both a correctness bug
+ * and a performance one.
+ *
+ * CORRECTNESS FIRST, because it is the worse half. `start` was "just after the last full stop
+ * or newline at or before the match", which on a description containing NEITHER is position
+ * zero. `sentenceAround` then returns `slice(start, end).trim().slice(0, 400)` — the first 400
+ * characters of the document. So for a posting written as one long unpunctuated line, the quote
+ * stored as the EVIDENCE for a requirement did not contain the requirement: a student ruled out
+ * for being under 18 was shown "We are hiring interns for many teams this year..." as the reason
+ * they were ruled out. `verifyQuote` cannot catch it, because that text really does appear in
+ * the posting. Bounding the lead means the match is always inside the quote.
+ *
+ * That shape is not exotic. `stripHtml` turns a run of `<li>` into lines with no terminal
+ * punctuation, and boards that emit one `<p>` for the whole description produce exactly it.
+ *
+ * The performance half: an unbounded `slice` is O(n) per match with the match count itself
+ * rising with the length, which is the same quadratic this file already fixed once by another
+ * route. Measured with no full stop and no newline anywhere — 22KB took 46ms, 44KB 143ms, 88KB
+ * 571ms and 176KB 2.3 SECONDS, a clean four times per doubling.
+ *
+ * 240 rather than 400 so that the match still fits inside the 400-character cap `sentenceAround`
+ * applies afterwards, and generous enough that no ordinary sentence is clipped by it.
+ */
+const MAX_LEAD = 240;
+const MAX_TRAIL = 240;
+
+/**
  * Where the sentence containing a match starts and ends.
  *
  * A line break ends a sentence as firmly as a full stop does. Postings reach us from the
@@ -89,12 +118,18 @@ const MONTHS: Record<string, number> = {
  */
 function sentenceSpan(text: string, index: number, length: number): [number, number] {
   const { newlines, dots } = textIndex(text);
-  const start = Math.max(0, atOrBefore(dots, index) + 1, atOrBefore(newlines, index) + 1);
+  const start = Math.max(
+    0,
+    atOrBefore(dots, index) + 1,
+    atOrBefore(newlines, index) + 1,
+    // Never further back than the quote can reach. See MAX_LEAD.
+    index - MAX_LEAD,
+  );
   const afterDot = atOrAfter(dots, index + length);
   const afterLine = atOrAfter(newlines, index + length);
   let end = afterDot === -1 ? Math.min(text.length, index + length + 120) : afterDot + 1;
   if (afterLine !== -1 && afterLine < end) end = afterLine;
-  return [start, end];
+  return [start, Math.min(end, index + length + MAX_TRAIL)];
 }
 
 /** Widens a match to that sentence, so the stored quote reads naturally. */
@@ -288,8 +323,31 @@ function clauseBounds(text: string, index: number, length: number): [number, num
     } else lo = mid + 1;
   }
 
-  return [start, end];
+  // Bounded around the match, for the reason MAX_CLAUSE_SPAN gives.
+  return [
+    Math.max(start, index - MAX_CLAUSE_SPAN),
+    Math.min(end, index + length + MAX_CLAUSE_SPAN),
+  ];
 }
+
+/**
+ * How far a clause may extend either side of the match before it stops being one.
+ *
+ * Every caller of `clauseBounds` SLICES the span it returns and runs a regex over it, and a
+ * description with no full stop, no comma and no conjunction has no clause breaks at all — so
+ * the span was the whole document, and each of those callers did whole-document work once per
+ * match. The bounds were cheap to compute after the earlier fix here; it was reading them that
+ * stayed quadratic. Measured after the sentence windows were bounded and before this: 44KB took
+ * 100ms, 88KB 391ms, 176KB 1.6s, 352KB 6.1 SECONDS.
+ *
+ * Much wider than the sentence windows on purpose. What a clause is FOR here is finding the
+ * word that cancels a requirement — "Neither U.S. citizenship nor a security clearance is
+ * required" — and cutting one short does not lose a quote, it turns a waived requirement into a
+ * demanded one and hard-fails a student on something the posting does not ask for. A thousand
+ * characters either way is longer than any clause anybody writes, so nothing real is clipped,
+ * and it is still a constant.
+ */
+const MAX_CLAUSE_SPAN = 1000;
 
 /**
  * The words that cancel a requirement the surrounding words otherwise appear to state.
@@ -319,10 +377,17 @@ const SOFTENER =
 function softenerWindow(text: string, index: number, length: number): string {
   const { newlines, dots } = textIndex(text);
   const before = Math.max(0, index - 1);
-  const start = Math.max(atOrBefore(newlines, before) + 1, atOrBefore(dots, before) + 1);
+  const start = Math.max(
+    atOrBefore(newlines, before) + 1,
+    atOrBefore(dots, before) + 1,
+    index - MAX_LEAD,
+  );
   const lineEnd = atOrAfter(newlines, index + length);
   const sentenceEnd = atOrAfter(dots, index + length);
-  let end = text.length;
+  // Bounded rather than open to the end of the document: with no newline and no full stop
+  // anywhere, both searches answer -1 and this handed the WHOLE description to a regex, once
+  // per match. See MAX_LEAD.
+  let end = Math.min(text.length, index + length + MAX_TRAIL);
   if (lineEnd !== -1) end = Math.min(end, lineEnd);
   if (sentenceEnd !== -1) end = Math.min(end, sentenceEnd + 1);
   return text.slice(start, Math.max(end, index + length));

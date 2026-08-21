@@ -613,7 +613,7 @@ describe('reading HTML out of a feed', () => {
       ['repeated <p', '<p'],
     ] as const) {
       const growth = measureGrowth(
-        (multiplier, salt) => salt + unit.repeat(20_000 * multiplier),
+        (multiplier, salt) => salt + unit.repeat(200_000 * multiplier),
         (html) => stripHtml(html),
       );
       expect(

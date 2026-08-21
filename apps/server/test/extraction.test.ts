@@ -601,7 +601,7 @@ describe('a long posting must not stall the server', () => {
   it('costs about four times as much for four times the text, not sixteen', () => {
     const growth = measureGrowth(
       (multiplier, salt) =>
-        `${salt} ` + 'Applicants must be at least 18 years of age. '.repeat(1000 * multiplier),
+        `${salt} ` + 'Applicants must be at least 18 years of age. '.repeat(4000 * multiplier),
       (text) => deterministicRequirements(text),
     );
     expect(
@@ -615,6 +615,60 @@ describe('a long posting must not stall the server', () => {
     const huge = 'Applicants must be at least 18 years of age. '.repeat(4000);
     expect(deterministicRequirements(huge).length).toBeGreaterThan(0);
   }, 60_000);
+
+  /**
+   * The shape with NO full stop and NO newline anywhere, which is the one that kept hurting.
+   *
+   * Three separate windows were open-ended in that case and each was quadratic on its own:
+   * `sentenceSpan`'s start ran back to position zero, `softenerWindow`'s end ran to the end of
+   * the document, and `clauseBounds` returned the whole text because a description with no
+   * punctuation and no conjunction contains no clause breaks — and every caller SLICES that
+   * span and runs a regex over it. Fixing the first two left the third: 352KB still took 6.1
+   * seconds. It is not an exotic shape. `stripHtml` turns a run of `<li>` into lines with no
+   * terminal punctuation, and a board that emits one `<p>` for the whole description produces
+   * exactly it.
+   */
+  it('costs about four times as much for four times of it, with no punctuation at all', () => {
+    const growth = measureGrowth(
+      (multiplier, salt) =>
+        `${salt} ` + 'Applicants must be at least 18 years of age '.repeat(4000 * multiplier),
+      (text) => deterministicRequirements(text),
+    );
+    expect(
+      growth.ratio,
+      `${growth.small.toFixed(1)}ms -> ${growth.large.toFixed(1)}ms`,
+    ).toBeLessThan(LINEAR_CEILING);
+  }, 60_000);
+
+  /**
+   * The quote is the EVIDENCE. It has to contain the thing it is evidence for.
+   *
+   * `sentenceAround` returns `slice(start, end).trim().slice(0, 400)`, and `start` was "just
+   * after the last full stop or newline at or before the match" — which on a description
+   * containing neither is position zero. So the quote was the first 400 characters of the
+   * document, and a student ruled out for being under 18 was shown "We are hiring interns for
+   * many teams this year..." as the reason they were ruled out. `verifyQuote` cannot catch it:
+   * that text really does appear in the posting, which is all it checks.
+   */
+  it('quotes text that contains the requirement, even with nothing to break the line', () => {
+    const filler = 'We are hiring interns for many teams this year and it is going to be great ';
+    const found = deterministicRequirements(
+      filler.repeat(60) + 'Applicants must be at least 18 years of age',
+    );
+    expect(found.length).toBeGreaterThan(0);
+    for (const r of found) {
+      expect(r.sourceQuote, `${r.kind} cites text that does not contain it`).toMatch(
+        /18 years of age/,
+      );
+      // And still verifiable against the posting, which is the other half of the contract.
+      expect(
+        verifyQuote(
+          r.sourceQuote,
+          filler.repeat(60) + 'Applicants must be at least 18 years of age',
+        ).ok,
+      ).toBe(true);
+    }
+  });
 
   it('reads a description with no newline in it the same way as one with', () => {
     const JOINED = [

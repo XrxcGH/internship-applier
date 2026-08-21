@@ -115,7 +115,12 @@ function isPrivateV4(b: Uint8Array): boolean {
     (a === 192 && second === 168) || // private
     (a === 169 && second === 254) || // link-local, and the cloud metadata address
     (a === 100 && second >= 64 && second <= 127) || // carrier-grade NAT
-    (a === 192 && second === 0) || // IETF protocol assignments, incl. 192.0.0.0/24
+    // 192.0.0.0/24 (IETF protocol assignments) and 192.0.2.0/24 (TEST-NET-1), and ONLY those.
+    // This was written as `second === 0`, which is 192.0.0.0/16 — sixty-five thousand ordinary
+    // public addresses refused, with a comment beside it saying /24. Over-blocking here is not
+    // a safe direction: it is the tool quietly declining to read a real employer's site, and
+    // reporting it as an address on the user's own network.
+    (a === 192 && second === 0 && (b[2] === 0 || b[2] === 2)) ||
     (a === 198 && (second === 18 || second === 19)) || // benchmarking
     a >= 224 // multicast and reserved
   );

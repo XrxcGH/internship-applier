@@ -102,6 +102,18 @@ describe('which addresses count as private', () => {
     expect(isPrivateAddress('2606:2800:220:1:248:1893:25c8:1946', 6)).toBe(false);
   });
 
+  it('refuses only the two reserved /24s inside 192.0, not the whole /16', () => {
+    // Written as `second === 0` first, which is 192.0.0.0/16 — sixty-five thousand ordinary
+    // public addresses refused, with a comment beside it claiming /24. Over-blocking is not a
+    // safe direction here: it is the tool quietly declining to read a real employer's site and
+    // reporting it as an address on the user's own network.
+    expect(isPrivateAddress('192.0.0.1', 4)).toBe(true); // IETF protocol assignments
+    expect(isPrivateAddress('192.0.2.1', 4)).toBe(true); // TEST-NET-1
+    for (const a of ['192.0.1.1', '192.0.78.24', '192.0.255.255', '192.1.0.1']) {
+      expect(isPrivateAddress(a, 4), a).toBe(false);
+    }
+  });
+
   it('treats something it cannot parse as private', () => {
     // The safe direction: an address this cannot read is one it cannot vouch for.
     expect(isPrivateAddress('not-an-address', 4)).toBe(true);

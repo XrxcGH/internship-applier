@@ -42,18 +42,27 @@ export function measureGrowth<T>(
   // compilation that the second one gets for free — which on its own can look quadratic.
   work(build(1, 'warm'));
 
-  const median = (multiplier: number): number => {
-    const runs: number[] = [];
-    for (let i = 0; i < 3; i++) {
+  /**
+   * The FASTEST of several runs, not the median.
+   *
+   * Descheduling only ever adds time, so the minimum is the run that came closest to having the
+   * machine to itself and is the best estimate of what the work actually costs. A median still
+   * carries whatever contention was going on for half the runs, and with a base measurement of
+   * a few milliseconds one interrupted run is enough to move a ratio past any threshold — which
+   * is exactly how the median version of this failed in a full-suite run while passing alone.
+   */
+  const fastest = (multiplier: number): number => {
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) {
       const input = build(multiplier, `run${String(i)}`);
       const started = performance.now();
       work(input);
-      runs.push(performance.now() - started);
+      best = Math.min(best, performance.now() - started);
     }
-    return runs.sort((a, b) => a - b)[1]!;
+    return best;
   };
 
-  const small = median(1);
+  const small = fastest(1);
   if (small > bailAboveMs) {
     throw new Error(
       `the small input alone took ${small.toFixed(0)}ms, which is already far past anything ` +
@@ -62,9 +71,11 @@ export function measureGrowth<T>(
     );
   }
 
-  const large = median(4);
-  // A floor on the denominator: at sub-millisecond timings the ratio is measuring the clock.
-  return { small, large, ratio: large / Math.max(small, 0.5) };
+  const large = fastest(4);
+  // A floor on the denominator: at sub-millisecond timings the ratio is measuring the clock,
+  // not the work. Callers pick sizes that put `small` in the tens of milliseconds, so this is a
+  // backstop rather than something normally in play.
+  return { small, large, ratio: large / Math.max(small, 1) };
 }
 
 /**
