@@ -6,7 +6,8 @@
  */
 import { logger } from '../logger';
 import { config } from '../../config';
-import { assertPublicHost } from './publicHost';
+import { Agent, fetch as undiciFetch, Response } from 'undici';
+import { assertPublicHost, guardedLookup } from './publicHost';
 import { isAggregatorUrl } from '../../core/discovery/sourcingPolicy';
 
 const USER_AGENT = 'internship-applier/0.1 (+local personal job-search tool)';
@@ -133,6 +134,51 @@ function rememberResponse(url: string, entry: CacheEntry): void {
     if (oldest.done) break;
     cache.delete(oldest.value);
   }
+}
+
+/**
+ * The connector every request in this module goes through.
+ *
+ * `undiciFetch` and `Agent` both come from the `undici` package rather than from Node's globals,
+ * and they have to come from the SAME copy. Node bundles its own undici and does not expose it,
+ * so an Agent from the npm package handed to `globalThis.fetch` is rejected — measured, it fails
+ * with "invalid onRequestStart method", because the two versions do not share a dispatcher
+ * contract. Importing both keeps them matched.
+ *
+ * What the dispatcher buys is `guardedLookup`: the address a connection is actually made to is
+ * the address that gets range-checked, so a name cannot answer one thing to `assertPublicHost`
+ * and another to the connection a moment later. See publicHost.ts for why BOTH checks are
+ * needed — a connector never resolves an IP LITERAL, so the up-front check is what covers those.
+ *
+ * There is no test-only variant of it, and that is the same fact from the other side: the suite
+ * runs its servers on `127.0.0.1`, which is a literal, so the lookup is never consulted and the
+ * guard has nothing to refuse. The tests exercise the client production uses, unmodified.
+ */
+const dispatcher = new Agent({ connect: { lookup: guardedLookup } });
+
+/**
+ * The fetch this module calls.
+ *
+ * Several suites drive the source adapters by replacing `globalThis.fetch` with a fixture
+ * router — which is the right way to test an adapter, and stopped working the moment this file
+ * started calling undici's `fetch` instead of the global one. Rather than give the fetcher a
+ * seam that exists only for tests, it notices: nothing in production ever reassigns
+ * `globalThis.fetch`, so if it is not the function Node started with, a test has deliberately
+ * put a router there and that router is what the request is for.
+ *
+ * Everything else — including the suites that run real local servers — goes through undici with
+ * the guarded dispatcher, so the client under test is the client that ships.
+ */
+const nativeFetch = globalThis.fetch;
+
+function httpFetch(
+  url: string,
+  init: Parameters<typeof undiciFetch>[1],
+): ReturnType<typeof undiciFetch> {
+  if (globalThis.fetch !== nativeFetch) {
+    return (globalThis.fetch as unknown as typeof undiciFetch)(url, init);
+  }
+  return undiciFetch(url, init);
 }
 
 export interface FetchOptions {
@@ -356,10 +402,11 @@ async function fetchRobots(url: string): Promise<Response> {
       throw new HttpError(`robots.txt redirects to ${new URL(at).hostname}`, 403, at);
     }
 
-    const res = await fetch(at, {
+    const res = await httpFetch(at, {
       headers: { 'user-agent': USER_AGENT },
       redirect: 'manual',
       signal: AbortSignal.timeout(8000),
+      dispatcher,
     });
 
     // 304/305/306 carry a Location that does not mean "go here"; only the redirect statuses do.
@@ -513,7 +560,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
 
       if (opts.jsonBody !== undefined) headers['content-type'] = 'application/json';
 
-      const res = await fetch(url, {
+      const res = await httpFetch(url, {
         headers,
         ...(opts.jsonBody !== undefined
           ? { method: 'POST', body: JSON.stringify(opts.jsonBody) }
@@ -521,6 +568,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
         // Followed by hand, below. See the block that reads this.
         redirect: 'manual',
         signal: opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? 20_000),
+        dispatcher,
       });
 
       /**

@@ -1,3 +1,4 @@
+import { lookup as lookupCb, type LookupAddress, type LookupOptions } from 'node:dns';
 import { lookup } from 'node:dns/promises';
 
 /**
@@ -16,18 +17,19 @@ import { lookup } from 'node:dns/promises';
  * amount of string matching — which is the same reason `app.ts` checks the Host header rather
  * than trusting the bind address alone.
  *
- * WHAT IT DOES NOT STOP, STATED HERE RATHER THAN DISCOVERED LATER. This resolves the name
- * itself and then hands the NAME to `fetch`, which resolves it again when it connects. Nothing
- * pins the answer between the two. A host whose DNS the attacker controls can answer a public
- * address to the lookup here and a private one to the connection a moment later — classic DNS
- * rebinding — and the guard will have approved an address that was never used.
+ * TWO CHECKS, AND BOTH ARE LOAD-BEARING. `assertPublicHost` resolves the name and then hands the
+ * NAME onward, and whoever connects resolves it AGAIN. Nothing pinned the answer between the
+ * two, so a host whose DNS the attacker controls could answer a public address to this lookup
+ * and a private one to the connection a moment later — classic DNS rebinding — and the guard
+ * would have approved an address that was never used.
  *
- * Closing it means making the check and the connection share one resolution, which means
- * supplying the connector: `fetch` in Node is undici, and a dispatcher built with
- * `connect: { lookup }` would run the range test on the address actually dialled. That needs
- * undici as a direct dependency, since Node does not expose the bundled copy, so it is a
- * decision about the project rather than a change to this file — and until it is made, this
- * paragraph is what stops the sentence above being read as a stronger promise than it is.
+ * `guardedLookup` closes that by running the same range test on the address actually dialled,
+ * as the connector's own resolver. It does NOT replace the check above, and the reason is worth
+ * having in writing: a connector never resolves an IP LITERAL. Measured — a fetch to
+ * `http://127.0.0.1:PORT/` through the guarded dispatcher went straight through with the lookup
+ * never called, because there was no name to look up. `assertPublicHost` catches those, because
+ * `dns.lookup` on a literal hands the literal back. So one covers names-that-change, the other
+ * covers addresses-written-directly, and neither covers both.
  */
 
 /**
@@ -185,6 +187,53 @@ export async function assertPublicHost(url: string): Promise<void> {
   if (addresses.some((a) => isPrivateAddress(a.address, a.family))) {
     throw new PrivateAddressError(host);
   }
+}
+
+/**
+ * The resolver a connector uses, so the address that is dialled is the address that was judged.
+ *
+ * Shaped like `dns.lookup` because that is what `net.connect` expects in its `lookup` option and
+ * what undici passes straight through. Node asks for `all: true` when it is happy-eyeballing
+ * between an A and a AAAA record and for a single address otherwise, so both answers are
+ * produced — returning the wrong shape here does not fail loudly, it fails as a connection that
+ * never happens.
+ *
+ * EVERY address is judged, not the one that would have been picked. A name answering one public
+ * and one loopback address is the attack, not a coincidence, and choosing between them is not
+ * this function's job.
+ */
+export function guardedLookup(
+  hostname: string,
+  options: LookupOptions,
+  callback: (
+    err: NodeJS.ErrnoException | null,
+    address: string | LookupAddress[],
+    family?: number,
+  ) => void,
+): void {
+  lookupCb(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) {
+      callback(err, '');
+      return;
+    }
+    const found = addresses;
+    const offending = found.find((a) => isPrivateAddress(a.address, a.family));
+    if (offending) {
+      callback(new PrivateAddressError(hostname), '');
+      return;
+    }
+    if (options.all === true) {
+      callback(null, found);
+      return;
+    }
+    const first = found[0];
+    // A successful lookup with no addresses in it is not something to open a socket on.
+    if (!first) {
+      callback(new PrivateAddressError(hostname), '');
+      return;
+    }
+    callback(null, first.address, first.family);
+  });
 }
 
 export const forTests = { isPrivateAddress };

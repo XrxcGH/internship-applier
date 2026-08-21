@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { LINEAR_CEILING, measureGrowth } from './support/growth';
 import {
   canonicalUrl,
   fingerprintTitle,
@@ -592,28 +593,40 @@ describe('reading HTML out of a feed', () => {
   /**
    * A page that is one long run of `<` used to freeze the server for as long as it took.
    *
-   * `/<[^>]+>/g` backtracked: at every `<` it ran to the end of the input looking for a
-   * `&gt;`, failed, and gave back a character at a time. Measured before the rewrite — 10 KB of
-   * `<` took 61ms, 20 KB 221ms, 40 KB 909ms and 80 KB EIGHTEEN SECONDS. This is pointed at
-   * whatever a fetch returned, Node is single-threaded, and no timeout can fire to end it
-   * because a timeout needs the event loop too.
+   * `/<[^>]+>/g` backtracked: at every `<` it ran to the end of the input looking for a `>`,
+   * failed, and gave back a character at a time. Measured before the rewrite — 10 KB of `<`
+   * took 61ms, 20 KB 221ms, 40 KB 909ms and 80 KB EIGHTEEN SECONDS. This is pointed at whatever
+   * a fetch returned, Node is single-threaded, and no timeout can fire to end it because a
+   * timeout needs the event loop too.
    *
-   * The bound is loose: it is not measuring speed, it is asserting the cost is no longer
-   * quadratic. The old code needed eighteen seconds for the first of these.
+   * The assertion is on the SHAPE of the curve rather than a stopwatch reading, because a
+   * wall-clock bound fails on a busy machine for reasons that have nothing to do with the bug.
+   * Four times the input costs about four times as much when the work is linear and about
+   * sixteen when it is quadratic; load slows both measurements equally, so the ratio holds.
    */
-  it('reads a megabyte of hostile markup without stopping the server', () => {
-    for (const hostile of [
-      '<'.repeat(1024 * 1024),
-      '<script'.repeat(150_000),
-      '<style'.repeat(170_000),
-      '<meta '.repeat(170_000),
-      '<p'.repeat(500_000),
-    ]) {
-      const started = Date.now();
-      stripHtml(hostile);
-      expect(Date.now() - started, `${hostile.slice(0, 8)}...`).toBeLessThan(4000);
+  it('costs about four times as much for four times the markup, not sixteen', () => {
+    for (const [name, unit] of [
+      ['bare <', '<'],
+      ['unterminated <script', '<script'],
+      ['unterminated <style', '<style'],
+      ['repeated <meta ', '<meta '],
+      ['repeated <p', '<p'],
+    ] as const) {
+      const growth = measureGrowth(
+        (multiplier, salt) => salt + unit.repeat(20_000 * multiplier),
+        (html) => stripHtml(html),
+      );
+      expect(
+        growth.ratio,
+        `${name}: ${growth.small.toFixed(1)}ms -> ${growth.large.toFixed(1)}ms`,
+      ).toBeLessThan(LINEAR_CEILING);
     }
-  });
+  }, 120_000);
+
+  it('still gets through a megabyte of it at all', () => {
+    // The ratio above would also be satisfied by a function that got fast by giving up.
+    expect(stripHtml(`<p>Real text</p>${'<'.repeat(1024 * 1024)}`)).toContain('Real text');
+  }, 60_000);
 
   /**
    * The passes have to stay in this order and stay separate.

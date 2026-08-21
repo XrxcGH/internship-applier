@@ -1,5 +1,13 @@
+import { createServer } from 'node:http';
+import { type LookupAddress, type LookupOptions } from 'node:dns';
 import { describe, expect, it } from 'vitest';
-import { assertPublicHost, forTests, PrivateAddressError } from '../src/infra/http/publicHost';
+import { Agent, fetch } from 'undici';
+import {
+  assertPublicHost,
+  forTests,
+  guardedLookup,
+  PrivateAddressError,
+} from '../src/infra/http/publicHost';
 
 const { isPrivateAddress } = forTests;
 
@@ -144,5 +152,85 @@ describe('assertPublicHost', () => {
     await expect(
       assertPublicHost('http://this-name-does-not-resolve.invalid/'),
     ).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The check that happens at the moment the socket opens.
+ *
+ * `assertPublicHost` resolves the name and then hands the NAME onward, and whoever connects
+ * resolves it AGAIN — so a host whose DNS the attacker controls could answer a public address
+ * to the guard and a private one to the connection a moment later, and the guard would have
+ * approved an address that was never used. `guardedLookup` is the connector's own resolver, so
+ * the address that is dialled is the address that is judged.
+ *
+ * None of these touch the network: `dns.lookup` short-circuits an IP literal, and `localhost`
+ * comes from the hosts file.
+ */
+describe('the resolver a connection is made through', () => {
+  const resolve = (
+    hostname: string,
+    options: LookupOptions,
+  ): Promise<{ err: Error | null; address: string | LookupAddress[]; family?: number }> =>
+    new Promise((done) => {
+      guardedLookup(hostname, options, (err, address, family) => {
+        done({ err, address, family });
+      });
+    });
+
+  it('refuses a name that resolves onto this machine', async () => {
+    for (const host of ['localhost', '127.0.0.1', '::1']) {
+      const { err } = await resolve(host, { all: true });
+      expect(err, host).toBeInstanceOf(PrivateAddressError);
+    }
+  });
+
+  it('lets a public address through', async () => {
+    const { err, address } = await resolve('1.1.1.1', { all: true });
+    expect(err).toBeNull();
+    expect(address).toEqual([{ address: '1.1.1.1', family: 4 }]);
+  });
+
+  it('answers in the shape it was asked in', async () => {
+    // Node asks for `all: true` when it is happy-eyeballing between an A and a AAAA record and
+    // for a single address otherwise. Returning the wrong shape does not fail loudly — it fails
+    // as a connection that never happens.
+    const all = await resolve('1.1.1.1', { all: true });
+    expect(Array.isArray(all.address)).toBe(true);
+
+    const one = await resolve('1.1.1.1', { all: false });
+    expect(one.address).toBe('1.1.1.1');
+    expect(one.family).toBe(4);
+  });
+
+  it('stops the connection a rebinding answer would have made', async () => {
+    // The end-to-end shape, with a real socket: a name resolving to loopback is exactly what a
+    // rebinding answer looks like by the time the connector sees it. The plain agent reads the
+    // local service; the guarded one does not get that far.
+    const server = createServer((_req, res) => {
+      res.writeHead(200);
+      res.end('LOCAL SERVICE');
+    });
+    await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    const url = `http://localhost:${String(address.port)}/x`;
+
+    try {
+      const plain = new Agent();
+      expect(await (await fetch(url, { dispatcher: plain })).text()).toBe('LOCAL SERVICE');
+
+      const guarded = new Agent({ connect: { lookup: guardedLookup } });
+      await expect(fetch(url, { dispatcher: guarded })).rejects.toThrow();
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it('is not the only check, because a connector never resolves a literal', () => {
+    // Measured: a fetch to http://127.0.0.1:PORT/ through the guarded dispatcher went straight
+    // through with the lookup never called — there was no name to look up. `assertPublicHost`
+    // is what covers those, which is why both exist and neither is redundant.
+    expect(isPrivateAddress('127.0.0.1', 4)).toBe(true);
   });
 });
