@@ -837,20 +837,33 @@ export function describeFill(result: FillResult): string {
       'Check the page in the browser window.'
     );
   }
+  /**
+   * What is said about the page having moved, which BOTH endings need.
+   *
+   * It used to be computed inside the "some fields still need you" ending only, and the
+   * all-clear above returned before ever reaching it — so a run where every field succeeded and
+   * the page then navigated away printed "All 3 fields filled. Read the page, then submit it
+   * yourself." and said nothing at all about the navigation. That is the exact case `movedTo`
+   * was added for: the one place this code knows the plain sentence might not be true, and the
+   * ending most likely to reach it, since a navigation caused by the LAST field leaves every
+   * result `ok`. The student was sent to submit a form that may already have submitted itself.
+   */
+  const moved =
+    result.movedTo === undefined
+      ? null
+      : `The page moved to ${result.movedTo} partway through. This tool did not submit ` +
+        'anything — but a page can submit itself, so check there before filling this again.';
+
   const needsYou = result.results.filter((r) => r.status !== 'ok').length;
   if (needsYou === 0) {
     const n = result.filled;
-    return `All ${n} field${n === 1 ? '' : 's'} filled. Read the page, then submit it yourself.`;
+    const filled = `All ${n} field${n === 1 ? '' : 's'} filled.`;
+    return moved === null
+      ? `${filled} Read the page, then submit it yourself.`
+      : `${filled} ${moved}`;
   }
-  const tail =
-    result.movedTo === undefined
-      ? 'Nothing has been submitted.'
-      : // The page left the document the form was read from, which is the one case where the
-        // sentence above would be a claim rather than a fact. Say what happened and what this
-        // tool did NOT do, which is all it can honestly say.
-        `The page moved to ${result.movedTo} partway through, so the rest was not typed. This ` +
-        'tool did not submit anything — but a page can submit itself, so check there before ' +
-        'filling this again.';
+
+  const tail = moved === null ? 'Nothing has been submitted.' : `${moved} The rest was not typed.`;
   return (
     `${needsYou} field${needsYou === 1 ? '' : 's'} still need${needsYou === 1 ? 's' : ''} you. ` +
     `${result.filled} filled. ${tail}`

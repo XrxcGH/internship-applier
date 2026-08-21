@@ -70,6 +70,44 @@ describe('reading an uploaded document', () => {
     await expect(extractText(at('bomb2.docx'), DOCX)).rejects.toThrow(/save it as a PDF/);
   });
 
+  it('refuses a .docx that claims to hold less than it takes up', async () => {
+    // The declared unpacked size is the archive's own word and a bomb can simply understate it.
+    // Take a real 296MB one, write 1234 into every uncompressed-size field, and the declared
+    // total reads as nothing at all — it walked straight past the size limit. jszip caught the
+    // inconsistency itself, but only after inflating 317MB over 879ms, and then told the
+    // student "Bug : uncompressed data size mismatch".
+    //
+    // The compressed size is in the same header and cannot be understated the same way: it is
+    // what tells a reader how many bytes to inflate. Deflate does not meaningfully expand data.
+    const content = 'x'.repeat(200_000);
+    await writeFile(
+      at('liar.docx'),
+      makeZip([{ name: 'word/document.xml', content, declaredUnpackedBytes: 10 }]),
+    );
+
+    const started = Date.now();
+    await expect(extractText(at('liar.docx'), DOCX)).rejects.toThrow(/holds less than it takes up/);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('says something the student can act on when the archive is inconsistent', async () => {
+    const content = 'x'.repeat(200_000);
+    await writeFile(
+      at('liar2.docx'),
+      makeZip([{ name: 'word/document.xml', content, declaredUnpackedBytes: 10 }]),
+    );
+    await expect(extractText(at('liar2.docx'), DOCX)).rejects.toThrow(/save it as a PDF/);
+    // Never mammoth's own wording, which begins with the word "Bug".
+    await expect(extractText(at('liar2.docx'), DOCX)).rejects.not.toThrow(/^Bug/);
+  });
+
+  it('does not mistake an ordinary uncompressed archive for a liar', async () => {
+    // `makeZip` STORES every entry, so declared and compressed are equal — the closest an
+    // honest archive comes to the shape being refused above. It must still be read.
+    await writeFile(at('stored.docx'), makeDocx('Eric Dean'));
+    expect(await extractText(at('stored.docx'), DOCX)).toBe('Eric Dean');
+  });
+
   it('refuses a .docx that is not a zip at all', async () => {
     await writeFile(at('fake.docx'), 'PK this is not really an archive');
     await expect(extractText(at('fake.docx'), DOCX)).rejects.toThrow(/archive directory/);
@@ -102,7 +140,13 @@ describe('what a zip says about its own size', () => {
       { name: 'a.xml', content: 'x'.repeat(100) },
       { name: 'b.xml', content: 'y'.repeat(50) },
     ]);
-    expect(readZipBounds(zip)).toEqual({ declaredBytes: 150, entries: 2, zip64: false });
+    // 150 unpacked, and the same 150 packed, because `makeZip` STORES everything.
+    expect(readZipBounds(zip)).toEqual({
+      declaredBytes: 150,
+      compressedBytes: 150,
+      entries: 2,
+      zip64: false,
+    });
   });
 
   it('believes an inflated header, which is the whole point of reading it', () => {

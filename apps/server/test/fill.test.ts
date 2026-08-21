@@ -1394,6 +1394,39 @@ describe('what the summary promises after a page moved', () => {
     expect(describeFill(partial())).toContain('Nothing has been submitted.');
   });
 
+  /**
+   * And the ending where EVERY field succeeded, which is the one most likely to reach this.
+   *
+   * A navigation caused by the LAST field leaves every result `ok`, and the all-clear branch
+   * returned before the sentence about the page moving was ever built — so the run printed
+   * "All 3 fields filled. Read the page, then submit it yourself." and said nothing about the
+   * navigation at all. That is the exact case `movedTo` exists for, and it sent the student to
+   * submit a form that may already have submitted itself.
+   */
+  const allFilled = (over: Partial<FillResult> = {}): FillResult => ({
+    results: [
+      { field: { label: 'Name', selector: '#n' }, status: 'ok' },
+      { field: { label: 'Email', selector: '#e' }, status: 'ok' },
+    ] as unknown as FillResult['results'],
+    filled: 2,
+    mismatched: 0,
+    failed: 0,
+    ...over,
+  });
+
+  it('does not print the all-clear when the page moved under a fully successful run', () => {
+    const text = describeFill(allFilled({ movedTo: 'https://careers.acme.com/thanks' }));
+    expect(text).toContain('https://careers.acme.com/thanks');
+    expect(text).toMatch(/a page can submit itself/);
+    // The sentence that sends them off to submit it must not be there: it may be done already.
+    expect(text).not.toMatch(/submit it yourself/);
+  });
+
+  it('still gives the plain all-clear when nothing moved', () => {
+    const text = describeFill(allFilled());
+    expect(text).toBe('All 2 fields filled. Read the page, then submit it yourself.');
+  });
+
   it('stops promising it when the page moved, and names where it went', () => {
     const text = describeFill(partial({ movedTo: 'https://careers.acme.com/apply?step=2' }));
     expect(text).not.toContain('Nothing has been submitted.');

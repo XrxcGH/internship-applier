@@ -36,6 +36,17 @@ const ZIP64_SENTINEL = 0xffffffff;
 export interface ZipBounds {
   /** What the archive says its contents come to, unpacked. */
   declaredBytes: number;
+  /**
+   * What the same headers say the contents take up PACKED, which is the cross-check.
+   *
+   * The unpacked figure is the archive's own claim and can be understated — write 1234 into
+   * every size field of a real 296MB bomb and the declared total reads as nothing at all. The
+   * compressed figure sits in the same header and cannot be understated in the same direction
+   * without the archive becoming unreadable, because it is what tells a reader how many bytes
+   * to inflate. Deflate does not meaningfully expand data, so an entry claiming to unpack to
+   * far less than it packs to is lying about one of the two.
+   */
+  compressedBytes: number;
   entries: number;
   /**
    * Whether any size was too large for the classic 32-bit field.
@@ -57,11 +68,17 @@ export function readZipBounds(buf: Buffer): ZipBounds | null {
   const directoryOffset = buf.readUInt32LE(eocd + 16);
 
   if (directoryOffset === ZIP64_SENTINEL || directorySize === ZIP64_SENTINEL) {
-    return { declaredBytes: Number.POSITIVE_INFINITY, entries, zip64: true };
+    return {
+      declaredBytes: Number.POSITIVE_INFINITY,
+      compressedBytes: 0,
+      entries,
+      zip64: true,
+    };
   }
   if (directoryOffset + directorySize > buf.length) return null;
 
   let declaredBytes = 0;
+  let compressedBytes = 0;
   let zip64 = false;
   let at = directoryOffset;
 
@@ -75,13 +92,21 @@ export function readZipBounds(buf: Buffer): ZipBounds | null {
     if (uncompressed === ZIP64_SENTINEL) zip64 = true;
     else declaredBytes += uncompressed;
 
+    const compressed = buf.readUInt32LE(at + 20);
+    if (compressed !== ZIP64_SENTINEL) compressedBytes += compressed;
+
     const nameLength = buf.readUInt16LE(at + 28);
     const extraLength = buf.readUInt16LE(at + 30);
     const commentLength = buf.readUInt16LE(at + 32);
     at += 46 + nameLength + extraLength + commentLength;
   }
 
-  return { declaredBytes: zip64 ? Number.POSITIVE_INFINITY : declaredBytes, entries, zip64 };
+  return {
+    declaredBytes: zip64 ? Number.POSITIVE_INFINITY : declaredBytes,
+    compressedBytes,
+    entries,
+    zip64,
+  };
 }
 
 /**

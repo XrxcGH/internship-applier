@@ -125,9 +125,41 @@ export async function extractText(path: string, mime: string): Promise<string | 
       );
     }
 
+    /**
+     * An archive that claims to unpack to less than it packs to is lying about one of the two.
+     *
+     * The declared unpacked size is the archive's own word, and a bomb can simply understate
+     * it: take a real 296MB one, write 1234 into every uncompressed-size field, and the total
+     * above reads as nothing at all. Measured — that file walked past the limit, and jszip
+     * caught the inconsistency itself, but only after inflating 317MB and spending 879ms doing
+     * it, then reporting "Bug : uncompressed data size mismatch" to the student.
+     *
+     * The compressed size sits in the same header and cannot be understated the same way,
+     * because it is what tells a reader how many bytes to inflate. Deflate does not
+     * meaningfully expand data, so a total that packs to more than it claims to unpack to is
+     * not a document. The margin is for the handful of bytes deflate adds to incompressible
+     * content, which is the only honest way this comparison can come out close.
+     */
+    if (bounds.declaredBytes * 1.05 + 1024 < bounds.compressedBytes) {
+      throw new Error(
+        'This .docx says it holds less than it takes up, so it was not opened. Export it ' +
+          'again from your word processor, or save it as a PDF.',
+      );
+    }
+
     const mammoth = await import('mammoth');
     // Handed the bytes already in memory rather than the path, so the file is read once.
-    const { value } = await mammoth.extractRawText({ buffer: bytes });
+    const { value } = await mammoth
+      .extractRawText({ buffer: bytes })
+      // mammoth's own failures are written for whoever is debugging mammoth — the one this
+      // raises for a size mismatch begins with the word "Bug". The student did not write this
+      // file and cannot act on that, so it is said again in terms of what they can do.
+      .catch(() => {
+        throw new Error(
+          'This .docx could not be opened — its contents do not match what the file says ' +
+            'they are. Export it again from your word processor, or save it as a PDF.',
+        );
+      });
     return normalize(bounded(value));
   }
 
