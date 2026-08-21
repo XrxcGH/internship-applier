@@ -562,8 +562,19 @@ describe('a robots.txt that redirects', () => {
   }, 30_000);
 
   it('gives up on a redirect that never lands, rather than following it twenty times', async () => {
-    const origin = await bouncingRobots((n) => `/robots.txt?n=${String(n)}`);
+    // COUNTED, not just refused. The refusal alone does not distinguish a five-hop cap from
+    // Node's own twenty, or from no cap at all — an endless redirect fails the fetch either
+    // way, eventually. What the fix changed is HOW MANY requests the host gets first.
+    let hops = 0;
+    const origin = await bouncingRobots((n) => {
+      hops = n;
+      return `/robots.txt?n=${String(n)}`;
+    });
     await expect(politeFetch(`${origin}/job/1`, { rps: 100 })).rejects.toThrow(/could not be read/);
+
+    // The first request plus MAX_ROBOTS_REDIRECTS follow-ups. RFC 9309 § 2.3.1.2 asks for at
+    // least five, so this is the floor the standard names and not an arbitrary number.
+    expect(hops).toBe(6);
   }, 30_000);
 
   it('still follows an ordinary move, so a site that relocates its file is still read', async () => {

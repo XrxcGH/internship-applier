@@ -1749,3 +1749,72 @@ describe('a widget that renders a submit control it does not contain', () => {
     }
   }, 90_000);
 });
+
+/**
+ * The SECOND click in a combobox — the one that picks an option.
+ *
+ * `SAFE_OPTION` has exactly the blind spot `FILLABLE_CONTROLS` did: a custom element whose
+ * shadow root is `<div role="option"><slot></slot></div>`, given `<x-opt>US<input
+ * type="submit"></x-opt>`, renders the submit control inside an element that matches
+ * `[role=option]` while containing only a `<slot>` in the DOM. Measured on such a page:
+ * `document.querySelectorAll(SAFE_OPTION)` sees one option and Playwright — which pierces
+ * shadow roots — sees two, so the trap is what the option locator resolves.
+ *
+ * `refuseIfItCanSend` was added to that click in the same commit as the first one, and nothing
+ * tested it: deleting the call left all 70 cases in this file green.
+ */
+describe('an option that renders a submit control it does not contain', () => {
+  const SLOTTED_OPTION = `<form id="f" action="/submitted" method="POST">
+      <div id="combo" role="combobox" aria-label="Country" aria-controls="lb" tabindex="0">Pick one</div>
+      <div id="lb" role="listbox">
+        <x-opt><input type="submit" value="go" style="width:60px;height:20px"></x-opt>
+        <div role="option">Canada</div>
+      </div>
+    </form>
+    <script>
+      window.__submitted = false;
+      document.getElementById('f').addEventListener('submit', function (e) {
+        e.preventDefault();
+        window.__submitted = true;
+      });
+      customElements.define('x-opt', class extends HTMLElement {
+        connectedCallback() {
+          // The label lives in the SHADOW root and the submit control is slotted in beside
+          // it, which is what makes this reachable: the option matches by its text while the
+          // thing rendering inside it is not a DOM descendant, so no :has() clause sees it.
+          this.attachShadow({ mode: 'open' }).innerHTML =
+            '<div role="option">US<slot></slot></div>';
+        }
+      });
+    </script>`;
+
+  it('is refused before it is clicked', async () => {
+    const page = await session.context.newPage();
+    try {
+      await page.setContent(SLOTTED_OPTION);
+      await page.waitForTimeout(200);
+
+      const map = await buildFormMap(page);
+      const combo = map.fields.find((f) => f.control === 'combobox');
+      expect(combo?.semantic).toBe('country');
+
+      const result = await executePlan(
+        page,
+        buildFillPlan({ fields: map.fields, profile: PROFILE, answers: [] }),
+      );
+
+      // The note is what discriminates: with the guard removed the option IS clicked and the
+      // failure becomes an ordinary read-back mismatch instead. The submitted check below is a
+      // belt rather than the point — this particular click does not reach the slotted control,
+      // and a test that leaned on it would be pinning the fixture's geometry, not the guard.
+      const picked = result.results.find((r) => r.field.control === 'combobox');
+      expect(picked?.status).not.toBe('ok');
+      expect(picked?.note).toMatch(/can submit the form/);
+      expect(
+        await page.evaluate(() => (window as unknown as { __submitted: boolean }).__submitted),
+      ).toBe(false);
+    } finally {
+      await page.close();
+    }
+  }, 90_000);
+});
