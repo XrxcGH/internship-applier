@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGGREGATOR_REFUSAL, isAggregatorUrl } from '../src/core/discovery/sourcingPolicy';
+import { politeFetch } from '../src/infra/http/fetcher';
 import { SourceRefusedError, startRun } from '../src/core/filling/run';
 
 /**
@@ -246,5 +247,57 @@ describe('the fill path refuses a board this tool will not open', () => {
     const browser = codeOf('core/filling/browser.ts');
     expect(browser).toMatch(/assertPublicHost\(url\)/);
     expect(browser).toMatch(/PrivateAddressError/);
+  });
+});
+
+/**
+ * The one function every fetch goes through, holding the rule for all of them.
+ *
+ * The redirect hop inside `politeFetch` already makes the argument: "politeFetch does not know
+ * its caller's policy, but it does know that no path in this app may open these hosts." That
+ * was true of where a redirect went and left untrue of the address it was ASKED for. Callers
+ * checked the string they were about to pass, the redirect hop checked the destination, and
+ * the entry checked nothing — so the rule held only while every caller remembered it.
+ *
+ * `isDocumentedApi` is what made that more than theoretical: it skips robots.txt, and
+ * robots.txt was the only thing standing in front of an aggregator URL handed straight to the
+ * fetcher — same origin, so the robots fetch refused it by accident of geography rather than by
+ * design. Measured against the real code with the flag set: the request went out and LinkedIn
+ * answered 404, from the student's own address.
+ */
+describe('politeFetch refuses a board before it asks it anything', () => {
+  it('refuses whether or not robots.txt would have been consulted', async () => {
+    for (const opts of [{}, { isDocumentedApi: true }]) {
+      await expect(
+        politeFetch('https://www.linkedin.com/jobs/view/1', { rps: 100, ...opts }),
+        JSON.stringify(opts),
+      ).rejects.toThrow(/does not open/);
+    }
+  });
+
+  it('refuses every board the policy names, and their short links', async () => {
+    for (const url of [
+      'https://www.linkedin.com/jobs/view/1',
+      'https://lnkd.in/eXaMpLe',
+      'https://www.indeed.com/viewjob?jk=x',
+      'https://www.glassdoor.com/job-listing/x',
+      'https://app.joinhandshake.com/jobs/1',
+    ]) {
+      await expect(politeFetch(url, { rps: 100, isDocumentedApi: true }), url).rejects.toThrow(
+        /does not open/,
+      );
+    }
+  });
+
+  it('names the host it refused, and says nothing was fetched from it', async () => {
+    const err = await politeFetch('https://www.indeed.com/viewjob?jk=x', {
+      rps: 100,
+      isDocumentedApi: true,
+    }).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err?.message).toContain('www.indeed.com');
+    expect(err?.message).toMatch(/nothing was fetched/i);
   });
 });

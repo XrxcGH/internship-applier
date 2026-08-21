@@ -603,6 +603,13 @@ describe('reading HTML out of a feed', () => {
    * wall-clock bound fails on a busy machine for reasons that have nothing to do with the bug.
    * Four times the input costs about four times as much when the work is linear and about
    * sixteen when it is quadratic; load slows both measurements equally, so the ratio holds.
+   *
+   * THE SIZES ARE CHOSEN TO MEASURE THE ALGORITHM AND NOT THE ALLOCATOR. Measured across five
+   * doublings, this is a clean x2.00 per doubling up to about three megabytes and then bends
+   * upward — x3.4 at 4.6MB — because at that size the cost is dominated by allocating and
+   * collecting multi-megabyte strings rather than by the scan. The first version of this test
+   * used a 4.8MB large case and failed at a ratio of 8.3 against a threshold of 8, which was
+   * true of the measurement and false of the code. Both cases now sit inside the linear region.
    */
   it('costs about four times as much for four times the markup, not sixteen', () => {
     for (const [name, unit] of [
@@ -613,7 +620,7 @@ describe('reading HTML out of a feed', () => {
       ['repeated <p', '<p'],
     ] as const) {
       const growth = measureGrowth(
-        (multiplier, salt) => salt + unit.repeat(200_000 * multiplier),
+        (multiplier, salt) => salt + unit.repeat(50_000 * multiplier),
         (html) => stripHtml(html),
       );
       expect(

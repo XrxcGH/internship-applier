@@ -476,7 +476,17 @@ async function fetchRobots(url: string): Promise<Response> {
   for (let hop = 0; ; hop++) {
     if (!config.isTest) await assertPublicHost(at);
     if (isAggregatorUrl(at)) {
-      throw new HttpError(`robots.txt redirects to ${new URL(at).hostname}`, 403, at);
+      // Said differently for the first hop, because on the first hop nothing has redirected
+      // anywhere and "robots.txt redirects to www.linkedin.com" is simply not what happened.
+      // An error that misdescribes the situation costs whoever reads it the time to work out
+      // that it did not mean what it said.
+      throw new HttpError(
+        hop === 0
+          ? `${new URL(at).hostname} is a job board this tool does not open.`
+          : `robots.txt redirects to ${new URL(at).hostname}, which this tool does not open.`,
+        403,
+        at,
+      );
     }
 
     const res = await httpFetch(at, {
@@ -598,6 +608,31 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
    * is covered even though this call site is not the thing making it.
    */
   if (!config.isTest) await assertPublicHost(url);
+
+  /**
+   * The sourcing policy, applied to the address this was ASKED for — not only to where a
+   * redirect later goes.
+   *
+   * The redirect hop below already makes the argument for this one: "politeFetch does not know
+   * its caller's policy, but it does know that no path in this app may open these hosts." That
+   * was true of the destination and left untrue of the origin. Every caller checked the string
+   * it was about to pass, the redirect hop checked where it ended up, and the entry itself
+   * checked nothing — so the rule held only for as long as every caller remembered it.
+   *
+   * What made that more than theoretical is `isDocumentedApi`. It skips robots.txt, and
+   * robots.txt was the only thing standing in front of an aggregator URL handed straight to
+   * this function: same origin, so `fetchRobots` refused it by accident of geography rather
+   * than by design. Measured with the flag set — the request went out and LinkedIn answered
+   * 404, from the student's own address, against a rule this repo states as never fetched.
+   */
+  if (isAggregatorUrl(url)) {
+    throw new HttpError(
+      `${u.hostname} is a job board this tool does not open, so nothing was fetched from it.`,
+      403,
+      url,
+      { retryable: false },
+    );
+  }
 
   if (!opts.isDocumentedApi) {
     const rules = await disallowedPaths(u.origin);

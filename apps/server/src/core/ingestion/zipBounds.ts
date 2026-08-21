@@ -12,10 +12,17 @@
  * file precisely so a reader can learn what is inside without inflating it. That takes about
  * 10 ms and a megabyte.
  *
- * The numbers here are DECLARED, not proven — a hostile zip can understate them. That is why
- * this is one of two limits and not the only one: `extractText` also bounds the text that
- * comes out, which is what catches a header that lied. This one exists to refuse the bomb
- * before the memory is committed rather than after.
+ * THE NUMBERS HERE ARE DECLARED, NOT PROVEN, and a hostile archive can understate them: write
+ * 1234 into every uncompressed-size field of a real 296MB bomb and the unpacked total reads as
+ * nothing at all. So this reports the PACKED total as well, which cannot be understated the
+ * same way — it is what tells a reader how many bytes to inflate — and `extractText` refuses an
+ * archive claiming to unpack to far less than it packs to.
+ *
+ * Three limits in all, and each catches what the one before it cannot: this file's declared
+ * size stops the bomb that is honest about being one, the packed cross-check stops the bomb
+ * that lies, and the cap on extracted text stops whatever gets past both. This one exists to
+ * refuse before the memory is committed rather than after — the lying archive was eventually
+ * caught by jszip's own consistency check, but only after inflating 317MB over 879ms.
  *
  * Written by hand rather than with a zip library because the only library already in the
  * tree, jszip, arrives as a transitive dependency of mammoth and exposes the size on a
