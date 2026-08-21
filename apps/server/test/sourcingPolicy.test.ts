@@ -231,6 +231,42 @@ describe('the fill path refuses a board this tool will not open', () => {
     expect(code).toMatch(/route\.abort\(/);
   });
 
+  it('refuses an apply address that is not a web address at all', async () => {
+    // BEHAVIOURAL, unlike the source grep below it. The scheme check is not behind
+    // `config.isTest`, so it runs in the suite exactly as it runs in production — and it has
+    // to come first, because `assertPublicHost` parses a URL and reads its host, and
+    // `file:///C:/Users/...` has no host to resolve. It would pass an address check and then
+    // open a local file in the browser carrying the student's logins.
+    for (const applyUrl of [
+      'file:///C:/Users/ericj/.ssh/id_rsa',
+      'data:text/html,<h1>hi</h1>',
+      'javascript:alert(1)',
+      'not a url at all',
+    ]) {
+      const err = await startRun({
+        applicationId: 'app_scheme',
+        applyUrl,
+        profile: {} as never,
+        answers: [],
+      }).catch((e: unknown) => e as Error);
+      expect(err, applyUrl).toBeInstanceOf(SourceRefusedError);
+      expect((err as Error).message, applyUrl).toMatch(/not one|no web address/i);
+    }
+  });
+
+  it('still opens an ordinary employer address', async () => {
+    // The other direction: the scheme check must not be a filter on everything. This gets
+    // past it and fails later, on the browser it is not this test's business to launch —
+    // what matters is that the refusal is NOT the scheme one.
+    const err = await startRun({
+      applicationId: 'app_ok_scheme',
+      applyUrl: 'https://careers.acme.com/jobs/1',
+      profile: {} as never,
+      answers: [],
+    }).catch((e: unknown) => e as Error);
+    expect(err?.message ?? '').not.toMatch(/not one|no web address/i);
+  }, 60_000);
+
   it('refuses an apply address on this machine or its network, in both places', () => {
     // `apply_url` is the one address in the app that `politeFetch` never sees — only
     // `canonical_url` is fetched, in refreshPostings — so it met no private-address check at

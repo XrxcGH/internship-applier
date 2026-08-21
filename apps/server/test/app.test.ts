@@ -294,11 +294,17 @@ describe('G4 — no auto-submit path exists', () => {
       "await loc.pressSequentially('Ada Lovelace');",
       "await page.keyboard.insertText('\\n');",
       "const SELECTORS = 'input:not([type=hidden]):not([type=submit])';",
-      // A NESTED exclusion. `:not\([^)]*\)` stopped at the first `)`, left
-      // `input[type=submit]))` behind, and failed the build over the very exclusion that
-      // stops a wrapper's submit child from being clicked. A guard whose false alarm reads
-      // "you excluded it too carefully" teaches the next person to exclude it less.
-      'const NEVER = \':not(:has(input[type=submit])):not(:has(button:not([type=\\"button\\" i])))\';',
+      // A NESTED exclusion, in a line that is not a bare declaration — which is what makes it
+      // discriminate. The flat `:not\([^)]*\)` stops at the first `)`, so it leaves
+      // `, input[type=submit])` behind and flags the line; counting parentheses removes the
+      // whole exclusion and the line comes out clean.
+      //
+      // The sample that sat here before was a bare `const NEVER = ':not(:has(input[type=submit]))'`,
+      // which BOTH strippers clear — the flat one because `[type=submit]` falls inside the
+      // span it removes — so it could not tell them apart. Measured over the real source: the
+      // two strippers differ on six lines and the difference changes no verdict on any of
+      // them, so this sample is the only thing holding the paren counting at all.
+      "await page.locator('input:not(:has(a), input[type=submit])').count();",
       ' * merely that no `.click()` was written. Not clicking submit is',
     ]) {
       expect(scanSource('sample.ts', sample), sample).toEqual([]);
