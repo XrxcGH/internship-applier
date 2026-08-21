@@ -38,10 +38,6 @@ export function measureGrowth<T>(
 ): Growth {
   const bailAboveMs = opts.bailAboveMs ?? 2000;
 
-  // Warm the JIT on the same code path, so the first real measurement is not paying for
-  // compilation that the second one gets for free — which on its own can look quadratic.
-  work(build(1, 'warm'));
-
   /**
    * The FASTEST of several runs, not the median.
    *
@@ -50,6 +46,11 @@ export function measureGrowth<T>(
    * carries whatever contention was going on for half the runs, and with a base measurement of
    * a few milliseconds one interrupted run is enough to move a ratio past any threshold — which
    * is exactly how the median version of this failed in a full-suite run while passing alone.
+   *
+   * There is no separate warm-up run, for the same reason: taking the minimum already discards
+   * the first measurement, which is the one paying for JIT compilation. A warm-up would only be
+   * a sixth run of the same work — and on the failure path, a sixth run of work already known
+   * to be far too slow.
    */
   const fastest = (multiplier: number): number => {
     let best = Infinity;
@@ -58,6 +59,12 @@ export function measureGrowth<T>(
       const started = performance.now();
       work(input);
       best = Math.min(best, performance.now() - started);
+      // Checked after EVERY run, not once at the end. The bail exists to make a regression
+      // fail fast, and checking it only after all five made it five times slower than it
+      // needed to be: measured with the clamps reverted, this test took 62 seconds to report
+      // a failure the first run already knew about. A run that is over the line cannot come
+      // back under it — `best` only ever falls — so there is nothing to wait for.
+      if (best > bailAboveMs) return best;
     }
     return best;
   };

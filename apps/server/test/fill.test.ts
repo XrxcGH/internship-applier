@@ -602,8 +602,12 @@ function fieldOf(over: Partial<FormField>): FormField {
  * unchanged is what real Playwright would do for these elements.
  *
  * What that means is that these cases cannot demonstrate the guard, only that it does not get
- * in the way. The guard itself is proved against real Chromium in fixture.test.ts, where a
- * page actually mutates under the filler.
+ * in the way. The guard itself is proved against real Chromium by 'a form that mutates under
+ * the filler' below, which drives `executePlan` over a page that swaps a control mid-fill.
+ *
+ * This comment used to point at fixture.test.ts, which contains one test about the fixture
+ * server starting up. A pointer to coverage that does not exist is worse than no pointer:
+ * it is the reason somebody stops looking.
  *
  * Mutated rather than copied: the stubs close over their own state and several tests read it
  * back afterwards, so a spread would leave the assertions watching a discarded object.
@@ -1608,24 +1612,29 @@ describe('a form that mutates under the filler', () => {
     try {
       await page.setContent(MUTATING);
 
-      // What the scan legitimately sees: two text inputs.
-      const scanned = await page.evaluate(
-        (sel) => [...document.querySelectorAll(sel)].map((el) => el.id),
-        FILLABLE_CONTROLS,
-      );
-      expect(scanned).toEqual(['q1', 'q2']);
+      // What the scan legitimately sees: two ordinary text inputs.
+      const map = await buildFormMap(page);
+      expect(map.fields.map((f) => f.locator)).toEqual(['#q1', '#q2']);
 
-      // Type into the first, which is what triggers the swap.
-      await page.locator('#q1').pressSequentially('Rosa Alvarez', { delay: 5 });
-      expect(await page.evaluate(() => document.getElementById('q2')?.tagName)).toBe('BUTTON');
+      // THE REAL PATH. An earlier version of this test built
+      // `page.locator('#q2').and(page.locator(FILLABLE_CONTROLS))` itself and asserted that it
+      // matched nothing — which is a fact about Playwright's `and()` and about the
+      // FILLABLE_CONTROLS constant, not about `locate()`. Reverting the narrowing in fill.ts
+      // left it green, and left the whole 1,900-test suite green with it. Reconstructing the
+      // fix inside the test is what made the test unable to notice the fix going away.
+      const plan = buildFillPlan({ fields: map.fields, profile: PROFILE, answers: [] });
+      const result = await executePlan(page, plan);
 
-      // The narrowed locator now matches nothing, so there is nothing to click.
-      const narrowed = page.locator('#q2').and(page.locator(FILLABLE_CONTROLS));
-      expect(await narrowed.count()).toBe(0);
-      // And the unnarrowed one still resolves it, which is what made this reachable.
-      expect(await page.locator('#q2').count()).toBe(1);
+      // The first field types, which is what fires the swap.
+      expect(result.results[0]?.status).toBe('ok');
 
-      await narrowed.click({ timeout: 1500 }).catch(() => undefined);
+      // The second resolves to nothing, so it fails BEFORE anything is clicked — and says so
+      // in words the student can act on, rather than in Playwright's.
+      const second = result.results[1];
+      expect(second?.status).toBe('failed');
+      expect(second?.note).toMatch(/must not touch|is not there now/);
+      expect(second?.note).not.toMatch(/locator\.|Timeout \d+ms/);
+
       expect(
         await page.evaluate(() => (window as unknown as { __submitted: boolean }).__submitted),
       ).toBe(false);

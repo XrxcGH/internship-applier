@@ -149,6 +149,39 @@ function locate(frame: Frame, field: FormField): Locator {
 }
 
 /**
+ * Why a control the scanner recorded is not there now, said in the student's terms.
+ *
+ * `locate` narrows every stored locator with `FILLABLE_CONTROLS`, so a page that swaps a text
+ * input for a submit button between the scan and the fill leaves the narrowed locator matching
+ * nothing — which is the point of the narrowing. What the student then read was
+ * `locator.waitFor: Timeout 5000ms exceeded.`, which is Playwright talking to whoever is
+ * debugging Playwright. They did not write this page and cannot act on that sentence, and
+ * `fill.ts` already promised in prose that they would be "told a control it needs is not there".
+ *
+ * The two cases are worth telling apart, and only the failure path pays for asking. If the
+ * UNNARROWED locator still matches, the control is on the page and is no longer something this
+ * tool may touch; if it matches nothing either, it has gone.
+ */
+async function explainMissing(frame: Frame, field: FormField, err: unknown): Promise<Error> {
+  const fallback = err instanceof Error ? err : new Error(String(err));
+  // An index locator is a position, not an identity, so "still there" cannot be asked of it.
+  if (/^__index__/.test(field.locator)) return fallback;
+
+  const stillThere = await frame
+    .locator(field.locator)
+    .count()
+    .catch(() => 0);
+
+  return new Error(
+    stillThere > 0
+      ? 'This control changed into something this tool must not touch after the page was read ' +
+          '— most often a button. Fill this field yourself.'
+      : 'This control was on the page when it was read and is not there now, so nothing was ' +
+          'typed into it. Fill this field yourself.',
+  );
+}
+
+/**
  * The control kinds whose handling clicks or ticks something. See `refuseIfItCanSend`.
  *
  * Everything except the three that never dispatch a pointer event: `file` goes through
@@ -427,7 +460,11 @@ async function fillOne(page: Page, action: FillAction, documentUrl?: string): Pr
   let adjusted: string | undefined;
 
   try {
-    await loc.waitFor({ state: 'visible', timeout: 5000 });
+    try {
+      await loc.waitFor({ state: 'visible', timeout: 5000 });
+    } catch (err) {
+      throw await explainMissing(frame, field, err);
+    }
 
     /**
      * THE SELECTOR IS NOT ENOUGH, AND THIS COMMENT USED TO SAY IT WAS.
