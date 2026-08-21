@@ -110,3 +110,25 @@ export const FILLABLE_CONTROLS =
  * a form the moment the tool picked an answer from a dropdown.
  */
 export const SAFE_OPTION = `[role=option]${NEVER_TOUCH}`;
+
+/**
+ * The controls that send or wipe a form, named positively, for the one check CSS cannot do.
+ *
+ * `:has()` walks the DOM tree, and SLOTTED CONTENT IS NOT IN IT. A custom element whose shadow
+ * root is `<div role="combobox"><slot></slot></div>` renders whatever light-DOM children the
+ * host was given INSIDE that div — so the page author writes
+ *
+ *     <x-combo><input type="submit" value="Email address"></x-combo>
+ *
+ * and the div's only DOM child is the `<slot>`. Every `:not(:has(...))` clause above answers
+ * "nothing dangerous in there", the scanner maps the div as a combobox, and the fill path's
+ * first act on a combobox is to click it — onto the submit control rendered in its place.
+ * Verified end to end against Chromium through `buildFormMap` and the real `locate()`: the
+ * form was submitted.
+ *
+ * No selector can see this, because the relationship is a rendering one rather than a
+ * structural one. `fill.ts` asks the page instead, walking the COMPOSED tree — shadow roots
+ * entered, slots resolved to what was assigned to them — immediately before it clicks.
+ */
+export const SUBMIT_CAPABLE =
+  'button:not([type="button" i]), input[type=submit], input[type=image], input[type=reset]';

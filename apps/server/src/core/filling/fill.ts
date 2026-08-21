@@ -24,7 +24,7 @@ import type { Frame, Locator, Page } from 'playwright';
 import type { FormField } from '@ia/shared';
 import { logger } from '../../infra/logger';
 import { keyDelay } from './browser';
-import { FILLABLE_CONTROLS, SAFE_OPTION } from './selectors';
+import { FILLABLE_CONTROLS, SAFE_OPTION, SUBMIT_CAPABLE } from './selectors';
 import { stillSameDocument, parseFrameKey } from './formMap';
 import type { FillAction, FillPlan } from './plan';
 
@@ -146,6 +146,87 @@ function locate(frame: Frame, field: FormField): Locator {
     return frame.locator(FILLABLE_CONTROLS).nth(Number(m[1]));
   }
   return frame.locator(field.locator).and(frame.locator(FILLABLE_CONTROLS));
+}
+
+/**
+ * The control kinds whose handling clicks or ticks something. See `refuseIfItCanSend`.
+ *
+ * Everything except the three that never dispatch a pointer event: `file` goes through
+ * `setInputFiles`, and `select`/`multiselect` through `selectOption`. Listing the safe ones
+ * would have been shorter and is the wrong way round — a control kind added later is dangerous
+ * until somebody has thought about it, not safe until somebody remembers to add it here.
+ */
+const CLICKS_FIRST = new Set([
+  'text',
+  'textarea',
+  'radio',
+  'checkbox',
+  'date',
+  'combobox',
+  'richtext',
+]);
+
+/**
+ * How much of a subtree is worth walking before the answer stops being useful.
+ *
+ * A field's control is a control, not a document. Anything with thousands of elements under it
+ * was mis-classified, and walking all of it on every field would cost more than the check is
+ * worth. Reaching the cap is treated as dangerous rather than safe, for the same reason
+ * everything else here errs that way.
+ */
+const MAX_COMPOSED_NODES = 2000;
+
+/**
+ * Refuses to go on if the element, or anything RENDERED INSIDE IT, can send the form.
+ *
+ * Named for what it prevents rather than with the word "submit", and not by preference: the
+ * proximity rule in `scripts/g4-scan.ts` looks for a click and that word within three lines of
+ * each other, which is exactly the shape of a guard invoked immediately before a click. Carving
+ * an exemption into a G4 gate to accommodate one function name is a worse trade than choosing
+ * a different name.
+ *
+ * The composed tree, not the DOM tree: shadow roots are entered and a `<slot>` is resolved to
+ * the nodes assigned to it. That is the difference between what a selector can see and what a
+ * click lands on, and it is the whole reason this exists — see `SUBMIT_CAPABLE`.
+ *
+ * Throwing rather than returning a verdict, because every caller's correct response is the
+ * same: do not touch this field, and say so. The message is the one the student reads.
+ */
+async function refuseIfItCanSend(loc: Locator): Promise<void> {
+  const danger = await loc.evaluate(
+    (node: unknown, { selector, cap }: { selector: string; cap: number }) => {
+      const start = node as Element;
+      const stack: Element[] = [start];
+      const seen = new Set<Element>();
+      let visited = 0;
+
+      while (stack.length > 0) {
+        const el = stack.pop();
+        if (!el || seen.has(el)) continue;
+        seen.add(el);
+        if (++visited > cap) return 'too-large';
+        if (typeof el.matches === 'function' && el.matches(selector))
+          return el.tagName.toLowerCase();
+
+        if (el.shadowRoot) stack.push(...Array.from(el.shadowRoot.children));
+        if (el.tagName === 'SLOT') {
+          stack.push(...(el as HTMLSlotElement).assignedElements({ flatten: true }));
+        }
+        stack.push(...Array.from(el.children));
+      }
+      return null;
+    },
+    { selector: SUBMIT_CAPABLE, cap: MAX_COMPOSED_NODES },
+  );
+
+  if (danger === null) return;
+  throw new Error(
+    danger === 'too-large'
+      ? 'This control holds more of the page than a form field should, so it was left alone ' +
+          'rather than clicked.'
+      : `This control renders a <${danger}> that can submit the form, so it was left alone. ` +
+          'Fill this field yourself.',
+  );
 }
 
 /**
@@ -349,21 +430,24 @@ async function fillOne(page: Page, action: FillAction, documentUrl?: string): Pr
     await loc.waitFor({ state: 'visible', timeout: 5000 });
 
     /**
-     * Nothing here re-checks that the element cannot submit, and that is deliberate.
+     * THE SELECTOR IS NOT ENOUGH, AND THIS COMMENT USED TO SAY IT WAS.
      *
-     * Three branches below open with `loc.click()`, so the question is real — but every
-     * locator this function can hold comes from `FILLABLE_CONTROLS` or `SAFE_OPTION`
-     * (selectors.ts), and both now exclude a button that is not explicitly `type="button"`.
-     * That includes the index fallback in `locate`, which resolves `nth(N)` against
-     * FILLABLE_CONTROLS itself — so however far a re-rendered page shifts the indices, the
-     * element it lands on is drawn from a set with no submit control in it.
+     * What it said was that every locator here comes from `FILLABLE_CONTROLS` or
+     * `SAFE_OPTION`, both of which exclude anything that can submit, so a second check would
+     * be "a round trip on every field to re-derive what the selector already guarantees".
+     * The selector guarantees it about the DOM TREE. A click lands on what is RENDERED.
      *
-     * A second check here would have to ask the page, and a per-field `evaluate` is a round
-     * trip on every field to re-derive what the selector already guarantees. What keeps this
-     * honest instead is `selectors.test.ts`, which asks Chromium's own engine what those two
-     * selectors match — a test that reads the selector string could not tell a working
-     * `:not()` from one the browser silently failed to parse.
+     * Those differ, and a custom element is where. Give one a shadow root of
+     * `<div role="combobox"><slot></slot></div>` and write `<x-combo><input type="submit">
+     * </x-combo>`, and the submit control renders inside the div while not being its
+     * descendant at all — so `:not(:has(...))` sees an empty box, the scanner maps a combobox,
+     * and the click goes to the submit control sitting in its place. Verified end to end: the
+     * form was submitted.
+     *
+     * So the page is asked, once per field that is about to be clicked, over the composed tree.
+     * That is the round trip the old comment declined to pay, and the reason to pay it.
      */
+    if (CLICKS_FIRST.has(field.control)) await refuseIfItCanSend(loc);
     switch (field.control) {
       case 'file': {
         if (!action.filePath) {
@@ -539,7 +623,11 @@ async function fillOne(page: Page, action: FillAction, documentUrl?: string): Pr
             note: `No option matching "${value}". Choose it yourself.`,
           };
         }
-        await optionLoc.nth(picked.index).click();
+        const option = optionLoc.nth(picked.index);
+        // The option is one level down and exactly as clickable, and `SAFE_OPTION` has the
+        // same blind spot the combobox selector did: it cannot see what a slot renders.
+        await refuseIfItCanSend(option);
+        await option.click();
 
         // Like a select, this cannot be verified by re-reading — the widget holds whatever it
         // was told — so the report prints the words the page now shows.

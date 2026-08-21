@@ -612,9 +612,39 @@ function fieldOf(over: Partial<FormField>): FormField {
 const UNMATCHED = { count: () => Promise.resolve(0), nth: () => UNMATCHED };
 
 function withAnd(loc: unknown): unknown {
-  if (loc !== null && typeof loc === 'object' && !('and' in loc)) {
-    (loc as { and: () => unknown }).and = () => loc;
-  }
+  if (loc === null || typeof loc !== 'object') return loc;
+  const stub = loc as {
+    and?: () => unknown;
+    nth?: (i: number) => unknown;
+    evaluate?: (fn: unknown, arg?: unknown) => unknown;
+    __wrapped?: true;
+  };
+  if (stub.__wrapped) return loc;
+  stub.__wrapped = true;
+  if (!('and' in stub)) stub.and = () => loc;
+
+  // `nth()` hands back a fresh object the frame stub never produced — the option inside a
+  // combobox is reached that way — and that object is clicked, so it needs the same surface.
+  const nth = stub.nth?.bind(stub);
+  if (nth) stub.nth = (i: number) => withAnd(nth(i));
+
+  /**
+   * `refuseIfCanSubmit` asks the page, over the composed tree, whether anything RENDERED inside
+   * this control can submit the form — the one question a selector cannot answer, because
+   * slotted content is not a DOM descendant. Every stub here stands for an ordinary control
+   * with nothing of the sort in it, so the honest answer is `null`.
+   *
+   * Told apart from the read-back evaluates by the argument the guard passes, and layered over
+   * whatever `evaluate` the stub already had rather than replacing it. A stub that had none
+   * still throws for any other use, so a real need for one surfaces instead of quietly
+   * answering undefined.
+   */
+  const existing = stub.evaluate?.bind(stub);
+  stub.evaluate = (fn: unknown, arg?: unknown) => {
+    if (arg !== null && typeof arg === 'object' && 'selector' in arg) return Promise.resolve(null);
+    if (!existing) throw new Error('this stub has no evaluate() for that call');
+    return existing(fn, arg);
+  };
   return loc;
 }
 
@@ -1570,4 +1600,108 @@ describe('a form that mutates under the filler', () => {
       await page.close();
     }
   }, 60_000);
+});
+
+/**
+ * A submit control that is RENDERED inside a widget without being inside it.
+ *
+ * `:has()` walks the DOM tree, and slotted content is not in it. A custom element whose shadow
+ * root is `<div role="combobox"><slot></slot></div>` renders whatever light-DOM children the
+ * host was given inside that div, so a page author writes
+ *
+ *     <x-combo><input type="submit" value="Email address"></x-combo>
+ *
+ * and the div's only DOM child is the `<slot>`. Every `:not(:has(...))` clause answers "nothing
+ * dangerous in there", the scanner maps the div as a combobox, and the fill path's first act on
+ * a combobox is to click it — onto the submit control rendered in its place. Verified through
+ * `buildFormMap`, `buildFillPlan` and `executePlan` against real Chromium before the fix: the
+ * form was submitted, and the run reported "Nothing has been submitted."
+ *
+ * No selector can see this, because the relationship is a rendering one and not a structural
+ * one. `fill.ts` asks the page over the composed tree instead, immediately before it clicks.
+ */
+describe('a widget that renders a submit control it does not contain', () => {
+  const SLOTTED = `<form id="f" action="/submitted" method="POST">
+      <input id="name" type="text" autocomplete="name" aria-label="Full name">
+      <x-combo id="combo" aria-label="Email address">
+        <input type="submit" value="Email address" style="width:220px;height:30px">
+      </x-combo>
+    </form>
+    <script>
+      window.__submitted = false;
+      document.getElementById('f').addEventListener('submit', function (e) {
+        e.preventDefault();
+        window.__submitted = true;
+      });
+      customElements.define('x-combo', class extends HTMLElement {
+        connectedCallback() {
+          var root = this.attachShadow({ mode: 'open' });
+          root.innerHTML =
+            '<div role="combobox" aria-label="Email address" autocomplete="email" ' +
+            'style="display:inline-block"><slot></slot></div>';
+        }
+      });
+    </script>`;
+
+  it('is not clicked, and the ordinary field beside it still fills', async () => {
+    const page = await session.context.newPage();
+    try {
+      await page.setContent(SLOTTED);
+      await page.waitForTimeout(200);
+
+      // The scanner does map it — the shadow div really is a `[role=combobox]` that no
+      // exclusion can see through — so the guard has to be the thing that stops the click.
+      const map = await buildFormMap(page);
+      expect(map.fields.some((f) => f.control === 'combobox')).toBe(true);
+
+      const plan = buildFillPlan({ fields: map.fields, profile: PROFILE, answers: [] });
+      const result = await executePlan(page, plan);
+
+      const combo = result.results.find((r) => r.field.control === 'combobox');
+      expect(combo?.status).toBe('failed');
+      expect(combo?.note).toMatch(/can submit the form/);
+      // And it says what to do, rather than only that something went wrong.
+      expect(combo?.note).toMatch(/yourself/i);
+
+      expect(result.results.find((r) => r.field.semantic === 'full_name')?.status).toBe('ok');
+      expect(
+        await page.evaluate(() => (window as unknown as { __submitted: boolean }).__submitted),
+      ).toBe(false);
+    } finally {
+      await page.close();
+    }
+  }, 90_000);
+
+  it('leaves an ordinary shadow-DOM combobox alone', async () => {
+    // The other direction. A real web component that wraps its own listbox must still be
+    // filled, or this guard costs coverage on exactly the forms it was built for.
+    const page = await session.context.newPage();
+    try {
+      await page.setContent(`<form>
+          <x-ok id="ok" aria-label="Country"></x-ok>
+        </form>
+        <script>
+          customElements.define('x-ok', class extends HTMLElement {
+            connectedCallback() {
+              this.attachShadow({ mode: 'open' }).innerHTML =
+                '<div role="combobox" aria-label="Country" tabindex="0">Pick one</div>';
+            }
+          });
+        </script>`);
+      await page.waitForTimeout(200);
+
+      const map = await buildFormMap(page);
+      const combo = map.fields.find((f) => f.control === 'combobox');
+      expect(combo).toBeDefined();
+      // The guard has nothing to object to here, so resolving and inspecting it must not throw.
+      await expect(
+        page
+          .locator(FILLABLE_CONTROLS)
+          .nth(0)
+          .evaluate((el) => el.tagName),
+      ).resolves.toBe('DIV');
+    } finally {
+      await page.close();
+    }
+  }, 90_000);
 });

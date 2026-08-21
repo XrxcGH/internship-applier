@@ -85,6 +85,32 @@ function dropExclusions(line: string): string {
   return out;
 }
 
+/**
+ * A constant holding a selector is data. Only code that USES one can submit anything.
+ *
+ * `selectors.ts` has to name the controls that must never be touched in order to exclude them,
+ * and one of those names has to be positive rather than wrapped in `:not()`: a `<slot>` renders
+ * light-DOM content inside a shadow element without being its DOM descendant, so no selector
+ * can express "contains a submit control" and `fill.ts` walks the composed tree instead —
+ * against a selector it has to be given. Flagging that declaration would fail the build over
+ * the one piece of code written to make the guarantee hold, which is how a gate gets deleted.
+ *
+ * Narrow on purpose: the exemption is a NAME BOUND TO A STRING, with no call on the line. Every
+ * action form stays caught, and MUST_CATCH proves it — `page.click('button[type=submit]')` is
+ * still an offence, and so is a constant that is assigned the result of a call.
+ */
+const DECLARES_A_STRING =
+  /^\s*(?:export\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]*)?=\s*(?:['"`]|$)/;
+const CONTINUES_A_STRING = /^\s*['"`]/;
+const HAS_A_CALL = /\.\s*[A-Za-z_$][\w$]*\s*\(/;
+
+function isDeclarationOnly(line: string, previous: string): boolean {
+  if (HAS_A_CALL.test(line)) return false;
+  if (DECLARES_A_STRING.test(line)) return true;
+  // A continuation line of a declaration whose value started on the line before.
+  return CONTINUES_A_STRING.test(line) && DECLARES_A_STRING.test(previous);
+}
+
 interface Rule {
   readonly test: (line: string) => boolean;
   readonly why: string;
@@ -145,6 +171,15 @@ export function scanSource(file: string, src: string): Offence[] {
 
   lines.forEach((l, i) => {
     if (l === '') return;
+    // The nearest preceding line that is not a comment, for the continuation case.
+    let previous = '';
+    for (let back = i - 1; back >= 0; back--) {
+      if (lines[back] !== '') {
+        previous = lines[back]!;
+        break;
+      }
+    }
+    if (isDeclarationOnly(l, previous)) return;
     for (const rule of LINE_RULES) {
       if (rule.test(l)) found.push({ file, line: i + 1, why: rule.why, text: l.trim() });
     }
@@ -197,6 +232,10 @@ const MUST_CATCH: ReadonlyArray<readonly [string, string]> = [
   ['double-quoted attribute', 'await page.click(\'button[type="submit"]\');'],
   ['chained locator', "await page.locator('#submit-application').click();"],
   ['role locator', "await page.getByRole('button', { name: 'Submit' }).click();"],
+  // The exemption for a bare string constant must not stretch any further than that. A name
+  // bound to the RESULT OF A CALL is code that runs, whatever it is called.
+  ['constant assigned a call', "const SUBMIT = page.locator('button[type=submit]');"],
+  ['constant then used', "const S = '[type=submit]';\nawait page.click(S);"],
   ['identifier receiver', 'await submitButton.click();'],
   ['multi-line chain', "await page\n  .locator('#submit-application')\n  .click();"],
   ['enter key', "await page.keyboard.press('Enter');"],
