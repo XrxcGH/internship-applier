@@ -51,8 +51,11 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+  // Closing Chromium is not reliably quick on a loaded machine, and the default hook
+  // timeout is 10s — this teardown timed out in a full-suite run where every test in
+  // the file had passed. Launching it already carries an explicit budget; so does this.
   await browser?.close();
-});
+}, 60_000);
 
 const matched = async (selector: string): Promise<string[]> =>
   page.evaluate((s) => [...document.querySelectorAll(s)].map((el) => el.id), selector);
@@ -138,7 +141,7 @@ describe('what an ARIA role must not smuggle through', () => {
 
   afterAll(async () => {
     await trapPage?.close();
-  });
+  }, 60_000);
 
   const inTraps = async (selector: string): Promise<string[]> =>
     trapPage.evaluate((sel) => [...document.querySelectorAll(sel)].map((el) => el.id), selector);

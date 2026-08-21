@@ -37,8 +37,16 @@ describe('PreferencesEditor', () => {
     // A family offered here that the planner does not know would store a preference that
     // silently searches for nothing. ROLE_FAMILIES is the shared list both sides are typed
     // against, which is what stops the two drifting.
-    const html = render();
-    for (const family of ROLE_FAMILIES) expect(html, family).toContain(family);
+    //
+    // COUNTED, NOT JUST CONTAINED. This used to loop ROLE_FAMILIES asserting `toContain`,
+    // which is satisfied by rendering the whole list plus anything else — the exact half of
+    // the property the title claims ("and no others") went unchecked. Adding a bogus family
+    // to the component left it green.
+    const offered = [...render().matchAll(/aria-pressed="(?:true|false)"[^>]*>([^<]+)</g)].map(
+      (m) => m[1],
+    );
+    expect(new Set(offered)).toEqual(new Set(ROLE_FAMILIES));
+    expect(offered).toHaveLength(ROLE_FAMILIES.length);
   });
 
   it('says the resume is being read when nothing has been picked', () => {

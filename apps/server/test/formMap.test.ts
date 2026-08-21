@@ -37,10 +37,12 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  // Closing Chromium is not reliably quick on a loaded machine, and the default hook
+  // timeout is 10s. Launching it already carries an explicit budget; so does this.
   await session?.close();
   await fixture?.close();
   removeTempDir(profileDir);
-});
+}, 60_000);
 
 async function mapOf(pathname: string): Promise<FormMap> {
   await session.page.goto(`${fixture.url}${pathname}`);

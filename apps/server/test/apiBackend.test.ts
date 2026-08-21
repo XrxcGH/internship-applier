@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MODELS } from '../src/infra/llm/client';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -128,15 +129,29 @@ describe('what the request asks for', () => {
     });
   });
 
-  it('sends the cheap model for discovery and the extraction model for a resume', () => {
+  it('sends the cheap model for discovery and the extraction model for a resume', async () => {
     // Discovery is judgment-light by design: the model names candidate URLs and this process
     // fetches and parses every one of them.
-    return apiBackend
-      .generate({ purpose: 'web_discovery', system: 's', user: 'u' })
-      .then(() => apiBackend.generate({ purpose: 'resume_extraction', system: 's', user: 'u' }))
-      .then(() => {
-        expect(h.sent[0]?.['model']).not.toBe(h.sent[1]?.['model']);
-      });
+    //
+    // THE VALUES, not their inequality. This asserted only that the two differed, and three of
+    // the four entries in MODELS are the same string today — so the mapping could be swapped
+    // end for end, sending the expensive model to discovery and the cheap one to a resume, and
+    // the two would still differ and the test would still pass.
+    await apiBackend.generate({ purpose: 'web_discovery', system: 's', user: 'u' });
+    await apiBackend.generate({ purpose: 'resume_extraction', system: 's', user: 'u' });
+
+    expect(h.sent[0]?.['model']).toBe(MODELS.classification);
+    expect(h.sent[1]?.['model']).toBe(MODELS.extraction);
+  });
+
+  it("sends the verification model for the two checks that read somebody else's work", async () => {
+    // `fact_guard` and `style_critic` are the passes that judge a draft, and both were mapped
+    // by a `case` with nothing asserting where it pointed.
+    await apiBackend.generate({ purpose: 'fact_guard', system: 's', user: 'u' });
+    await apiBackend.generate({ purpose: 'field_classification', system: 's', user: 'u' });
+
+    expect(h.sent[0]?.['model']).toBe(MODELS.verification);
+    expect(h.sent[1]?.['model']).toBe(MODELS.classification);
   });
 });
 

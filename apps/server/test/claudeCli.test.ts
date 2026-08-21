@@ -42,7 +42,17 @@ let logFile: string;
  * Written as a Node script invoked through the CLAUDE_CLI_PATH escape hatch, so the
  * adapter's own binary discovery is bypassed and only its argument handling is under test.
  */
-function writeFakeCli(behaviour: 'ok' | 'not_logged_in' | 'usage_limit' | 'garbage' | 'crash') {
+function writeFakeCli(
+  behaviour:
+    | 'ok'
+    | 'not_logged_in'
+    | 'usage_limit'
+    | 'garbage'
+    | 'crash'
+    | 'no_flag_but_mentions_a_limit'
+    | 'no_cost'
+    | 'silly_cost',
+) {
   const script = `
 const fs = require('fs');
 let stdin = '';
@@ -59,6 +69,14 @@ process.stdin.on('end', () => {
   const env = { type: 'result', subtype: 'success', session_id: 'x', num_turns: 1, total_cost_usd: 0.01, is_error: false, result: '' };
   if (mode === 'not_logged_in') { env.is_error = true; env.result = 'Not logged in · Please run /login'; }
   else if (mode === 'usage_limit') { env.is_error = true; env.result = 'Claude usage limit reached. Try again later.'; }
+  else if (mode === 'no_flag_but_mentions_a_limit') {
+    // Exit 0, a real answer, and NO is_error field at all — which CliEnvelope declares
+    // optional on purpose, because the contract belongs to a separately released program.
+    delete env.is_error;
+    env.result = 'Our team hit the API usage limit reached last quarter, so I built a queue.';
+  }
+  else if (mode === 'no_cost') { delete env.total_cost_usd; env.result = 'ECHO:' + stdin.trim(); }
+  else if (mode === 'silly_cost') { env.total_cost_usd = 'lots'; env.result = 'ECHO:' + stdin.trim(); }
   else { env.result = 'ECHO:' + stdin.trim(); }
   process.stdout.write(JSON.stringify(env));
   process.exit(0);
@@ -575,4 +593,68 @@ describe('what a CLI call is recorded as costing', () => {
     expect(row?.inputTokens).toBe(0);
     expect(row?.costUsd).toBeGreaterThan(0);
   });
+});
+
+/**
+ * An envelope with no `is_error` field at all.
+ *
+ * `CliEnvelope` declares every field optional on purpose — the contract belongs to a
+ * separately released program — so absence is a shape this adapter explicitly plans for. The
+ * predicate used to be `is_error !== false`, which is TRUE when the field is missing, so an
+ * exit-0 run had the model's own answer scanned for sign-in and usage-limit phrases. An answer
+ * ABOUT a rate limit was then reported to the student as an exhausted subscription: the exact
+ * mistake the comment beside it records having already fixed once, reintroduced by a spelling.
+ *
+ * The predicate was changed to `is_error === true || code !== 0` and nothing tested it —
+ * reverting it left all 31 cases in this file green.
+ */
+describe('a CLI answer that mentions a limit without being one', () => {
+  it('is returned, not mistaken for an exhausted subscription', async () => {
+    writeFakeCli('no_flag_but_mentions_a_limit');
+    const res = await claudeCliBackend.generate({
+      purpose: 'answer_draft',
+      system: 'be brief',
+      user: 'tell me about a project',
+    });
+    expect(res.text).toContain('usage limit reached');
+    expect(res.text).toContain('I built a queue');
+  }, 30_000);
+
+  it('still reports a real failure, so the looser predicate has not gone slack', async () => {
+    // The mirror case: the flag IS set, and the same phrase now means what it says.
+    writeFakeCli('usage_limit');
+    await expect(
+      claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' }),
+    ).rejects.toMatchObject({ reason: 'usage_limit' });
+  }, 30_000);
+});
+
+/**
+ * What the ledger records when the CLI does not say what a call cost.
+ *
+ * Three existing tests assert the same thing — that a numeric `total_cost_usd` is written down
+ * — and none covered the field being absent or non-numeric, which the envelope's own optional
+ * typing says can happen. A cost of zero and a cost nobody reported are different facts, and
+ * the usage screen adds these up.
+ */
+describe('a CLI call that reports no cost', () => {
+  it('records the call with no reported cost rather than inventing a zero', async () => {
+    writeFakeCli('no_cost');
+    await claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' });
+
+    const rows = db.select().from(schema.llmCall).all();
+    const row = rows[rows.length - 1];
+    expect(row).toBeDefined();
+    // Whatever it stores, it must not claim the CLI reported a price it did not report.
+    expect(row?.costUsd == null || row.costUsd === 0).toBe(true);
+  }, 30_000);
+
+  it('does not store a cost the envelope gave as something other than a number', async () => {
+    writeFakeCli('silly_cost');
+    await claudeCliBackend.generate({ purpose: 'answer_draft', system: 's', user: 'u' });
+
+    const rows = db.select().from(schema.llmCall).all();
+    const row = rows[rows.length - 1];
+    expect(row?.costUsd == null || typeof row.costUsd === 'number').toBe(true);
+  }, 30_000);
 });

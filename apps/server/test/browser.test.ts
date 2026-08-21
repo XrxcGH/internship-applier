@@ -26,10 +26,13 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  // Closing Chromium is not reliably quick on a loaded machine, and the default hook
+  // timeout is 10s — this teardown timed out in a full-suite run where every test in
+  // the file had passed. Launching it already carries an explicit budget; so does this.
   await session?.close();
   await fixture?.close();
   removeTempDir(profileDir);
-});
+}, 60_000);
 
 describe('browser session', () => {
   it('opens the fixture and reads its fields', async () => {

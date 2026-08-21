@@ -358,3 +358,26 @@ describe('a page that redirects somewhere this tool will not go', () => {
     await expect(startRun(input('app-1'))).resolves.toMatchObject({ applicationId: 'app-1' });
   });
 });
+
+/**
+ * What the run says it is about to do, before anybody presses continue.
+ *
+ * The message is two lines because they answer different questions: the MAP line says what the
+ * page turned out to contain, which is how someone tells a form that failed to render from one
+ * that rendered and had little on it, and the PLAN line says what this run will actually type.
+ *
+ * The plan half was added to `run.message` and nothing asserted it. `summarizePlan` was added
+ * to the mock above at the same time, purely so the module surface matched and the run stopped
+ * throwing — so dropping the plan half from run.ts again left every case in this file green.
+ * A stub added to silence a failure is not coverage of the thing that failed.
+ */
+describe('the message a run carries before it fills anything', () => {
+  it('reports the plan as well as the map', async () => {
+    await startRun(input('app-msg'));
+    const run = getRun('app-msg');
+
+    expect(run?.message).toContain('one field'); // the map half
+    expect(run?.message).toContain('1 field to fill'); // the plan half
+    expect(run?.message).toMatch(/left for you/);
+  });
+});

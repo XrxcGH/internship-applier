@@ -137,10 +137,12 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  // Same reason as the launch above carrying 120s: closing Chromium is not reliably quick on a
+  // loaded machine, and the default hook timeout is 10s.
   await session?.close();
   await fixture?.close();
   removeTempDir(workDir);
-});
+}, 60_000);
 
 async function run(pathname: string, answers: ApplicationAnswer[] = []) {
   await session.page.goto(`${fixture.url}${pathname}`);
