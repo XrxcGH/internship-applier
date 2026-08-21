@@ -302,6 +302,34 @@ submit a form.
 - and a fixture test asserting the mock ATS recorded **zero** POSTs across the entire suite,
   which is the only one of the four that checks the outcome rather than the source text.
 
+**All four of those answer a different question from the one a hostile page asks.** They
+establish that no code here *writes* a submit call. They say nothing about a page arranging for
+an ordinary-looking click to land on a control that submits, and every one of these was found
+doing exactly that, verified in Chromium:
+
+- `<input type="submit" role="combobox">` — an ARIA role on a submit control, which the
+  exclusions covered for `<button>` and not for `input`;
+- `<div role="combobox">` wrapping a stretched submit input, or a `<label role="combobox">`
+  around one — a click lands on what is under the cursor, not on the element that was located,
+  and Playwright's actionability check is satisfied by a descendant;
+- a page that swaps a text input for a `<button>` with no `type` attribute the moment the
+  *previous* field takes a keystroke, so the element was entirely legal when it was scanned;
+- a custom element whose shadow root is `<div role="combobox"><slot></slot></div>`, given
+  `<x-combo><input type="submit"></x-combo>`. The submit control renders inside the div
+  without being its descendant, so no `:has()` can see it.
+
+So there are two more layers, and they are runtime rather than source:
+
+- **`selectors.ts` states once what must never be resolved** — anything that can submit or
+  reset, and anything *containing* one, and every `<label>`, whatever it wraps or points at —
+  and every clause of both selectors carries it. `locate()` narrows every stored locator with
+  it again at fill time, because the scan and the fill are seconds apart and the page owns what
+  happens in between.
+- **`refuseIfItCanSend()` asks the page** over the composed tree — shadow roots entered, slots
+  resolved to what was assigned them — immediately before each click. That is the one question
+  a selector cannot answer, because the relationship is a rendering one and not a structural
+  one.
+
 **Where the layers currently differ**, since anyone adding a new submit shape needs to know
 where it has to go. The CI step and the test share one function, so those two cannot
 drift apart. The lint rule is necessarily a separate list — syntax selectors, not regexes —

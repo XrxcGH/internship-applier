@@ -119,6 +119,15 @@ unnecessary as well.
 **Headed browser by default.** The user should see the form being filled. Headless mode
 exists only for the test fixture site.
 
+**`undici` is a direct dependency even though Node bundles a copy.** The outbound address
+guard has to run at the moment the socket is opened, or a name whose DNS the attacker controls
+can answer a public address to the check and a private one to the connection (doc 10 § Data in
+transit). That means supplying the connector, which means a dispatcher — and Node does not
+expose the undici it ships. The two are not interchangeable either: an `Agent` from the npm
+package handed to `globalThis.fetch` is rejected outright with `invalid onRequestStart method`,
+because the versions do not share a dispatcher contract. So `fetch` and `Agent` are imported
+from the same copy, and `infra/http/fetcher.ts` is the only file that imports either.
+
 ## Processes and lifecycle
 
 One command starts everything:

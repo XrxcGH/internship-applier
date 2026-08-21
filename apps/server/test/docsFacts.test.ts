@@ -1074,3 +1074,106 @@ describe('the two copies of ANSWERED_IN_WIZARD', () => {
     }
   });
 });
+
+/**
+ * docs/10 § Limits on what one page or one upload may cost.
+ *
+ * Every number in that section is a promise about a constant somewhere in the source, and a
+ * promise nobody checks is a number that drifts. These read the figure OUT of the prose and
+ * assert the code declares it, so changing one without the other turns a test red — which is
+ * the same contract the docs/04 sections above are held to.
+ */
+describe('docs/10 — security & privacy, § Limits', () => {
+  const DOC10 = flat(read('docs/10-security-privacy.md'));
+  const fetcher = read('apps/server/src/infra/http/fetcher.ts');
+  const extractText = read('apps/server/src/core/ingestion/extractText.ts');
+  const resumes = read('apps/server/src/routes/resumes.ts');
+  const requirements = read('apps/server/src/core/matching/extractRequirements.ts');
+
+  it('states the response body and robots.txt caps the fetcher declares', () => {
+    const body = Number(/A response body stops at (\d+)MB/.exec(DOC10)?.[1]);
+    const robots = Number(/`robots.txt` at (\d+)KB/.exec(DOC10)?.[1]);
+    expect(fetcher).toMatch(new RegExp(`const MAX_BODY_BYTES = ${body} \\* 1024 \\* 1024;`));
+    expect(fetcher).toMatch(new RegExp(`const MAX_ROBOTS_BYTES = ${robots} \\* 1024;`));
+  });
+
+  it('states both bounds on the response cache', () => {
+    const claimed = /cache holds (\d+) entries and (\d+)MB/.exec(DOC10);
+    expect(fetcher).toMatch(new RegExp(`const MAX_CACHE_ENTRIES = ${claimed?.[1]};`));
+    expect(fetcher).toMatch(
+      new RegExp(`const MAX_CACHE_BYTES = ${claimed?.[2]} \\* 1024 \\* 1024;`),
+    );
+  });
+
+  it('states the redirect cap, which is the same for a page and for a robots.txt', () => {
+    const hops = Number(/Redirects stop at (\d+) hops/.exec(DOC10)?.[1]);
+    expect(fetcher).toMatch(new RegExp(`const MAX_REDIRECTS = ${hops};`));
+    expect(fetcher).toMatch(new RegExp(`const MAX_ROBOTS_REDIRECTS = ${hops};`));
+  });
+
+  it('states the upload cap and both document limits', () => {
+    const upload = Number(/An upload stops at (\d+)MB/.exec(DOC10)?.[1]);
+    const unpacked = Number(/may not declare more than \*\*(\d+)MB\*\* unpacked/.exec(DOC10)?.[1]);
+    const chars = /yield more than \*\*([\d,]+) characters\*\*/.exec(DOC10)?.[1];
+    expect(resumes).toMatch(new RegExp(`const MAX_BYTES = ${upload} \\* 1024 \\* 1024;`));
+    expect(extractText).toMatch(
+      new RegExp(`const MAX_DOCX_UNPACKED_BYTES = ${unpacked} \\* 1024 \\* 1024;`),
+    );
+    // Written with underscores in the source and commas in the prose; same number either way.
+    expect(extractText).toMatch(new RegExp(`const MAX_TEXT_CHARS = ${chars?.replace(/,/g, '_')};`));
+  });
+
+  it('states the three text windows the requirement extractor clamps to', () => {
+    const claimed = /clamped to (\d+), (\d+) and (\d+) characters/.exec(DOC10);
+    expect(requirements).toMatch(new RegExp(`const MAX_LEAD = ${claimed?.[1]};`));
+    expect(requirements).toMatch(new RegExp(`const MAX_CLAUSE_SPAN = ${claimed?.[2]};`));
+    expect(requirements).toMatch(new RegExp(`const MAX_TRAIL = ${claimed?.[3]};`));
+  });
+
+  it('does not claim a robots.txt regex that is no longer there', () => {
+    // The section says wildcard matching is "a forward scan, not a compiled regex". That is a
+    // claim about the code, and the code is what it is checked against.
+    expect(DOC10).toMatch(/forward scan, not a compiled regex/);
+    expect(fetcher).not.toMatch(/new RegExp\(`\^\$\{source\}/);
+    expect(fetcher).toMatch(/function robotsMatches/);
+  });
+});
+
+/**
+ * docs/07 § The submit gate — the two RUNTIME layers, as opposed to the four source scans.
+ *
+ * The four listed before them establish that no code here writes a submit call. They say
+ * nothing about a page arranging for an ordinary-looking click to land on something that
+ * submits, which is what the two below are for, and what every shape listed in that section
+ * was found doing.
+ */
+describe('docs/07 — form automation, § The submit gate', () => {
+  const DOC07 = flat(read('docs/07-form-automation.md'));
+  const selectors = read('apps/server/src/core/filling/selectors.ts');
+  const fill = read('apps/server/src/core/filling/fill.ts');
+
+  it('names a guard that exists and asks the page rather than the selector', () => {
+    expect(DOC07).toMatch(/`refuseIfItCanSend\(\)` asks the page/);
+    expect(fill).toMatch(/async function refuseIfItCanSend\(/);
+    // The composed tree is the whole point: shadow roots entered, slots resolved.
+    expect(fill).toMatch(/shadowRoot/);
+    expect(fill).toMatch(/assignedElements/);
+  });
+
+  it('states the exclusion is written once and carried by every clause', async () => {
+    expect(DOC07).toMatch(/states once what must never be resolved/);
+    const { NEVER_TOUCH, FILLABLE_CONTROLS, SAFE_OPTION } =
+      await import('../src/core/filling/selectors');
+    expect(FILLABLE_CONTROLS.split(NEVER_TOUCH).length - 1).toBe(5);
+    expect(SAFE_OPTION).toContain(NEVER_TOUCH);
+    // And the three things the doc says it covers.
+    expect(NEVER_TOUCH).toContain(':not(label)');
+    expect(NEVER_TOUCH).toMatch(/:not\(:has\(/);
+    expect(selectors).toMatch(/export const SUBMIT_CAPABLE/);
+  });
+
+  it('states that every stored locator is narrowed again at fill time', () => {
+    expect(DOC07).toMatch(/narrows every stored locator with it again at fill time/);
+    expect(fill).toMatch(/\.and\(frame\.locator\(FILLABLE_CONTROLS\)\)/);
+  });
+});
