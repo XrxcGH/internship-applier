@@ -108,6 +108,29 @@ describe('reading an uploaded document', () => {
     expect(await extractText(at('stored.docx'), DOCX)).toBe('Eric Dean');
   });
 
+  it('refuses a document whose text is longer than any resume, whatever its type', async () => {
+    // `bounded()` is the third line of defence and the ONLY size limit on the text/plain and
+    // text/markdown paths — nothing there is a zip, so neither the declared-size check nor the
+    // packed cross-check applies. It had no test at all.
+    const huge = 'x'.repeat(4_000_001);
+    await writeFile(at('huge.txt'), huge);
+    await expect(extractText(at('huge.txt'), 'text/plain')).rejects.toThrow(/characters/);
+    await expect(extractText(at('huge.txt'), 'text/plain')).rejects.toThrow(/4,000,001/);
+
+    // And the same limit on the .docx path, which is what catches an archive whose header lied
+    // about its size convincingly enough to get past both of the checks before it.
+    await writeFile(at('huge.docx'), makeDocx('y'.repeat(4_000_001)));
+    await expect(extractText(at('huge.docx'), DOCX)).rejects.toThrow(/characters/);
+  }, 60_000);
+
+  it('reads a document that is merely long', async () => {
+    // Just under the line. Refusing here would turn a fifty-page academic CV into an upload the
+    // student cannot use, which is a worse outcome than the limit exists to prevent.
+    const long = 'z'.repeat(3_999_000);
+    await writeFile(at('long.txt'), long);
+    expect(await extractText(at('long.txt'), 'text/plain')).toHaveLength(3_999_000);
+  }, 60_000);
+
   it('refuses a .docx that is not a zip at all', async () => {
     await writeFile(at('fake.docx'), 'PK this is not really an archive');
     await expect(extractText(at('fake.docx'), DOCX)).rejects.toThrow(/archive directory/);

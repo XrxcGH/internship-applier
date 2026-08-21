@@ -239,10 +239,41 @@ describe('the resolver a connection is made through', () => {
     }
   }, 30_000);
 
-  it('is not the only check, because a connector never resolves a literal', () => {
-    // Measured: a fetch to http://127.0.0.1:PORT/ through the guarded dispatcher went straight
-    // through with the lookup never called — there was no name to look up. `assertPublicHost`
-    // is what covers those, which is why both exist and neither is redundant.
-    expect(isPrivateAddress('127.0.0.1', 4)).toBe(true);
-  });
+  it('is not the only check, because a connector never resolves a literal', async () => {
+    // This used to assert `isPrivateAddress('127.0.0.1', 4)` — the same line as the first test
+    // in the file, in a describe about the connector, proving nothing about the connector. The
+    // claim it was meant to make is that `guardedLookup` is NEVER CONSULTED for an IP literal,
+    // which is why `assertPublicHost` is not redundant. Counted rather than asserted.
+    let consulted = 0;
+    const counting = ((hostname: string, options: LookupOptions, cb: never) => {
+      consulted++;
+      guardedLookup(hostname, options, cb);
+    }) as unknown as typeof guardedLookup;
+
+    const server = createServer((_req, res) => {
+      res.writeHead(200);
+      res.end('LOCAL SERVICE');
+    });
+    await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    const port = String(address.port);
+
+    try {
+      const agent = new Agent({ connect: { lookup: counting } });
+
+      // A literal: the connector has no name to look up, so the guard is never asked, and the
+      // request goes through. This is the hole `assertPublicHost` exists to cover.
+      expect(await (await fetch(`http://127.0.0.1:${port}/x`, { dispatcher: agent })).text()).toBe(
+        'LOCAL SERVICE',
+      );
+      expect(consulted, 'a literal must not reach the resolver at all').toBe(0);
+
+      // A name: consulted, and refused.
+      await expect(fetch(`http://localhost:${port}/x`, { dispatcher: agent })).rejects.toThrow();
+      expect(consulted).toBeGreaterThan(0);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
 });

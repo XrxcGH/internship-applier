@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import type { FastifyInstance } from 'fastify';
+import { buildApp } from '../src/app';
+import { config } from '../src/config';
+import { runMigrations } from '../src/infra/db/migrate';
 import path from 'node:path';
 import {
   extensionForMime,
@@ -70,5 +75,90 @@ describe('the name a resume is stored under', () => {
   it('gives an unsupported type no extension rather than a guessed one', () => {
     expect(extensionForMime('application/octet-stream')).toBe('');
     expect(extensionForMime('text/html')).toBe('');
+  });
+});
+
+/**
+ * The same property, asked of the ROUTE — which is where the bug actually was.
+ *
+ * Everything above exercises `storedResumeFilename`, and the fix was not in
+ * `storedResumeFilename`: it was in `routes/resumes.ts`, which used to build the path with
+ * `path.extname(file.filename)`. Reverting that one line to its vulnerable form and running
+ * the entire server suite left all 1,919 tests green. A helper can be perfect while nothing
+ * calls it.
+ *
+ * So this drives a real multipart upload through the real route and looks at what landed on
+ * disk. `vitest.setup.ts` points DATA_DIR at a fresh temp directory per test file, so the
+ * files written here are disposable.
+ */
+describe('what POST /api/resumes actually writes', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    runMigrations();
+    app = await buildApp({ skipAuth: true });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const upload = async (filename: string, body: string) => {
+    const boundary = '----iaStoredNameTest';
+    const payload = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\n` +
+          `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+          'Content-Type: text/plain\r\n\r\n',
+      ),
+      Buffer.from(body, 'utf8'),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    return app.inject({
+      method: 'POST',
+      url: '/api/resumes',
+      headers: {
+        host: '127.0.0.1:8787',
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+      },
+      payload,
+    });
+  };
+
+  const storedNames = (): string[] =>
+    existsSync(config.paths.resumes) ? readdirSync(config.paths.resumes) : [];
+
+  it('names the file by its type, whatever the upload was called', async () => {
+    const before = storedNames().length;
+    const res = await upload('resume.txt:evil', 'Eric Dean — Half Moon Bay');
+    expect(res.statusCode).toBe(201);
+
+    const written = storedNames();
+    expect(written).toHaveLength(before + 1);
+    // A ULID and one of the four extensions, and nothing else. On Windows the old code put
+    // this content into an NTFS alternate data stream and left a 0-byte `<id>.txt` here.
+    for (const name of written) {
+      expect(name, name).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}\.(pdf|docx|md|txt)$/);
+      expect(name).not.toContain(':');
+      expect(statSync(path.join(config.paths.resumes, name)).size).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps the name the student chose, because that is what they will recognise', async () => {
+    // The stored path is not the filename: the original is kept in the row and is what the
+    // interface shows. Refusing the upload, or renaming it in the UI, would be a worse answer
+    // than the bug.
+    const res = await upload('My CV (final) 2027.txt', 'Eric Dean');
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ filename: 'My CV (final) 2027.txt' });
+  });
+
+  it('is not fooled by an extension long enough to break the write', async () => {
+    // 300 characters of extension made the old code throw ENOENT and 500 the upload.
+    const res = await upload(`resume.${'y'.repeat(300)}`, 'Eric Dean');
+    // The type is decided by the MIME, so this is an ordinary .txt and simply works.
+    expect(res.statusCode).toBe(201);
+    for (const name of storedNames()) expect(name.length).toBeLessThan(64);
   });
 });

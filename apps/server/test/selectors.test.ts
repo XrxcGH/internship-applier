@@ -163,6 +163,11 @@ describe('what an ARIA role must not smuggle through', () => {
     </div>
     <div id="wrap-button" role="combobox" aria-label="Country"><button>Go</button></div>
     <div id="wrap-pw" role="combobox" aria-label="Secret"><input type="password"></div>
+    <!-- The other two things a wrapper can hold. type=image is a graphical submit button and
+         type=reset wipes every answer already typed; both had a :has() clause and neither had
+         a trap, so two of the five clauses were pinned by nothing at all. -->
+    <div id="wrap-image" role="combobox" aria-label="Photo"><input type="image" src="x.png"></div>
+    <div id="wrap-reset" role="combobox" aria-label="Start over"><input type="reset"></div>
     <div id="wrap-opt" role="option"><input type="submit" value="Yes"></div>
 
     <!-- A label forwards activation to its control wherever the click lands, and with a for= attribute
@@ -198,7 +203,15 @@ describe('what an ARIA role must not smuggle through', () => {
     // Playwright's actionability check is satisfied by a descendant hit target. Every one of
     // these passed the element-only exclusions and posted the application on the first click.
     const matched = await inTraps(FILLABLE_CONTROLS);
-    for (const trap of ['wrap-submit', 'wrap-button', 'wrap-pw', 'label-wrap', 'label-for']) {
+    for (const trap of [
+      'wrap-submit',
+      'wrap-button',
+      'wrap-image',
+      'wrap-reset',
+      'wrap-pw',
+      'label-wrap',
+      'label-for',
+    ]) {
       expect(matched, trap).not.toContain(trap);
     }
     expect(await inTraps(SAFE_OPTION)).not.toContain('wrap-opt');
