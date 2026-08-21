@@ -58,11 +58,11 @@ describe('reading an uploaded document', () => {
     expect(bomb.byteLength).toBeLessThan(4096);
     await writeFile(at('bomb.docx'), bomb);
 
-    const started = Date.now();
+    // The MESSAGE is the proof that the header is what refused it: only the declared-size
+    // check produces this sentence, and it names the number it read out of the directory.
+    // A wall-clock bound used to sit here too, and proved nothing — the fixture is a few
+    // hundred bytes, so every path through this function is fast on it.
     await expect(extractText(at('bomb.docx'), DOCX)).rejects.toThrow(/unpacks to 400MB/);
-    // The refusal has to come from the header. Unpacking first and complaining afterwards is
-    // the failure being prevented, not a slower version of the fix.
-    expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it('says what to do about it, rather than only that it refused', async () => {
@@ -85,9 +85,9 @@ describe('reading an uploaded document', () => {
       makeZip([{ name: 'word/document.xml', content, declaredUnpackedBytes: 10 }]),
     );
 
-    const started = Date.now();
+    // Again the message rather than a stopwatch: this sentence comes only from the packed-vs-
+    // declared cross-check, and the fixture is 200KB, on which every path here is quick.
     await expect(extractText(at('liar.docx'), DOCX)).rejects.toThrow(/holds less than it takes up/);
-    expect(Date.now() - started).toBeLessThan(2000);
   });
 
   it('says something the student can act on when the archive is inconsistent', async () => {

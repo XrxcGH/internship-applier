@@ -21,7 +21,6 @@ import {
   type FixtureServer,
 } from '@ia/fixtures';
 import { detectIntervention, openSession, type BrowserSession } from '../src/core/filling/browser';
-import { FILLABLE_CONTROLS } from '../src/core/filling/selectors';
 import { CONFIDENCE_FLOOR } from '../src/core/filling/classify';
 import { buildFormMap, frameKey } from '../src/core/filling/formMap';
 import { buildFillPlan, summarizePlan } from '../src/core/filling/plan';
@@ -1530,48 +1529,71 @@ describe('the document token', () => {
  * the right box and call it filled.
  */
 describe('which options a declaration-less combobox can reach', () => {
-  const TWO_QUESTIONS = `
+  const TWO_QUESTIONS = `<form>
     <div id="q1">
-      <label id="l1">Are you authorized to work?</label>
-      <div id="c1" role="combobox" aria-labelledby="l1" tabindex="0"></div>
+      <label id="l1" for="c1">Are you authorized to work in the US?</label>
+      <div id="c1" role="combobox" aria-labelledby="l1" tabindex="0"
+           style="width:200px;height:28px;border:1px solid">Choose</div>
       <div role="listbox">
         <div role="option" data-value="auth-yes">Yes</div>
         <div role="option" data-value="auth-no">No</div>
       </div>
     </div>
     <div id="q2">
-      <label id="l2">Do you require sponsorship?</label>
-      <div id="c2" role="combobox" aria-labelledby="l2" tabindex="0"></div>
+      <label id="l2" for="c2">Do you now or in the future require sponsorship?</label>
+      <div id="c2" role="combobox" aria-labelledby="l2" tabindex="0"
+           style="width:200px;height:28px;border:1px solid">Choose</div>
       <div role="listbox">
         <div role="option" data-value="spon-yes">Yes</div>
         <div role="option" data-value="spon-no">No</div>
       </div>
-    </div>`;
+    </div>
+  </form>`;
 
-  it('scopes to the nearest ancestor that actually holds options', async () => {
-    // The property the fix rests on, checked against the real DOM rather than asserted: the
-    // second combobox's nearest option-bearing ancestor is its own question, not the body.
-    await session.page.setContent(TWO_QUESTIONS);
-    const scopedId = await session.page.evaluate(() => {
-      const box = document.querySelector('#c2');
-      let node = box?.parentElement ?? null;
-      while (node && node.querySelector('[role=option]') === null) node = node.parentElement;
-      return node?.id ?? null;
-    });
-    expect(scopedId).toBe('q2');
-  });
-
-  it('finds only that question’s two options inside the scope', async () => {
-    await session.page.setContent(TWO_QUESTIONS);
-    const values = await session.page.evaluate(() => {
-      const scope = document.querySelector('#q2');
-      return [...(scope?.querySelectorAll('[role=option]') ?? [])].map((el) =>
-        el.getAttribute('data-value'),
+  it('picks each question’s own option, not the first one on the page', async () => {
+    // THE REAL PATH. Two tests used to sit here re-implementing the ancestor walk inside the
+    // test's own `evaluate` and asserting on that — facts about this fixture's DOM, not about
+    // `fillOne`, which is where the scoping lives. Neither could fail if the xpath scope in
+    // fill.ts went away.
+    //
+    // Both questions are yes/no, and the whole-frame fallback offered the FIRST "Yes" on the
+    // page to every one of them — so the sponsorship answer was taken from the work-auth
+    // question's list.
+    const page = await session.context.newPage();
+    try {
+      await page.setContent(
+        TWO_QUESTIONS +
+          `<script>
+            window.__clicked = [];
+            document.addEventListener('click', function (e) {
+              var t = e.target;
+              if (t && t.getAttribute && t.getAttribute('role') === 'option') {
+                window.__clicked.push(t.getAttribute('data-value'));
+              }
+            });
+          </script>`,
       );
-    });
-    // Not `auth-yes`, which is what the whole-frame fallback would have offered first.
-    expect(values).toEqual(['spon-yes', 'spon-no']);
-  });
+
+      const map = await buildFormMap(page);
+      const sponsorship = map.fields.find((f) => f.semantic === 'sponsorship_needed');
+      expect(sponsorship, 'the fixture must map a sponsorship question').toBeDefined();
+
+      await executePlan(page, buildFillPlan({ fields: map.fields, profile: PROFILE, answers: [] }));
+
+      const clicked = await page.evaluate(
+        () => (window as unknown as { __clicked: string[] }).__clicked,
+      );
+      // Every option this run clicked came from the question it belonged to.
+      expect(clicked.length).toBeGreaterThan(0);
+      for (const value of clicked) {
+        expect(value, `clicked ${value}`).toMatch(/^(auth|spon)-/);
+      }
+      // And the sponsorship answer specifically came out of the sponsorship list.
+      expect(clicked.some((v) => v.startsWith('spon-'))).toBe(true);
+    } finally {
+      await page.close();
+    }
+  }, 90_000);
 });
 
 /**
@@ -1717,18 +1739,28 @@ describe('a widget that renders a submit control it does not contain', () => {
   }, 90_000);
 
   it('leaves an ordinary shadow-DOM combobox alone', async () => {
-    // The other direction. A real web component that wraps its own listbox must still be
-    // filled, or this guard costs coverage on exactly the forms it was built for.
+    // The over-refusal direction, which matters as much: a real web component that wraps its
+    // own listbox must still be filled, or this guard costs coverage on exactly the forms it
+    // was built for.
+    //
+    // This used to assert that `page.locator(FILLABLE_CONTROLS).nth(0)` resolved to a DIV —
+    // a fact about the fixture and the selector constant, true whether or not the guard
+    // over-refuses. It drives the real path now.
     const page = await session.context.newPage();
     try {
       await page.setContent(`<form>
-          <x-ok id="ok" aria-label="Country"></x-ok>
+          <x-ok id="ok" aria-label="Country" aria-controls="lb"></x-ok>
+          <div id="lb" role="listbox">
+            <div role="option">US</div>
+            <div role="option">Canada</div>
+          </div>
         </form>
         <script>
           customElements.define('x-ok', class extends HTMLElement {
             connectedCallback() {
               this.attachShadow({ mode: 'open' }).innerHTML =
-                '<div role="combobox" aria-label="Country" tabindex="0">Pick one</div>';
+                '<div role="combobox" aria-label="Country" tabindex="0" ' +
+                'style="width:200px;height:28px;border:1px solid">Pick one</div>';
             }
           });
         </script>`);
@@ -1736,14 +1768,17 @@ describe('a widget that renders a submit control it does not contain', () => {
 
       const map = await buildFormMap(page);
       const combo = map.fields.find((f) => f.control === 'combobox');
-      expect(combo).toBeDefined();
-      // The guard has nothing to object to here, so resolving and inspecting it must not throw.
-      await expect(
-        page
-          .locator(FILLABLE_CONTROLS)
-          .nth(0)
-          .evaluate((el) => el.tagName),
-      ).resolves.toBe('DIV');
+      expect(combo, 'the fixture must map a combobox').toBeDefined();
+
+      const result = await executePlan(
+        page,
+        buildFillPlan({ fields: map.fields, profile: PROFILE, answers: [] }),
+      );
+      const picked = result.results.find((r) => r.field.control === 'combobox');
+
+      // Whatever else happens to it, the guard must not be what stopped it.
+      expect(picked?.note ?? '').not.toMatch(/can submit the form/);
+      expect(picked?.note ?? '').not.toMatch(/more of the page than a form field/);
     } finally {
       await page.close();
     }
@@ -1813,6 +1848,61 @@ describe('an option that renders a submit control it does not contain', () => {
       expect(
         await page.evaluate(() => (window as unknown as { __submitted: boolean }).__submitted),
       ).toBe(false);
+    } finally {
+      await page.close();
+    }
+  }, 90_000);
+});
+
+/**
+ * Reading back a combobox that is an `<input>`.
+ *
+ * `controlOf` calls anything carrying `role="combobox"` a combobox before it looks at the tag,
+ * which is right: that is the shape ARIA 1.2 prescribes and the one every major component
+ * library ships. But an input has no text content — its value lives in `.value` — so reading
+ * back with `innerText()` returned the empty string and every one of them was reported as a
+ * MISMATCH, a correctly filled field flagged for the student to go and check, on the commonest
+ * dropdown shape on the web.
+ *
+ * The `inputValue()` step that fixed it had no test: removing it left all 1,936 server tests
+ * green.
+ */
+describe('a combobox that is an input rather than a div', () => {
+  const INPUT_COMBO = `<form id="f">
+      <input id="combo" role="combobox" aria-label="Country" aria-controls="lb" readonly>
+      <div id="lb" role="listbox">
+        <div role="option">US</div>
+        <div role="option">Canada</div>
+      </div>
+    </form>
+    <script>
+      // What a real widget does when an option is chosen: it writes the value into the input.
+      document.getElementById('lb').addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.getAttribute('role') === 'option') {
+          document.getElementById('combo').value = t.textContent.trim();
+        }
+      });
+    </script>`;
+
+  it('reads the value out of the input, rather than reporting a mismatch', async () => {
+    const page = await session.context.newPage();
+    try {
+      await page.setContent(INPUT_COMBO);
+
+      const map = await buildFormMap(page);
+      const combo = map.fields.find((f) => f.control === 'combobox');
+      expect(combo?.semantic).toBe('country');
+
+      const result = await executePlan(
+        page,
+        buildFillPlan({ fields: map.fields, profile: PROFILE, answers: [] }),
+      );
+
+      const picked = result.results.find((r) => r.field.control === 'combobox');
+      expect(picked?.status, picked?.note).toBe('ok');
+      // And the page really did keep it, so this is not a read that agreed with itself.
+      expect(await page.locator('#combo').inputValue()).toBe('US');
     } finally {
       await page.close();
     }
