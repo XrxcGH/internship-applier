@@ -12,7 +12,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startFixtureServer, submissions, type FixtureServer } from '@ia/fixtures';
-import { detectIntervention, openSession, type BrowserSession } from '../src/core/filling/browser';
+import {
+  blocksNavigation,
+  detectIntervention,
+  openSession,
+  type BrowserSession,
+} from '../src/core/filling/browser';
 import { removeTempDir } from './support/tempDir';
 
 let fixture: FixtureServer;
@@ -158,4 +163,43 @@ describe('gate G4', () => {
     // for .click(): it asserts no form was actually submitted, however it happened.
     expect(submissions).toEqual([]);
   });
+});
+
+/**
+ * Whether the signed-in browser may navigate somewhere.
+ *
+ * `startRun` checks the address it is ABOUT to open, and then Chromium takes over and follows
+ * 3xx, meta-refresh and `location =` by itself — so a careers host answering
+ * `302 Location: http://192.168.1.1/setup.cgi` would otherwise have the PERSISTENT profile,
+ * the one holding the student's real logins and LAN cookies, issue that request.
+ *
+ * The decision is a separate function from the route handler precisely so it can be tested:
+ * the handler is gated on `config.isTest`, because this suite drives the fixture site on
+ * 127.0.0.1, and a guard whose only code path is switched off under test is one nothing holds.
+ */
+describe('which addresses the signed-in browser may be navigated to', () => {
+  it('refuses this machine and its network', async () => {
+    for (const url of [
+      'http://127.0.0.1:8787/api/profile',
+      'http://localhost:5173/',
+      'http://192.168.1.1/setup.cgi',
+      'http://169.254.169.254/latest/meta-data/',
+      'http://[::1]:8787/',
+    ]) {
+      expect(await blocksNavigation(url), url).toBe(true);
+    }
+  }, 30_000);
+
+  it('allows an ordinary employer, or the fill path would stop working', async () => {
+    expect(await blocksNavigation('https://example.com/careers/1')).toBe(false);
+  }, 30_000);
+
+  it('lets Chromium fail in its own words when the address is not an address', async () => {
+    // A malformed URL or a resolver that threw is not a verdict ABOUT the address. Blocking on
+    // those would turn a DNS outage into "this is on your private network", which is a false
+    // statement, and would hide the real reason the page did not load.
+    for (const url of ['not a url at all', 'http://this-name-does-not-resolve.invalid/']) {
+      expect(await blocksNavigation(url), url).toBe(false);
+    }
+  }, 30_000);
 });

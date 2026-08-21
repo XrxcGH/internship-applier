@@ -75,22 +75,31 @@ export function keyDelay(): number {
  * behind a split-horizon DNS is not an attack on anybody.
  */
 async function guardAddress(route: Route, url: string): Promise<void> {
-  if (config.isTest) {
-    await route.continue();
+  // The suite drives the fixture site on 127.0.0.1, so the guard cannot run here — which is
+  // why the DECISION is a separate function with no `config.isTest` in it, and is tested
+  // directly. A guard whose only code path is switched off under test is a guard nothing holds.
+  if (!config.isTest && (await blocksNavigation(url))) {
+    logger.warn({ url: scrubUrl(url) }, 'blocked a navigation to a private address');
+    await route.abort('blockedbyclient');
     return;
   }
+  await route.continue();
+}
+
+/**
+ * Whether a document navigation to this address must be refused.
+ *
+ * Exported for the tests and for nothing else. Only a PrivateAddressError is an answer about
+ * the address: a malformed URL or a resolver that threw is not, and Chromium should be left to
+ * try it and fail in its own words rather than have one invented for it here.
+ */
+export async function blocksNavigation(url: string): Promise<boolean> {
   try {
     await assertPublicHost(url);
+    return false;
   } catch (err) {
-    if (err instanceof PrivateAddressError) {
-      logger.warn({ url: scrubUrl(url) }, 'blocked a navigation to a private address');
-      await route.abort('blockedbyclient');
-      return;
-    }
-    // Anything else is not a verdict about the address — a malformed URL, a resolver that
-    // threw. Let Chromium try it and fail in its own words rather than inventing a reason.
+    return err instanceof PrivateAddressError;
   }
-  await route.continue();
 }
 
 export async function openSession(opts: SessionOptions = {}): Promise<BrowserSession> {
