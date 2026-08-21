@@ -49,6 +49,20 @@ clears all four findings for free — check on the next dependency bump.
 
 ---
 
+## `npm audit` reads the lockfile, not `node_modules`
+
+Worth knowing before trusting a green gate. `npm audit fix` updated
+`package-lock.json` from nanoid 3.3.17 to 3.3.18 and `npm audit --audit-level=high`
+went from exit 1 to exit 0 — while `node_modules/nanoid/package.json` still said **3.3.17**.
+A following `npm install` did not reconcile it either; npm considered the tree satisfied.
+`rm -rf node_modules/nanoid && npm install` did.
+
+So a gate that has just gone green proves the LOCKFILE is clean. If the fix matters — and
+for a runtime dependency it does — check the installed version too, or use `npm ci`, which
+builds the tree from the lock rather than deciding it is close enough.
+
+---
+
 ## CI policy
 
 `npm audit --audit-level=high` gates the build. Moderate findings are reported but do not
