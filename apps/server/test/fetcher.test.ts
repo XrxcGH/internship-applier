@@ -15,6 +15,9 @@
  * for the life of the process.
  */
 import { createServer, type Server } from 'node:http';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { HttpError, politeFetch } from '../src/infra/http/fetcher';
 
@@ -22,6 +25,8 @@ interface Reply {
   status: number;
   body: string;
 }
+
+const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 
 const running: Server[] = [];
 
@@ -747,4 +752,41 @@ describe('how much the response cache may keep', () => {
     await politeFetch(`${origin}/job/89`, { rps: 1000 });
     expect(hits.filter((h) => h === '/job/89')).toHaveLength(1);
   }, 120_000);
+});
+
+/**
+ * Which client the fetcher actually uses.
+ *
+ * Several suites drive the source adapters by replacing `globalThis.fetch` with a fixture
+ * router, and that stopped working the moment this module started calling undici's `fetch`
+ * instead of the global one — so it notices when a router has been installed. The `isTest` half
+ * of that condition is the load-bearing half: deciding purely on "has the global changed" means
+ * anything patching `globalThis.fetch` in a running app takes every request out through a
+ * client with no guarded connector and no range-checked address, silently. A guard a third
+ * party's import can switch off is not a guard.
+ */
+describe('the client this module calls', () => {
+  it('uses a fixture router when a test installs one', async () => {
+    const real = globalThis.fetch;
+    let calls = 0;
+    try {
+      globalThis.fetch = ((): Promise<globalThis.Response> => {
+        calls++;
+        return Promise.resolve(new globalThis.Response('from the router'));
+      }) as typeof globalThis.fetch;
+      // No robots fetch reaches a real host either — the router answers that too.
+      expect(await politeFetch('http://127.0.0.1:1/job/1', { rps: 100 })).toBe('from the router');
+      expect(calls).toBeGreaterThan(0);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it('keys that on config.isTest, not on the global alone', () => {
+    // Read off the source, because the branch it guards cannot be reached from inside a suite
+    // where `config.isTest` is true by definition. What is pinned is that the flag is part of
+    // the condition at all — without it, production follows whatever patched the global.
+    const src = readFileSync(path.join(SERVER_SRC, 'infra/http/fetcher.ts'), 'utf8');
+    expect(src).toMatch(/config\.isTest && globalThis\.fetch !== nativeFetch/);
+  });
 });

@@ -206,9 +206,15 @@ const dispatcher = new Agent({ connect: { lookup: guardedLookup } });
  * Several suites drive the source adapters by replacing `globalThis.fetch` with a fixture
  * router — which is the right way to test an adapter, and stopped working the moment this file
  * started calling undici's `fetch` instead of the global one. Rather than give the fetcher a
- * seam that exists only for tests, it notices: nothing in production ever reassigns
- * `globalThis.fetch`, so if it is not the function Node started with, a test has deliberately
- * put a router there and that router is what the request is for.
+ * seam that exists only for tests, it notices when one has been installed.
+ *
+ * UNDER TEST ONLY, and the `config.isTest` is the load-bearing half of that sentence. Deciding
+ * purely on "has the global changed" would mean that anything patching `globalThis.fetch` in a
+ * running app — a polyfill, an instrumentation library, an npm postinstall with opinions —
+ * silently took every request out through a client with no guarded connector and no
+ * range-checked address, with nothing anywhere saying so. A guard that can be turned off by a
+ * third party's import is not a guard. In production this is always undici with the dispatcher,
+ * whatever the global says.
  *
  * Everything else — including the suites that run real local servers — goes through undici with
  * the guarded dispatcher, so the client under test is the client that ships.
@@ -219,7 +225,7 @@ function httpFetch(
   url: string,
   init: Parameters<typeof undiciFetch>[1],
 ): ReturnType<typeof undiciFetch> {
-  if (globalThis.fetch !== nativeFetch) {
+  if (config.isTest && globalThis.fetch !== nativeFetch) {
     return (globalThis.fetch as unknown as typeof undiciFetch)(url, init);
   }
   return undiciFetch(url, init);
