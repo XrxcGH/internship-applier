@@ -636,3 +636,115 @@ describe('a disallowed path spelled in escapes', () => {
     expect(await politeFetch(`${origin}/careers/%zz`, { rps: 100 })).toBe('served /careers/%zz');
   }, 30_000);
 });
+
+/**
+ * A robots.txt is written by the host, and this one is hostile.
+ *
+ * Every `*` in a Disallow used to become `.*` in a compiled regex, and a run of those against a
+ * path of repeating characters is the textbook catastrophic-backtracking shape. Measured on the
+ * implementation this replaced: 442ms at six wildcards, 25.5 SECONDS at eight, and ten never
+ * returned. Node is single-threaded, so the whole server stops for the duration and no timeout
+ * can end it, because a timeout needs the event loop too.
+ *
+ * robots.txt is fetched from every host this tool touches, including one a model named. Nothing
+ * was required to do this but a robots.txt.
+ */
+describe('a robots.txt built to make matching expensive', () => {
+  it('answers instead of hanging', async () => {
+    // Sixteen wildcards. The old matcher would not have returned from this within the life of
+    // the test — it took 25 seconds at eight — so a regression shows up as a timeout.
+    const rules = `User-agent: *\nDisallow: /${'a*'.repeat(16)}b\n`;
+    const server = createServer((req, res) => {
+      if ((req.url ?? '') === '/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end(rules);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('a job posting');
+    });
+    running.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    const origin = `http://127.0.0.1:${String(address.port)}`;
+
+    // A path of exactly the shape the pattern chews on.
+    const path = `/${'a'.repeat(2000)}`;
+    expect(await politeFetch(`${origin}${path}`, { rps: 100 })).toBe('a job posting');
+  }, 20_000);
+
+  it('still obeys a wildcard rule that means something', async () => {
+    const server = createServer((req, res) => {
+      if ((req.url ?? '') === '/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('User-agent: *\nDisallow: /jobs/*/apply\nDisallow: /*.pdf$\n');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('a job posting');
+    });
+    running.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    const origin = `http://127.0.0.1:${String(address.port)}`;
+
+    // Both wildcard forms still bite...
+    await expect(politeFetch(`${origin}/jobs/12/apply`, { rps: 100 })).rejects.toThrow(/robots/i);
+    await expect(politeFetch(`${origin}/handbook.pdf`, { rps: 100 })).rejects.toThrow(/robots/i);
+    // ...and neither over-reaches. `$` anchors, so a path that merely contains .pdf is fine.
+    expect(await politeFetch(`${origin}/jobs/12/description`, { rps: 100 })).toBe('a job posting');
+    expect(await politeFetch(`${origin}/a.pdf.html`, { rps: 100 })).toBe('a job posting');
+  }, 20_000);
+});
+
+/**
+ * What the response cache is allowed to hold.
+ *
+ * It was bounded by entry COUNT alone, which is not a bound on memory — and adding the 16MB
+ * body cap is what made that plain: five hundred entries at up to sixteen megabytes each is an
+ * eight gigabyte ceiling, on bodies that are attacker-influenced in the sense that matters,
+ * since a run reads whatever pages a feed named.
+ */
+describe('how much the response cache may keep', () => {
+  it('drops old bodies once the bytes add up, not only once the count does', async () => {
+    // Each body is ~1MB against a 64MB budget, so this stays well under 500 entries — the count
+    // limit cannot be what evicts here, which is the whole point.
+    const big = 'x'.repeat(1024 * 1024);
+    const hits: string[] = [];
+    const server = createServer((req, res) => {
+      const url = req.url ?? '';
+      if (url === '/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('User-agent: *\nAllow: /\n');
+        return;
+      }
+      hits.push(url);
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end(big);
+    });
+    running.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    const origin = `http://127.0.0.1:${String(address.port)}`;
+
+    for (let i = 0; i < 90; i++) {
+      expect(await politeFetch(`${origin}/job/${String(i)}`, { rps: 1000 })).toHaveLength(
+        big.length,
+      );
+    }
+    expect(hits).toHaveLength(90);
+
+    // The FIRST body is 90MB of traffic ago, past a 64MB budget, so it must have been evicted —
+    // asking for it again reaches the server. Counting requests is the observable proof;
+    // measuring the heap would pass or fail on garbage collection timing.
+    await politeFetch(`${origin}/job/0`, { rps: 1000 });
+    expect(hits.filter((h) => h === '/job/0')).toHaveLength(2);
+
+    // And the cache is still a cache: the most recent body is served without a second request.
+    await politeFetch(`${origin}/job/89`, { rps: 1000 });
+    expect(hits.filter((h) => h === '/job/89')).toHaveLength(1);
+  }, 120_000);
+});

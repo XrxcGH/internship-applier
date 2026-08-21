@@ -34,14 +34,22 @@ const cache = new Map<string, CacheEntry>();
 const robots = new Map<string, RobotsEntry>();
 
 /**
- * How many response bodies to keep at once.
+ * How many response bodies to keep at once, and how much they may come to.
  *
  * The TTL above decides whether a hit is SERVED, never whether an entry is dropped, so
  * every distinct URL a session touched used to stay resident for the life of the process.
  * A server left running across a few scheduled refreshes fetches thousands of posting
  * pages, and their HTML sat in memory with nothing bounding it.
+ *
+ * A COUNT ALONE IS NOT A BOUND ON MEMORY, and adding the 16MB body cap is what made that
+ * obvious: five hundred entries of up to sixteen megabytes is an eight gigabyte ceiling, and
+ * the bodies are attacker-influenced in exactly the sense that matters — a run reads whatever
+ * pages a feed named. Both limits apply, whichever is reached first. 64MB is far more than a
+ * session of ordinary postings occupies, and it is a number the machine can actually hold.
  */
 const MAX_CACHE_ENTRIES = 500;
+const MAX_CACHE_BYTES = 64 * 1024 * 1024;
+let cachedBytes = 0;
 
 /**
  * How much of a response this will hold in memory before giving up on it.
@@ -70,7 +78,12 @@ const MAX_ROBOTS_BYTES = 512 * 1024;
  * `Response.text()` decodes as UTF-8 whatever the charset header says — that is what the
  * Fetch standard specifies — so decoding that way here changes nothing about the result.
  */
-async function readCapped(res: Response, limit: number, url: string): Promise<string> {
+async function readCapped(
+  res: Response,
+  limit: number,
+  url: string,
+  what: 'page' | 'robots.txt',
+): Promise<string> {
   const body = res.body;
   if (!body) return '';
 
@@ -86,8 +99,10 @@ async function readCapped(res: Response, limit: number, url: string): Promise<st
       read += value.byteLength;
       if (read > limit) {
         throw new HttpError(
-          `The response was over ${String(Math.round(limit / 1024 / 1024))}MB and was not read. ` +
-            'A job posting is a page, not a download.',
+          `This ${what} was over ${describeSize(limit)} and was not read. ` +
+            (what === 'page'
+              ? 'A job posting is a page, not a download.'
+              : 'A robots file that large is not a robots file.'),
           508,
           url,
           { retryable: false },
@@ -103,6 +118,20 @@ async function readCapped(res: Response, limit: number, url: string): Promise<st
 }
 
 /**
+ * A byte count a person can read, in the unit that suits it.
+ *
+ * `Math.round(limit / 1024 / 1024)` was the whole of this, and the robots.txt cap is 512KB —
+ * which came out as "over 1MB", a number that appears nowhere in the code and is twice the real
+ * limit. A refusal that misstates its own threshold sends whoever reads it looking for a setting
+ * that does not exist.
+ */
+function describeSize(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${String(Math.round(bytes / 1024 / 1024))}MB`
+    : `${String(Math.round(bytes / 1024))}KB`;
+}
+
+/**
  * A cached body, if it is still worth having.
  *
  * Past the TTL an entry earns its keep only through its validators: an etag or a
@@ -114,7 +143,7 @@ function readCache(url: string): CacheEntry | undefined {
   if (!entry) return undefined;
   if (Date.now() - entry.at < CACHE_TTL_MS) return entry;
   if (entry.etag ?? entry.lastModified) return entry;
-  cache.delete(url);
+  dropFromCache(url);
   return undefined;
 }
 
@@ -127,13 +156,28 @@ function rememberResponse(url: string, entry: CacheEntry): void {
   // Promoting on read would invert that, keeping a body with minutes of life left and
   // evicting one downloaded seconds ago. The 304 path re-inserts as well, because a
   // not-modified answer really does restart the clock on that body.
+  const replaced = cache.get(url);
+  if (replaced) cachedBytes -= replaced.body.length;
   cache.delete(url);
   cache.set(url, entry);
-  while (cache.size > MAX_CACHE_ENTRIES) {
+  cachedBytes += entry.body.length;
+
+  while (cache.size > MAX_CACHE_ENTRIES || cachedBytes > MAX_CACHE_BYTES) {
     const oldest = cache.keys().next();
     if (oldest.done) break;
-    cache.delete(oldest.value);
+    // One entry can be larger than the whole budget, in which case evicting everything else
+    // would not help and the loop has to stop rather than empty the cache to no purpose.
+    if (cache.size === 1 && cachedBytes > MAX_CACHE_BYTES) break;
+    dropFromCache(oldest.value);
   }
+}
+
+/** The one place an entry leaves the cache, so the byte total cannot drift away from it. */
+function dropFromCache(url: string): void {
+  const entry = cache.get(url);
+  if (!entry) return;
+  cachedBytes -= entry.body.length;
+  cache.delete(url);
 }
 
 /**
@@ -317,17 +361,50 @@ function robotsTargets(u: URL): string[] {
   }
 }
 
+/**
+ * Wildcard matching by scanning, because compiling these to a regex was a denial of service.
+ *
+ * Every `*` used to become `.*` in a regex built from a pattern the HOST supplies, and a run of
+ * those against a path of repeating characters is the textbook catastrophic-backtracking shape.
+ * Measured on the compiled form this replaces — `Disallow: /a*a*a*a*a*a*b` against `/aaaa…` —
+ * 442ms at six wildcards, 25.5 SECONDS at eight, and ten never returned at all. Exponential,
+ * not merely slow.
+ *
+ * robots.txt is fetched from every host this tool touches, including one a model named, and the
+ * file is entirely under that host's control. Node is single-threaded, so the whole server stops
+ * for as long as the match runs, and no timeout can end it because a timeout needs the event
+ * loop too. Nothing was required to do this but a robots.txt.
+ *
+ * The scan cannot backtrack: each literal segment is found once, at its earliest position, and
+ * the cursor only ever moves forward. Earliest is the correct greedy choice because only
+ * existence matters and it leaves the most room for whatever follows — which is the reasoning a
+ * backtracking engine has to rediscover by trying every alternative.
+ */
 function robotsMatches(pattern: string, target: string): boolean {
   if (pattern === '/') return true;
-  if (!pattern.includes('*') && !pattern.endsWith('$')) return target.startsWith(pattern);
 
   const anchored = pattern.endsWith('$');
   const body = anchored ? pattern.slice(0, -1) : pattern;
-  const source = body
-    .split('*')
-    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('.*');
-  return new RegExp(`^${source}${anchored ? '$' : ''}`).test(target);
+  const parts = body.split('*');
+
+  // No wildcard at all: a plain prefix, or the whole path when the rule is anchored.
+  if (parts.length === 1) return anchored ? target === body : target.startsWith(body);
+
+  const first = parts[0]!;
+  if (!target.startsWith(first)) return false;
+  let at = first.length;
+
+  for (const segment of parts.slice(1, -1)) {
+    if (segment === '') continue;
+    const found = target.indexOf(segment, at);
+    if (found === -1) return false;
+    at = found + segment.length;
+  }
+
+  const last = parts[parts.length - 1]!;
+  if (last === '') return true;
+  if (!anchored) return target.indexOf(last, at) !== -1;
+  return target.length - last.length >= at && target.endsWith(last);
 }
 
 /**
@@ -460,7 +537,7 @@ async function disallowedPaths(origin: string): Promise<Robots> {
       let applies = false;
       let inGroup = false;
 
-      const robots = await readCapped(res, MAX_ROBOTS_BYTES, `${origin}/robots.txt`);
+      const robots = await readCapped(res, MAX_ROBOTS_BYTES, `${origin}/robots.txt`, 'robots.txt');
       for (const raw of robots.split('\n')) {
         const line = raw.split('#')[0]!.trim();
         if (!line) continue;
@@ -706,7 +783,7 @@ export async function politeFetch(url: string, opts: FetchOptions = {}): Promise
 
       if (!res.ok) throw new HttpError(`${res.status} ${res.statusText}`, res.status, url);
 
-      const body = await readCapped(res, MAX_BODY_BYTES, url);
+      const body = await readCapped(res, MAX_BODY_BYTES, url, 'page');
       if (opts.jsonBody === undefined) {
         rememberResponse(url, {
           body,
